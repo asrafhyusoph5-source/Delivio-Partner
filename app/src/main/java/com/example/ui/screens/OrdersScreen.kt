@@ -408,7 +408,7 @@ fun OrderCard(
                                 )
                             }
                             Text(
-                                text = "${rider.vehiclePlate} • ★ ${rider.rating} • ${order.riderRequest?.status?.label ?: "Assigned"}",
+                                text = "${rider.vehiclePlate} • ★ ${rider.rating} • ${order.riderRequest?.status ?: "Assigned"}",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -549,8 +549,9 @@ fun OrderCard(
                 }
 
                 else -> {
+                    val reason = order.rejectReason ?: order.cancelReason
                     Text(
-                        text = if (order.rejectionReason != null) "Reason: ${order.rejectionReason}" else "Order Cancelled",
+                        text = if (reason != null) "Reason: $reason" else "Order Cancelled",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.error
                     )

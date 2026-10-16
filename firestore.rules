@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function hasDoc() { return signedIn() && exists(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function myDoc() { return get(/databases/$(db)/documents/users/$(request.auth.uid)).data; }
+    function myRole() { return hasDoc() ? myDoc().role : 'none'; }
+    function isAdmin() { return myRole() == 'admin'; }
+    function isMerchant() { return myRole() == 'merchant'; }
+    function isRider() { return myRole() == 'rider'; }
+    function isStaffOf(mid) { return myRole() == 'staff' && myDoc().merchantId == mid && myDoc().status == 'active'; }
+    function canManage(mid) { return (isMerchant() && request.auth.uid == mid) || isStaffOf(mid); }
+    function touches(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasAny(keys); }
+    function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin()
+        || (isMerchant() && resource.data.merchantId == request.auth.uid));
+      allow create: if signedIn() && (
+        (request.auth.uid == uid
+          && request.resource.data.role == 'customer'
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.status == 'active'
+          && request.resource.data.walletBalance == 0)
+        || (isMerchant()
+          && request.resource.data.role == 'staff'
+          && request.resource.data.merchantId == request.auth.uid
+          && request.resource.data.status == 'active'));
+      allow update: if isAdmin()
+        || (request.auth.uid == uid
+            && !touches(['role','email','status','walletBalance','createdAt','merchantId','staffRole']))
+        || (isMerchant() && resource.data.role == 'staff'
+            && resource.data.merchantId == request.auth.uid
+            && onlyChanges(['status','staffRole','name','phone']));
+      allow delete: if isAdmin()
+        || (isMerchant() && resource.data.role == 'staff' && resource.data.merchantId == request.auth.uid);
+      match /addresses/{aid} {
+        allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+
+    match /cities/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /deliveryRates/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /banners/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+
+    match /merchantApplications/{aid} {
+      allow create: if signedIn() && request.auth.uid == aid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.status == 'Pending';
+      allow read: if signedIn() && (request.auth.uid == aid || isAdmin());
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == aid
+            && resource.data.status == 'Needs Info'
+            && request.resource.data.status == 'Pending');
+      allow delete: if isAdmin();
+    }
+
+    match /changeRequests/{rid} {
+      allow create: if isMerchant() && request.resource.data.merchantId == request.auth.uid
+        && request.resource.data.status == 'Pending';
+      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    match /promoRequests/{pid} {
+      allow create: if isMerchant() && request.resource.data.merchantId == request.auth.uid
+        && request.resource.data.status == 'Pending';
+      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isAdmin());
+      allow update: if isAdmin();
+      allow delete: if isAdmin()
+        || (isMerchant() && resource.data.merchantId == request.auth.uid && resource.data.status == 'Pending');
+    }
+
+    match /merchants/{mid} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (canManage(mid)
+        && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt']));
+      match /categories/{cid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || canManage(mid);
+      }
+      match /items/{iid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || canManage(mid);
+      }
+    }
+
+    match /orders/{oid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid
+        || resource.data.merchantId == request.auth.uid
+        || resource.data.riderId == request.auth.uid
+        || (isRider() && resource.data.riderId == null)
+        || isStaffOf(resource.data.merchantId)
+        || isAdmin());
+      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'Placed Order'
+        && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
+        && request.resource.data.get('riderId', null) == null;
+      allow update: if isAdmin()
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.status == 'Placed Order'
+            && request.resource.data.status == 'Cancelled'
+            && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
+        || (resource.data.merchantId != null && canManage(resource.data.merchantId)
+            && resource.data.status in ['Placed Order','Preparing','Ready']
+            && request.resource.data.status in ['Preparing','Ready','Rejected','Cancelled']
+            && !touches(['customerId','merchantId','serviceType','items','fees','paymentMethod','cityId','createdAt','riderId','riderName','riderPhone','riderLocation']))
+        || (isRider() && (resource.data.riderId == request.auth.uid || resource.data.riderId == null)
+            && request.resource.data.riderId == request.auth.uid
+            && onlyChanges(['status','statusHistory','riderId','riderName','riderPhone','riderLocation','riderRequest','finalReceiptTotal','proofPhotoUrl','updatedAt']));
+      allow delete: if false;
+    }
+
+    match /reviews/{oid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && get(/databases/$(db)/documents/orders/$(oid)).data.status == 'Delivered'
+        && get(/databases/$(db)/documents/orders/$(oid)).data.customerId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+  }
+}

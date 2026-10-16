@@ -115,6 +115,20 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _showSoldOutDurationTarget = MutableStateFlow<MenuItem?>(null)
     val showSoldOutDurationTarget: StateFlow<MenuItem?> = _showSoldOutDurationTarget.asStateFlow()
 
+    private val _snackbarMessage = MutableStateFlow<String?>(null)
+    val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
+
+    private val _isActionLoading = MutableStateFlow(false)
+    val isActionLoading: StateFlow<Boolean> = _isActionLoading.asStateFlow()
+
+    fun showSnackbar(message: String) {
+        _snackbarMessage.value = message
+    }
+
+    fun clearSnackbarMessage() {
+        _snackbarMessage.value = null
+    }
+
     // --- Navigation ---
 
     fun selectTab(tab: MerchantTab) {
@@ -273,9 +287,16 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun confirmAcceptOrder(orderId: String, prepMinutes: Int) {
-        repository.confirmAcceptOrder(orderId, prepMinutes)
-        _prepTimePickerTarget.value = null
-        SoundVibrationHelper.playClickHaptic(getApplication())
+        _isActionLoading.value = true
+        repository.confirmAcceptOrder(orderId, prepMinutes) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _prepTimePickerTarget.value = null
+                SoundVibrationHelper.playClickHaptic(getApplication())
+            } else {
+                showSnackbar(error ?: "Failed to accept order")
+            }
+        }
     }
 
     fun openRejectDialog(order: Order) {
@@ -287,14 +308,38 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun confirmRejectOrder(orderId: String, reason: String) {
-        repository.confirmRejectOrder(orderId, reason)
-        _rejectOrderTarget.value = null
-        SoundVibrationHelper.playClickHaptic(getApplication())
+        _isActionLoading.value = true
+        repository.confirmRejectOrder(orderId, reason) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _rejectOrderTarget.value = null
+                SoundVibrationHelper.playClickHaptic(getApplication())
+            } else {
+                showSnackbar(error ?: "Failed to reject order")
+            }
+        }
     }
 
     fun setOrderReady(orderId: String) {
-        repository.setOrderReady(orderId)
-        SoundVibrationHelper.playClickHaptic(getApplication())
+        _isActionLoading.value = true
+        repository.setOrderReady(orderId) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                SoundVibrationHelper.playClickHaptic(getApplication())
+            } else {
+                showSnackbar(error ?: "Failed to mark ready")
+            }
+        }
+    }
+
+    fun cancelOrder(orderId: String, reason: String) {
+        _isActionLoading.value = true
+        repository.cancelOrder(orderId, reason) { success, error ->
+            _isActionLoading.value = false
+            if (!success) {
+                showSnackbar(error ?: "Failed to cancel order")
+            }
+        }
     }
 
     fun openRequestRider(order: Order) {
@@ -307,27 +352,48 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun confirmRequestRider(
         orderId: String,
-        pickup: AddressLocation = AddressLocation(),
-        dropoff: AddressLocation = AddressLocation(),
-        note: String = "",
-        isSelfDelivery: Boolean = false
+        distanceKm: Double,
+        deliveryFee: Double,
+        note: String
     ) {
-        repository.requestRiderForOrder(orderId)
-        _requestRiderTarget.value = null
-        SoundVibrationHelper.playClickHaptic(getApplication())
+        _isActionLoading.value = true
+        repository.requestRiderForOrder(orderId, distanceKm, deliveryFee, note) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _requestRiderTarget.value = null
+                SoundVibrationHelper.playClickHaptic(getApplication())
+            } else {
+                showSnackbar(error ?: "Failed to request rider")
+            }
+        }
     }
 
     fun retryRiderRequest(orderId: String) {
-        repository.retryRiderRequest(orderId)
-        SoundVibrationHelper.playClickHaptic(getApplication())
+        repository.retryRiderRequest(orderId) { success, error ->
+            if (success) {
+                SoundVibrationHelper.playClickHaptic(getApplication())
+            } else {
+                showSnackbar(error ?: "Failed to retry rider request")
+            }
+        }
     }
 
     fun cancelRiderRequest(orderId: String) {
-        repository.cancelRiderRequest(orderId)
+        repository.cancelRiderRequest(orderId) { success, error ->
+            if (!success) {
+                showSnackbar(error ?: "Failed to cancel rider request")
+            }
+        }
     }
 
-    fun completeOrderManually(orderId: String) {
-        repository.completeOrderManually(orderId)
+    fun updateStorePhotos(logoUrl: String, bannerUrl: String) {
+        repository.updateStorePhotos(logoUrl, bannerUrl) { success, error ->
+            if (success) {
+                showSnackbar("Store images updated successfully")
+            } else {
+                showSnackbar(error ?: "Failed to update store images")
+            }
+        }
     }
 
     fun openReceiptPreview(order: Order) {

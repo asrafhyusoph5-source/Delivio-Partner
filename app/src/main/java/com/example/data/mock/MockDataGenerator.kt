@@ -535,7 +535,7 @@ object MockDataGenerator {
                 paymentMethod = "Cash on Delivery",
                 status = OrderStatus.PREPARING,
                 placedAtTimestamp = now - (10 * 60 * 1000),
-                prepTimeMinutes = 20,
+                prepMinutes = 20,
                 prepEndTime = now + (10 * 60 * 1000) // 10 mins remaining
             ),
 
@@ -576,7 +576,7 @@ object MockDataGenerator {
                 paymentMethod = "Credit Card",
                 status = OrderStatus.PREPARING,
                 placedAtTimestamp = now - (15 * 60 * 1000),
-                prepTimeMinutes = 15,
+                prepMinutes = 15,
                 prepEndTime = now + (3 * 60 * 1000)
             ),
 
@@ -650,7 +650,7 @@ object MockDataGenerator {
                 riderRequest = RiderRequest(
                     id = "rr_mock_1",
                     orderId = "ord_1085",
-                    status = RiderRequestStatus.ON_THE_WAY,
+                    status = "Rider is on the way",
                     rider = Rider(
                         id = "rdr_carlos",
                         name = "Carlos Mendoza",
@@ -662,7 +662,7 @@ object MockDataGenerator {
                     ),
                     pickupAddress = AddressLocation("88 Rizal Ave", "BGC Taguig", 14.5492, 121.0503),
                     dropoffAddress = AddressLocation("55 Acacia Ave", "Makati City", 14.5420, 121.0310),
-                    deliveryFeeEstimate = 3.50,
+                    deliveryFee = 3.50,
                     progressPercent = 0.65f
                 )
             ),
@@ -722,7 +722,7 @@ object MockDataGenerator {
                 total = 19.48,
                 paymentMethod = "Delivio Pay",
                 status = OrderStatus.CANCELLED,
-                rejectionReason = "Customer requested cancellation before prep",
+                cancelReason = "Customer requested cancellation before prep",
                 placedAtTimestamp = now - (180 * 60 * 1000)
             )
         )

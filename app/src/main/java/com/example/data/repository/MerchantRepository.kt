@@ -7,7 +7,9 @@ import com.example.data.model.*
 import com.example.util.PlatformOrderStatuses
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
@@ -479,6 +481,9 @@ class MerchantRepository private constructor(context: Context) {
                         vibrationEnabled = snapshot.getBoolean("vibrationEnabled") ?: true,
                         themeAccentHex = snapshot.getString("themeAccentHex") ?: _settings.value.themeAccentHex,
                         isDarkMode = snapshot.getBoolean("isDarkMode") ?: _settings.value.isDarkMode,
+                        logoUrl = snapshot.getString("logoUrl") ?: "",
+                        bannerUrl = snapshot.getString("bannerUrl") ?: "",
+                        imageUrl = snapshot.getString("imageUrl") ?: "",
                         bankName = snapshot.getString("bankName") ?: "",
                         accountHolder = snapshot.getString("accountHolder") ?: "",
                         accountNumber = snapshot.getString("accountNumber") ?: ""
@@ -522,11 +527,18 @@ class MerchantRepository private constructor(context: Context) {
                         }
 
                         val addrMap = doc.get("deliveryAddress") as? Map<*, *>
+                        val dropLat = doc.getDouble("dropoffLat") ?: doc.getDouble("dropoffLatitude")
+                            ?: ((doc.get("dropoff") as? Map<*, *>)?.get("lat") as? Number)?.toDouble()
+                            ?: ((addrMap?.get("latitude") as? Number)?.toDouble())
+                        val dropLng = doc.getDouble("dropoffLng") ?: doc.getDouble("dropoffLongitude")
+                            ?: ((doc.get("dropoff") as? Map<*, *>)?.get("lng") as? Number)?.toDouble()
+                            ?: ((addrMap?.get("longitude") as? Number)?.toDouble())
+
                         val addr = AddressLocation(
-                            street = (addrMap?.get("street") as? String) ?: "",
+                            street = (addrMap?.get("street") as? String) ?: (doc.get("dropoffAddress") as? String) ?: "",
                             city = (addrMap?.get("city") as? String) ?: "",
-                            latitude = (addrMap?.get("latitude") as? Number)?.toDouble() ?: 14.5492,
-                            longitude = (addrMap?.get("longitude") as? Number)?.toDouble() ?: 121.0503,
+                            latitude = dropLat ?: 14.5492,
+                            longitude = dropLng ?: 121.0503,
                             notes = (addrMap?.get("notes") as? String) ?: ""
                         )
 
@@ -545,7 +557,11 @@ class MerchantRepository private constructor(context: Context) {
                         // Rider request sub-map
                         val reqMap = doc.get("riderRequest") as? Map<*, *>
                         val reqStatusStr = (reqMap?.get("status") as? String) ?: doc.getString("riderRequestStatus")
-                        val reqTimestamp = (reqMap?.get("requestedAt") as? Number)?.toLong()
+                        val reqTimestamp = when (val t = reqMap?.get("requestedAt")) {
+                            is Timestamp -> t.toDate().time
+                            is Number -> t.toLong()
+                            else -> null
+                        }
 
                         val rider = if (rName.isNotBlank() || rId.isNotBlank()) {
                             Rider(
@@ -557,58 +573,61 @@ class MerchantRepository private constructor(context: Context) {
                             )
                         } else null
 
-                        val riderRequest = if (reqStatusStr != null) {
-                            val rStatus = when (reqStatusStr.lowercase()) {
-                                "rider assigned", "assigned" -> RiderRequestStatus.RIDER_ASSIGNED
-                                "arrived at merchant", "arrived" -> RiderRequestStatus.ARRIVED_AT_MERCHANT
-                                "picked up", "picked_up" -> RiderRequestStatus.PICKED_UP
-                                "on the way", "on_the_way" -> RiderRequestStatus.ON_THE_WAY
-                                "delivered" -> RiderRequestStatus.DELIVERED
-                                "cancelled" -> RiderRequestStatus.CANCELLED
-                                else -> RiderRequestStatus.SEARCHING
-                            }
+                        val riderRequest = if (reqMap != null || reqStatusStr != null) {
                             RiderRequest(
+                                id = doc.id,
                                 orderId = doc.id,
-                                status = rStatus,
+                                status = reqStatusStr ?: "Searching",
+                                requestedAt = reqTimestamp,
+                                requestedBy = (reqMap?.get("requestedBy") as? String) ?: "",
+                                distanceKm = (reqMap?.get("distanceKm") as? Number)?.toDouble() ?: 0.0,
+                                deliveryFee = (reqMap?.get("deliveryFee") as? Number)?.toDouble() ?: 0.0,
+                                note = (reqMap?.get("note") as? String) ?: "",
+                                feePayer = (reqMap?.get("feePayer") as? String) ?: "customer",
                                 rider = rider,
                                 pickupAddress = _settings.value.storeLocation,
-                                dropoffAddress = addr,
-                                progressPercent = when (rStatus) {
-                                    RiderRequestStatus.SEARCHING -> 0.1f
-                                    RiderRequestStatus.RIDER_ASSIGNED -> 0.3f
-                                    RiderRequestStatus.ARRIVED_AT_MERCHANT -> 0.5f
-                                    RiderRequestStatus.PICKED_UP -> 0.7f
-                                    RiderRequestStatus.ON_THE_WAY -> 0.85f
-                                    RiderRequestStatus.DELIVERED -> 1.0f
-                                    else -> 0f
-                                }
+                                dropoffAddress = addr
                             )
+                        } else null
+
+                        val feesMap = doc.get("fees") as? Map<*, *>
+                        val feesDeliveryFee = (feesMap?.get("deliveryFee") as? Number)?.toDouble()
+                            ?: doc.getDouble("deliveryFee") ?: 0.0
+
+                        val prepMins = doc.getLong("prepMinutes")?.toInt() ?: doc.getLong("prepTimeMinutes")?.toInt()
+                        val prepEnd = doc.getLong("prepEndTime") ?: if (prepMins != null) {
+                            (doc.getLong("placedAtTimestamp") ?: System.currentTimeMillis()) + (prepMins * 60 * 1000L)
                         } else null
 
                         val order = Order(
                             id = doc.id,
                             merchantId = mId,
                             orderNumber = doc.getString("orderNumber") ?: ("#" + doc.id.takeLast(4).uppercase()),
-                            customerName = doc.getString("customerName") ?: "Customer",
-                            customerPhone = doc.getString("customerPhone") ?: "",
+                            customerName = doc.getString("customerName") ?: ((doc.get("customer") as? Map<*, *>)?.get("name") as? String) ?: "Customer",
+                            customerPhone = doc.getString("customerPhone") ?: ((doc.get("customer") as? Map<*, *>)?.get("phone") as? String) ?: "",
                             deliveryAddress = addr,
+                            dropoffLat = dropLat,
+                            dropoffLng = dropLng,
                             items = items,
                             subtotal = doc.getDouble("subtotal") ?: items.sumOf { it.totalPrice },
-                            deliveryFee = doc.getDouble("deliveryFee") ?: 0.0,
+                            deliveryFee = feesDeliveryFee,
                             platformFee = doc.getDouble("platformFee") ?: 0.0,
                             total = doc.getDouble("total") ?: items.sumOf { it.totalPrice },
                             paymentMethod = doc.getString("paymentMethod") ?: "Cash on Delivery",
                             status = orderStatus,
                             placedAtTimestamp = doc.getLong("placedAtTimestamp") ?: (doc.getTimestamp("createdAt")?.toDate()?.time ?: System.currentTimeMillis()),
-                            prepTimeMinutes = doc.getLong("prepTimeMinutes")?.toInt(),
-                            prepEndTime = doc.getLong("prepEndTime"),
-                            rejectionReason = doc.getString("rejectionReason"),
+                            prepMinutes = prepMins,
+                            prepEndTime = prepEnd,
+                            rejectReason = doc.getString("rejectReason") ?: doc.getString("rejectionReason"),
+                            cancelReason = doc.getString("cancelReason"),
                             riderRequest = riderRequest,
                             rider = rider,
                             riderId = rId,
                             riderName = rName,
                             riderPhone = rPhone,
-                            riderLocation = riderLoc
+                            riderLocation = riderLoc,
+                            cityId = doc.getString("cityId") ?: "",
+                            serviceType = doc.getString("serviceType") ?: "food"
                         )
                         list.add(order)
                     }
@@ -711,28 +730,30 @@ class MerchantRepository private constructor(context: Context) {
                 }
             }
 
-        // 6. Staff listener: users where merchantId == mId
-        staffListener = db.collection("users")
-            .whereEqualTo("merchantId", mId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("MerchantRepo", "Staff listener error", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val list = snapshot.documents.map { doc ->
-                        StaffMember(
-                            id = doc.id,
-                            merchantId = mId,
-                            name = doc.getString("name") ?: "Staff",
-                            role = doc.getString("staffRole") ?: doc.getString("role") ?: "Staff",
-                            email = doc.getString("email") ?: "",
-                            active = doc.getBoolean("active") ?: true
-                        )
+        // 6. Staff listener: users where merchantId == mId (merchant owner only)
+        if (_currentUser.value?.role == "merchant") {
+            staffListener = db.collection("users")
+                .whereEqualTo("merchantId", mId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w("MerchantRepo", "Staff listener error", error)
+                        return@addSnapshotListener
                     }
-                    _staff.value = list
+                    if (snapshot != null) {
+                        val list = snapshot.documents.map { doc ->
+                            StaffMember(
+                                id = doc.id,
+                                merchantId = mId,
+                                name = doc.getString("name") ?: "Staff",
+                                role = doc.getString("staffRole") ?: doc.getString("role") ?: "Staff",
+                                email = doc.getString("email") ?: "",
+                                active = doc.getBoolean("active") ?: true
+                            )
+                        }
+                        _staff.value = list
+                    }
                 }
-            }
+        }
 
         // 7. Change Requests listener: changeRequests where merchantId == mId
         changeRequestsListener = db.collection("changeRequests")
@@ -808,77 +829,241 @@ class MerchantRepository private constructor(context: Context) {
         changeRequestsListener = null
     }
 
-    // --- Order Actions ---
+    // --- Order Status Actions (Writes only exact fields, waits for Firestore success) ---
 
-    fun confirmAcceptOrder(orderId: String, prepMinutes: Int) {
-        val db = firestore ?: return
-        val prepEnd = System.currentTimeMillis() + (prepMinutes * 60 * 1000L)
-        db.collection("orders").document(orderId).update(
-            mapOf(
-                "status" to PlatformOrderStatuses.PREPARING,
-                "prepTimeMinutes" to prepMinutes,
-                "prepEndTime" to prepEnd
-            )
+    fun confirmAcceptOrder(orderId: String, prepMinutes: Int, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.PREPARING,
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.PREPARING,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "prepMinutes" to prepMinutes,
+            "updatedAt" to FieldValue.serverTimestamp()
         )
-        dismissNewOrderAlert()
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                dismissNewOrderAlert()
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to accept order"
+                Log.e("MerchantRepo", "Accept order failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun confirmRejectOrder(orderId: String, reason: String) {
-        val db = firestore ?: return
-        db.collection("orders").document(orderId).update(
-            mapOf(
-                "status" to PlatformOrderStatuses.REJECTED,
-                "rejectionReason" to reason
-            )
+    fun confirmRejectOrder(orderId: String, reason: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.REJECTED,
+            "rejectReason" to reason.trim(),
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.REJECTED,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp()
         )
-        dismissNewOrderAlert()
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                dismissNewOrderAlert()
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to reject order"
+                Log.e("MerchantRepo", "Reject order failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun setOrderReady(orderId: String) {
-        val db = firestore ?: return
-        db.collection("orders").document(orderId).update(
-            mapOf("status" to PlatformOrderStatuses.READY)
+    fun setOrderReady(orderId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.READY,
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.READY,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp()
         )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to mark ready"
+                Log.e("MerchantRepo", "Mark ready failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun requestRiderForOrder(orderId: String) {
-        val db = firestore ?: return
-        val currentUid = auth?.currentUser?.uid ?: ""
+    fun cancelOrder(orderId: String, reason: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.CANCELLED,
+            "cancelReason" to reason.trim(),
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.CANCELLED,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to cancel order"
+                Log.e("MerchantRepo", "Cancel order failed: $err", ex)
+                onResult(false, err)
+            }
+    }
+
+    fun requestRiderForOrder(
+        orderId: String,
+        distanceKm: Double,
+        deliveryFee: Double,
+        note: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val currentUid = auth?.currentUser?.uid ?: _merchantId.value ?: ""
         val riderRequestData = mapOf(
             "status" to "Searching",
-            "requestedAt" to System.currentTimeMillis(),
-            "requestedBy" to currentUid
+            "requestedAt" to Timestamp.now(),
+            "requestedBy" to currentUid,
+            "distanceKm" to distanceKm,
+            "deliveryFee" to deliveryFee,
+            "note" to note.trim(),
+            "feePayer" to "customer"
         )
-        db.collection("orders").document(orderId).update(
-            mapOf(
-                "status" to PlatformOrderStatuses.READY,
-                "riderRequest" to riderRequestData
-            )
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.READY,
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.READY,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "riderRequest" to riderRequestData
         )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to request rider"
+                Log.e("MerchantRepo", "Request rider failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun retryRiderRequest(orderId: String) {
-        val db = firestore ?: return
-        db.collection("orders").document(orderId).update(
-            mapOf(
-                "riderRequest.status" to "Searching",
-                "riderRequest.requestedAt" to System.currentTimeMillis()
-            )
+    fun retryRiderRequest(orderId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "riderRequest.status" to "Searching",
+            "riderRequest.requestedAt" to Timestamp.now(),
+            "updatedAt" to FieldValue.serverTimestamp()
         )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to retry rider request"
+                Log.e("MerchantRepo", "Retry rider failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun cancelRiderRequest(orderId: String) {
-        val db = firestore ?: return
-        db.collection("orders").document(orderId).update(
-            mapOf("riderRequest.status" to "Cancelled")
+    fun cancelRiderRequest(orderId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "riderRequest.status" to "Cancelled",
+            "updatedAt" to FieldValue.serverTimestamp()
         )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to cancel rider request"
+                Log.e("MerchantRepo", "Cancel rider request failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
-    fun completeOrderManually(orderId: String) {
-        val db = firestore ?: return
-        db.collection("orders").document(orderId).update(
-            mapOf("status" to PlatformOrderStatuses.DELIVERED)
+    fun fetchDeliveryRate(
+        cityId: String,
+        serviceType: String,
+        onResult: (ServiceRate?, String?) -> Unit
+    ) {
+        val db = firestore ?: return onResult(null, "Firestore unavailable")
+        val cId = cityId.ifBlank { "taguig" }
+        db.collection("deliveryRates").document(cId).get()
+            .addOnSuccessListener { doc ->
+                if (!doc.exists()) {
+                    onResult(null, "Delivery not available in $cId")
+                    return@addOnSuccessListener
+                }
+                val servicesMap = doc.get("services") as? Map<*, *>
+                val sType = if (serviceType.isBlank()) "food" else serviceType.lowercase()
+                val serviceMap = (servicesMap?.get(sType) as? Map<*, *>) ?: (servicesMap?.get("food") as? Map<*, *>)
+                if (serviceMap == null) {
+                    onResult(ServiceRate(), null)
+                } else {
+                    val rate = ServiceRate(
+                        baseFare = (serviceMap["baseFare"] as? Number)?.toDouble() ?: 45.0,
+                        includedKm = (serviceMap["includedKm"] as? Number)?.toDouble() ?: 2.0,
+                        perKmRate = (serviceMap["perKmRate"] as? Number)?.toDouble() ?: 10.0,
+                        minFee = (serviceMap["minFee"] as? Number)?.toDouble() ?: 45.0,
+                        maxFee = (serviceMap["maxFee"] as? Number)?.toDouble() ?: 300.0,
+                        serviceFee = (serviceMap["serviceFee"] as? Number)?.toDouble() ?: 10.0
+                    )
+                    onResult(rate, null)
+                }
+            }
+            .addOnFailureListener { ex ->
+                Log.w("MerchantRepo", "Failed to fetch rate: ${ex.localizedMessage}")
+                // Fallback to standard rates if deliveryRates doc isn't populated
+                onResult(ServiceRate(), null)
+            }
+    }
+
+    fun updateStorePhotos(
+        logoUrl: String,
+        bannerUrl: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "logoUrl" to logoUrl.trim(),
+            "bannerUrl" to bannerUrl.trim()
         )
+        db.collection("merchants").document(mId).update(data)
+            .addOnSuccessListener {
+                _settings.value = _settings.value.copy(
+                    logoUrl = logoUrl.trim(),
+                    bannerUrl = bannerUrl.trim()
+                )
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to update store images"
+                Log.e("MerchantRepo", "Store photo update failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
     fun dismissNewOrderAlert() {
@@ -1149,7 +1334,7 @@ class MerchantRepository private constructor(context: Context) {
                         "phone" to phone.trim(),
                         "email" to email.trim(),
                         "staffRole" to role,
-                        "status" to "Active",
+                        "status" to "active",
                         "active" to true,
                         "createdAt" to System.currentTimeMillis()
                     )

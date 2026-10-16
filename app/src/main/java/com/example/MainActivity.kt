@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
             val showBusinessHoursDialog by viewModel.showBusinessHoursDialog.collectAsStateWithLifecycle()
             val showStaffDialog by viewModel.showStaffDialog.collectAsStateWithLifecycle()
             val showSoldOutDurationTarget by viewModel.showSoldOutDurationTarget.collectAsStateWithLifecycle()
+            val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
 
             var isRegistering by remember { mutableStateOf(false) }
 
@@ -326,14 +327,15 @@ class MainActivity : ComponentActivity() {
                     RiderTrackingModal(
                         order = target,
                         merchantLocation = settings.storeLocation,
-                        onBookRider = { pickup, dropoff, note, isSelfDelivery ->
-                            viewModel.confirmRequestRider(target.id, pickup, dropoff, note, isSelfDelivery)
+                        isSubmitting = isActionLoading,
+                        onConfirmRequestRider = { distanceKm, deliveryFee, note ->
+                            viewModel.confirmRequestRider(target.id, distanceKm, deliveryFee, note)
+                        },
+                        onRetryRiderRequest = {
+                            viewModel.retryRiderRequest(target.id)
                         },
                         onCancelRiderRequest = {
                             viewModel.cancelRiderRequest(target.id)
-                        },
-                        onCompleteOrder = {
-                            viewModel.completeOrderManually(target.id)
                         },
                         onDismiss = {
                             viewModel.closeRequestRider()

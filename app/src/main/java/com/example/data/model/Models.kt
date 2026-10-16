@@ -101,18 +101,47 @@ data class Rider(
     val avatarEmoji: String = "🛵"
 )
 
+data class ServiceRate(
+    val baseFare: Double = 45.0,
+    val includedKm: Double = 2.0,
+    val perKmRate: Double = 10.0,
+    val minFee: Double = 45.0,
+    val maxFee: Double = 300.0,
+    val serviceFee: Double = 10.0
+) {
+    fun calculateFee(distanceKm: Double): Double {
+        val distFee = if (distanceKm <= includedKm) {
+            baseFare
+        } else {
+            baseFare + (distanceKm - includedKm) * perKmRate
+        }
+        val total = distFee + serviceFee
+        return total.coerceIn(minFee, maxFee)
+    }
+}
+
 data class RiderRequest(
     val id: String = "",
     val orderId: String = "",
-    val status: RiderRequestStatus = RiderRequestStatus.SEARCHING,
+    val status: String = "Searching",
+    val requestedAt: Long? = null,
+    val requestedBy: String = "",
+    val distanceKm: Double = 0.0,
+    val deliveryFee: Double = 0.0,
+    val note: String = "",
+    val feePayer: String = "customer",
     val rider: Rider? = null,
     val pickupAddress: AddressLocation = AddressLocation(),
     val dropoffAddress: AddressLocation = AddressLocation(),
-    val deliveryFeeEstimate: Double = 3.50,
-    val riderNote: String = "",
-    val isSelfDelivery: Boolean = false,
     val progressPercent: Float = 0f
-)
+) {
+    val isSearching: Boolean get() = status.equals("Searching", ignoreCase = true)
+    val isAssigned: Boolean get() = status.equals("Rider assigned", ignoreCase = true) || status.equals("Assigned", ignoreCase = true)
+    val isArrived: Boolean get() = status.equals("Arrived at merchant", ignoreCase = true) || status.equals("Arrived", ignoreCase = true)
+    val isPickedUp: Boolean get() = status.equals("Picked up", ignoreCase = true)
+    val isDelivered: Boolean get() = status.equals("Delivered", ignoreCase = true)
+    val isCancelled: Boolean get() = status.equals("Cancelled", ignoreCase = true)
+}
 
 data class Order(
     val id: String = "",
@@ -121,6 +150,8 @@ data class Order(
     val customerName: String = "",
     val customerPhone: String = "",
     val deliveryAddress: AddressLocation = AddressLocation(),
+    val dropoffLat: Double? = null,
+    val dropoffLng: Double? = null,
     val items: List<OrderItem> = emptyList(),
     val subtotal: Double = 0.0,
     val deliveryFee: Double = 0.0,
@@ -129,19 +160,32 @@ data class Order(
     val paymentMethod: String = "Cash on Delivery",
     val status: OrderStatus = OrderStatus.PLACED_ORDER,
     val placedAtTimestamp: Long = System.currentTimeMillis(),
-    val prepTimeMinutes: Int? = null,
+    val prepMinutes: Int? = null,
     val prepEndTime: Long? = null,
-    val rejectionReason: String? = null,
+    val rejectReason: String? = null,
+    val cancelReason: String? = null,
     val riderRequest: RiderRequest? = null,
     val rider: Rider? = null,
     val riderId: String = "",
     val riderName: String = "",
     val riderPhone: String = "",
     val riderLocation: AddressLocation? = null,
-    val isTestOrder: Boolean = false
+    val isTestOrder: Boolean = false,
+    val cityId: String = "",
+    val serviceType: String = "food"
 ) {
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
+
+    val effectiveDropoffLat: Double
+        get() = dropoffLat ?: deliveryAddress.latitude
+
+    val effectiveDropoffLng: Double
+        get() = dropoffLng ?: deliveryAddress.longitude
+
+    val hasDropoffCoordinates: Boolean
+        get() = (dropoffLat != null && dropoffLat != 0.0) ||
+                (deliveryAddress.latitude != 0.0 && deliveryAddress.latitude != 14.5492)
 }
 
 data class MenuItemModifier(
@@ -299,6 +343,9 @@ data class MerchantSettings(
     val autoPrintOrders: Boolean = true,
     val themeAccentHex: String = "#FFC107",
     val isDarkMode: Boolean = false,
+    val logoUrl: String = "",
+    val bannerUrl: String = "",
+    val imageUrl: String = "",
     val bankName: String = "",
     val accountHolder: String = "",
     val accountNumber: String = ""
