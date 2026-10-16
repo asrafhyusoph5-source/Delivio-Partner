@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BusinessType
+import com.example.data.model.ChangeRequest
 import com.example.data.model.MerchantSettings
 import com.example.data.model.StaffMember
 import com.example.ui.theme.DelivioYellow
@@ -30,6 +31,8 @@ import com.example.ui.theme.parseHexColor
 fun ProfileScreen(
     settings: MerchantSettings,
     staff: List<StaffMember>,
+    changeRequests: List<ChangeRequest> = emptyList(),
+    onRequestAdminChange: (kind: String, requestedValue: String, reason: String) -> Unit = { _, _, _ -> },
     onBusinessTypeChange: (BusinessType) -> Unit,
     onRequestRiderManual: () -> Unit,
     onOpenColorPicker: () -> Unit,

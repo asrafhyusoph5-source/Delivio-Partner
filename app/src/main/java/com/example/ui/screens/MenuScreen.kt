@@ -19,10 +19,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.BusinessType
 import com.example.data.model.MenuCategory
 import com.example.data.model.MenuItem
@@ -63,9 +65,6 @@ fun MenuScreen(
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    var showAddCategoryDialog by remember { mutableStateOf(false) }
-    var newCategoryName by remember { mutableStateOf("") }
-    var showManageCategoriesDialog by remember { mutableStateOf(false) }
     var showBulkPriceDialog by remember { mutableStateOf(false) }
     var bulkPriceDeltaText by remember { mutableStateOf("10") } // 10%
 
@@ -224,13 +223,6 @@ fun MenuScreen(
                     modifier = Modifier.testTag("cat_chip_${cat.id}")
                 )
             }
-
-            // Manage Categories button
-            AssistChip(
-                onClick = { showManageCategoriesDialog = true },
-                label = { Text("Manage Categories") },
-                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp)) }
-            )
         }
 
         // Quick Stock Availability Filter Chips
@@ -340,75 +332,6 @@ fun MenuScreen(
     }
 
     // Manage Categories Modal Dialog
-    if (showManageCategoriesDialog) {
-        AlertDialog(
-            onDismissRequest = { showManageCategoriesDialog = false },
-            title = { Text("Manage Categories") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = newCategoryName,
-                            onValueChange = { newCategoryName = it },
-                            placeholder = { Text("New Category Name") },
-                            shape = RoundedCornerShape(10.dp),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(
-                            onClick = {
-                                if (newCategoryName.isNotBlank()) {
-                                    onAddCategory(newCategoryName.trim())
-                                    newCategoryName = ""
-                                }
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(customColors.accent)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Add", tint = customColors.onAccent)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    filteredCategories.forEachIndexed { index, cat ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(cat.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-
-                            Row {
-                                IconButton(onClick = { onReorderCategory(cat.id, true) }, enabled = index > 0) {
-                                    Icon(Icons.Default.ArrowUpward, contentDescription = "Move Up", modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { onReorderCategory(cat.id, false) }, enabled = index < filteredCategories.size - 1) {
-                                    Icon(Icons.Default.ArrowDownward, contentDescription = "Move Down", modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { onDeleteCategory(cat.id) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showManageCategoriesDialog = false }) {
-                    Text("Done")
-                }
-            }
-        )
-    }
-
     // Bulk Price Adjustment Dialog
     if (showBulkPriceDialog) {
         AlertDialog(
@@ -490,10 +413,10 @@ fun MenuItemRow(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
-            // Visual Emoji Placeholder
+            // Visual Image or Fallback
             Box(
                 modifier = Modifier
-                    .size(54.dp)
+                    .size(56.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(
                         if (isSoldOut) MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
@@ -501,7 +424,16 @@ fun MenuItemRow(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(item.iconEmoji, fontSize = 26.sp)
+                if (item.imageUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = item.imageUrl,
+                        contentDescription = item.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text(if (businessType == BusinessType.FOOD) "🍔" else "🛍️", fontSize = 26.sp)
+                }
             }
 
             Spacer(modifier = Modifier.width(12.dp))

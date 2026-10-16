@@ -5,10 +5,11 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.example.data.model.*
 import com.example.util.PlatformOrderStatuses
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,12 +20,37 @@ import java.util.UUID
 
 class MerchantRepository private constructor(context: Context) {
 
+    private val appContext: Context = context.applicationContext
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("delivio_partner_prefs", Context.MODE_PRIVATE)
+        appContext.getSharedPreferences("delivio_partner_prefs", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    private fun ensureFirebaseInitialized(ctx: Context) {
+        if (FirebaseApp.getApps(ctx).isEmpty()) {
+            try {
+                FirebaseApp.initializeApp(ctx)
+            } catch (e: Exception) {
+                Log.w("MerchantRepo", "Default FirebaseApp resource init failed, applying fallback", e)
+            }
+            if (FirebaseApp.getApps(ctx).isEmpty()) {
+                try {
+                    val options = FirebaseOptions.Builder()
+                        .setApplicationId("1:102938475610:android:a1b2c3d4e5f6g7h8i9j0")
+                        .setProjectId("delivio-partner")
+                        .setApiKey("AIzaSyDummyKeyForPreviewAndLocalTesting00")
+                        .build()
+                    FirebaseApp.initializeApp(ctx, options)
+                    Log.i("MerchantRepo", "Initialized fallback FirebaseApp for preview environment")
+                } catch (e2: Exception) {
+                    Log.e("MerchantRepo", "Fallback FirebaseApp init failed", e2)
+                }
+            }
+        }
+    }
 
     private val auth: FirebaseAuth? by lazy {
         try {
+            ensureFirebaseInitialized(appContext)
             FirebaseAuth.getInstance()
         } catch (e: Exception) {
             Log.e("MerchantRepo", "FirebaseAuth not available", e)
@@ -34,6 +60,7 @@ class MerchantRepository private constructor(context: Context) {
 
     private val firestore: FirebaseFirestore? by lazy {
         try {
+            ensureFirebaseInitialized(appContext)
             FirebaseFirestore.getInstance()
         } catch (e: Exception) {
             Log.e("MerchantRepo", "FirebaseFirestore not available", e)
@@ -77,7 +104,7 @@ class MerchantRepository private constructor(context: Context) {
     private val _orders = MutableStateFlow<List<Order>>(emptyList())
     val orders: StateFlow<List<Order>> = _orders.asStateFlow()
 
-    // New Incoming Order Alert (Heads-up / Pop-up)
+    // New Incoming Order Alert
     private val _newOrderAlert = MutableStateFlow<Order?>(null)
     val newOrderAlert: StateFlow<Order?> = _newOrderAlert.asStateFlow()
 
@@ -88,7 +115,7 @@ class MerchantRepository private constructor(context: Context) {
     private val _menuItems = MutableStateFlow<List<MenuItem>>(emptyList())
     val menuItems: StateFlow<List<MenuItem>> = _menuItems.asStateFlow()
 
-    // Payouts & Promos & Staff
+    // Payouts & Promos & Staff & Change Requests
     private val _payouts = MutableStateFlow<List<Payout>>(emptyList())
     val payouts: StateFlow<List<Payout>> = _payouts.asStateFlow()
 
@@ -98,6 +125,9 @@ class MerchantRepository private constructor(context: Context) {
     private val _staff = MutableStateFlow<List<StaffMember>>(emptyList())
     val staff: StateFlow<List<StaffMember>> = _staff.asStateFlow()
 
+    private val _changeRequests = MutableStateFlow<List<ChangeRequest>>(emptyList())
+    val changeRequests: StateFlow<List<ChangeRequest>> = _changeRequests.asStateFlow()
+
     // Active Firestore snapshot listeners
     private var ordersListener: ListenerRegistration? = null
     private var settingsListener: ListenerRegistration? = null
@@ -105,11 +135,12 @@ class MerchantRepository private constructor(context: Context) {
     private var categoryListener: ListenerRegistration? = null
     private var payoutListener: ListenerRegistration? = null
     private var staffListener: ListenerRegistration? = null
+    private var changeRequestsListener: ListenerRegistration? = null
 
     private var previousOrderIds = mutableSetOf<String>()
 
     init {
-        // Check if there is already an active Firebase Auth user
+        ensureFirebaseInitialized(appContext)
         checkExistingAuth()
     }
 
@@ -166,7 +197,6 @@ class MerchantRepository private constructor(context: Context) {
             return
         }
 
-        // Read users/{uid}
         db.collection("users").document(uid).get()
             .addOnSuccessListener { userDoc ->
                 if (userDoc.exists()) {
@@ -208,7 +238,6 @@ class MerchantRepository private constructor(context: Context) {
                         return@addOnSuccessListener
                     }
 
-                    // Regular login
                     if (role == "merchant") {
                         val mId = uid
                         val user = User(
@@ -238,15 +267,13 @@ class MerchantRepository private constructor(context: Context) {
                         onComplete(true, null)
                         return@addOnSuccessListener
                     } else {
-                        // Other role (customer, rider, etc.) -> check merchantApplications
                         checkApplication(uid, email, onComplete)
                     }
                 } else {
-                    // No users doc found -> check merchantApplications/{uid}
                     checkApplication(uid, email, onComplete)
                 }
             }
-            .addOnFailureListener { ex ->
+            .addOnFailureListener {
                 checkApplication(uid, email, onComplete)
             }
     }
@@ -262,55 +289,46 @@ class MerchantRepository private constructor(context: Context) {
             .addOnSuccessListener { appDoc ->
                 if (appDoc.exists()) {
                     val status = appDoc.getString("status") ?: "Pending"
-                    val reason = appDoc.getString("rejectionReason")
+                    val docsMap = appDoc.get("documents") as? Map<*, *>
                     val app = MerchantApplication(
                         id = uid,
-                        ownerUid = appDoc.getString("ownerUid") ?: uid,
+                        ownerUid = uid,
                         businessName = appDoc.getString("businessName") ?: "",
                         ownerName = appDoc.getString("ownerName") ?: "",
                         phone = appDoc.getString("phone") ?: "",
-                        email = appDoc.getString("email") ?: email,
+                        email = email,
                         businessType = appDoc.getString("businessType") ?: "food",
                         address = appDoc.getString("address") ?: "",
-                        lat = appDoc.getDouble("lat") ?: 14.5492,
-                        lng = appDoc.getDouble("lng") ?: 121.0503,
+                        lat = (appDoc.get("lat") as? Number)?.toDouble() ?: 14.5492,
+                        lng = (appDoc.get("lng") as? Number)?.toDouble() ?: 121.0503,
                         cityId = appDoc.getString("cityId") ?: "",
                         logoUrl = appDoc.getString("logoUrl") ?: "",
                         storePhotoUrl = appDoc.getString("storePhotoUrl") ?: "",
-                        permitUrl = appDoc.getString("documents.permitUrl") ?: "",
-                        dtiSecUrl = appDoc.getString("documents.dtiSecUrl") ?: "",
-                        barangayUrl = appDoc.getString("documents.barangayUrl") ?: "",
-                        validIdUrl = appDoc.getString("documents.validIdUrl") ?: "",
+                        permitUrl = (docsMap?.get("permitUrl") as? String) ?: "",
+                        dtiSecUrl = (docsMap?.get("dtiSecUrl") as? String) ?: "",
+                        barangayUrl = (docsMap?.get("barangayUrl") as? String) ?: "",
+                        validIdUrl = (docsMap?.get("validIdUrl") as? String) ?: "",
                         status = status,
-                        rejectionReason = reason,
-                        adminNotes = appDoc.getString("adminNotes")
+                        rejectionReason = appDoc.getString("rejectionReason")
                     )
                     _merchantApplication.value = app
-                    onComplete(true, null)
+                    onComplete(false, "Application Status: $status")
                 } else {
                     auth?.signOut()
                     onComplete(false, "Not a merchant account")
                 }
             }
-            .addOnFailureListener {
+            .addOnFailureListener { ex ->
                 auth?.signOut()
-                onComplete(false, "Not a merchant account")
+                onComplete(false, ex.localizedMessage ?: "Not a merchant account")
             }
     }
 
-    fun sendPasswordReset(email: String, onResult: (Boolean, String) -> Unit) {
-        val fbAuth = auth
-        if (fbAuth == null) {
-            onResult(false, "Auth service unavailable")
-            return
-        }
+    fun sendPasswordReset(email: String, onResult: (Boolean, String?) -> Unit) {
+        val fbAuth = auth ?: return onResult(false, "Auth unavailable")
         fbAuth.sendPasswordResetEmail(email.trim())
-            .addOnSuccessListener {
-                onResult(true, "Password reset email sent to $email. Please check your inbox.")
-            }
-            .addOnFailureListener { ex ->
-                onResult(false, ex.localizedMessage ?: "Failed to send reset email.")
-            }
+            .addOnSuccessListener { onResult(true, "Reset link sent to $email") }
+            .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to send reset link") }
     }
 
     fun registerMerchant(
@@ -318,15 +336,13 @@ class MerchantRepository private constructor(context: Context) {
         pass: String,
         onResult: (Boolean, String?) -> Unit
     ) {
-        val fbAuth = auth
-        val db = firestore
-        if (fbAuth == null || db == null) {
-            onResult(false, "Backend service unavailable")
-            return
-        }
+        val fbAuth = auth ?: return onResult(false, "Auth unavailable")
+        val db = firestore ?: return onResult(false, "Database unavailable")
 
         _isAuthLoading.value = true
-        fbAuth.createUserWithEmailAndPassword(application.email.trim(), pass.trim())
+        _authErrorMessage.value = null
+
+        fbAuth.createUserWithEmailAndPassword(application.email.trim(), pass)
             .addOnSuccessListener { authResult ->
                 val uid = authResult.user?.uid ?: ""
                 val appMap = hashMapOf<String, Any>(
@@ -416,6 +432,7 @@ class MerchantRepository private constructor(context: Context) {
         _menuItems.value = emptyList()
         _payouts.value = emptyList()
         _staff.value = emptyList()
+        _changeRequests.value = emptyList()
     }
 
     // --- Firestore Snapshot Listeners ---
@@ -454,7 +471,7 @@ class MerchantRepository private constructor(context: Context) {
                         isOpen = snapshot.getBoolean("isOpen") ?: true,
                         isPaused = snapshot.getBoolean("isPaused") ?: false,
                         pauseUntilTimestamp = snapshot.getLong("pauseUntilTimestamp"),
-                        autoScheduleEnabled = snapshot.getBoolean("autoScheduleEnabled") ?: true,
+                        autoScheduleEnabled = snapshot.getBoolean("autoSchedule") ?: snapshot.getBoolean("autoScheduleEnabled") ?: true,
                         storeLocation = loc,
                         minimumOrder = snapshot.getDouble("minimumOrder") ?: 0.0,
                         defaultPrepTime = snapshot.getLong("defaultPrepTime")?.toInt() ?: 15,
@@ -513,14 +530,58 @@ class MerchantRepository private constructor(context: Context) {
                             notes = (addrMap?.get("notes") as? String) ?: ""
                         )
 
-                        val riderMap = doc.get("rider") as? Map<*, *>
-                        val rider = if (riderMap != null) {
+                        // Rider details
+                        val rId = doc.getString("riderId") ?: ""
+                        val rName = doc.getString("riderName") ?: ""
+                        val rPhone = doc.getString("riderPhone") ?: ""
+                        val riderLocMap = doc.get("riderLocation") as? Map<*, *>
+                        val riderLoc = if (riderLocMap != null) {
+                            AddressLocation(
+                                latitude = (riderLocMap["latitude"] as? Number)?.toDouble() ?: (riderLocMap["lat"] as? Number)?.toDouble() ?: 0.0,
+                                longitude = (riderLocMap["longitude"] as? Number)?.toDouble() ?: (riderLocMap["lng"] as? Number)?.toDouble() ?: 0.0
+                            )
+                        } else null
+
+                        // Rider request sub-map
+                        val reqMap = doc.get("riderRequest") as? Map<*, *>
+                        val reqStatusStr = (reqMap?.get("status") as? String) ?: doc.getString("riderRequestStatus")
+                        val reqTimestamp = (reqMap?.get("requestedAt") as? Number)?.toLong()
+
+                        val rider = if (rName.isNotBlank() || rId.isNotBlank()) {
                             Rider(
-                                id = (riderMap["id"] as? String) ?: "",
-                                name = (riderMap["name"] as? String) ?: "Rider",
-                                phone = (riderMap["phone"] as? String) ?: "",
-                                vehiclePlate = (riderMap["vehiclePlate"] as? String) ?: "",
-                                vehicleType = (riderMap["vehicleType"] as? String) ?: "Motorcycle"
+                                id = rId,
+                                name = rName.ifBlank { "Rider" },
+                                phone = rPhone,
+                                vehiclePlate = doc.getString("riderVehiclePlate") ?: "Motorcycle",
+                                vehicleType = "Motorcycle"
+                            )
+                        } else null
+
+                        val riderRequest = if (reqStatusStr != null) {
+                            val rStatus = when (reqStatusStr.lowercase()) {
+                                "rider assigned", "assigned" -> RiderRequestStatus.RIDER_ASSIGNED
+                                "arrived at merchant", "arrived" -> RiderRequestStatus.ARRIVED_AT_MERCHANT
+                                "picked up", "picked_up" -> RiderRequestStatus.PICKED_UP
+                                "on the way", "on_the_way" -> RiderRequestStatus.ON_THE_WAY
+                                "delivered" -> RiderRequestStatus.DELIVERED
+                                "cancelled" -> RiderRequestStatus.CANCELLED
+                                else -> RiderRequestStatus.SEARCHING
+                            }
+                            RiderRequest(
+                                orderId = doc.id,
+                                status = rStatus,
+                                rider = rider,
+                                pickupAddress = _settings.value.storeLocation,
+                                dropoffAddress = addr,
+                                progressPercent = when (rStatus) {
+                                    RiderRequestStatus.SEARCHING -> 0.1f
+                                    RiderRequestStatus.RIDER_ASSIGNED -> 0.3f
+                                    RiderRequestStatus.ARRIVED_AT_MERCHANT -> 0.5f
+                                    RiderRequestStatus.PICKED_UP -> 0.7f
+                                    RiderRequestStatus.ON_THE_WAY -> 0.85f
+                                    RiderRequestStatus.DELIVERED -> 1.0f
+                                    else -> 0f
+                                }
                             )
                         } else null
 
@@ -542,7 +603,12 @@ class MerchantRepository private constructor(context: Context) {
                             prepTimeMinutes = doc.getLong("prepTimeMinutes")?.toInt(),
                             prepEndTime = doc.getLong("prepEndTime"),
                             rejectionReason = doc.getString("rejectionReason"),
-                            rider = rider
+                            riderRequest = riderRequest,
+                            rider = rider,
+                            riderId = rId,
+                            riderName = rName,
+                            riderPhone = rPhone,
+                            riderLocation = riderLoc
                         )
                         list.add(order)
                     }
@@ -550,7 +616,7 @@ class MerchantRepository private constructor(context: Context) {
                     // Sort newest first
                     list.sortByDescending { it.placedAtTimestamp }
 
-                    // Check for newly arrived "Placed Order"
+                    // Alert on incoming Placed Order
                     val newPlaced = list.filter { it.status == OrderStatus.PLACED_ORDER && !previousOrderIds.contains(it.id) }
                     if (newPlaced.isNotEmpty()) {
                         _newOrderAlert.value = newPlaced.first()
@@ -560,15 +626,16 @@ class MerchantRepository private constructor(context: Context) {
                 }
             }
 
-        // 3. Menu Items listener: merchants/{merchantId}/menuItems
-        menuListener = db.collection("merchants").document(mId).collection("menuItems")
+        // 3. Menu Items listener: merchants/{merchantId}/items
+        menuListener = db.collection("merchants").document(mId).collection("items")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.w("MerchantRepo", "Menu listener error", error)
+                    Log.w("MerchantRepo", "Menu items listener error", error)
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
                     val items = snapshot.documents.map { doc ->
+                        val isAvail = doc.getBoolean("available") ?: doc.getBoolean("inStock") ?: true
                         MenuItem(
                             id = doc.id,
                             merchantId = mId,
@@ -576,12 +643,12 @@ class MerchantRepository private constructor(context: Context) {
                             name = doc.getString("name") ?: "",
                             description = doc.getString("description") ?: "",
                             price = doc.getDouble("price") ?: 0.0,
-                            inStock = doc.getBoolean("inStock") ?: true,
+                            inStock = isAvail,
                             soldOutReason = doc.getString("soldOutReason"),
                             businessType = BusinessType.fromString(doc.getString("businessType")),
                             iconEmoji = doc.getString("iconEmoji") ?: "🛍️",
                             imageUrl = doc.getString("imageUrl") ?: "",
-                            prepTimeMinutes = doc.getLong("prepTimeMinutes")?.toInt() ?: 15,
+                            prepTimeMinutes = doc.getLong("prepTime")?.toInt() ?: doc.getLong("prepTimeMinutes")?.toInt() ?: 15,
                             sku = doc.getString("sku") ?: "",
                             unit = doc.getString("unit") ?: "1 pc",
                             stockCount = doc.getLong("stockCount")?.toInt() ?: 50,
@@ -589,6 +656,7 @@ class MerchantRepository private constructor(context: Context) {
                         )
                     }
                     _menuItems.value = items
+                    syncCuisineTags(mId, items)
                 }
             }
 
@@ -600,17 +668,22 @@ class MerchantRepository private constructor(context: Context) {
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
-                    val cats = snapshot.documents.map { doc ->
-                        MenuCategory(
-                            id = doc.id,
-                            merchantId = mId,
-                            name = doc.getString("name") ?: "",
-                            displayOrder = doc.getLong("displayOrder")?.toInt() ?: 0,
-                            isVisible = doc.getBoolean("isVisible") ?: true,
-                            businessType = BusinessType.fromString(doc.getString("businessType"))
-                        )
-                    }.sortedBy { it.displayOrder }
-                    _categories.value = cats
+                    if (snapshot.isEmpty) {
+                        // Seed fixed categories on first use
+                        seedFixedCategories(mId)
+                    } else {
+                        val cats = snapshot.documents.map { doc ->
+                            MenuCategory(
+                                id = doc.id,
+                                merchantId = mId,
+                                name = doc.getString("name") ?: "",
+                                sortOrder = doc.getLong("sortOrder")?.toInt() ?: doc.getLong("displayOrder")?.toInt() ?: 0,
+                                visible = doc.getBoolean("visible") ?: doc.getBoolean("isVisible") ?: true,
+                                businessType = BusinessType.fromString(doc.getString("businessType"))
+                            )
+                        }.sortedBy { it.sortOrder }
+                        _categories.value = cats
+                    }
                 }
             }
 
@@ -660,6 +733,62 @@ class MerchantRepository private constructor(context: Context) {
                     _staff.value = list
                 }
             }
+
+        // 7. Change Requests listener: changeRequests where merchantId == mId
+        changeRequestsListener = db.collection("changeRequests")
+            .whereEqualTo("merchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Change requests listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.map { doc ->
+                        ChangeRequest(
+                            id = doc.id,
+                            merchantId = mId,
+                            kind = doc.getString("kind") ?: "shopName",
+                            requestedValue = doc.getString("requestedValue") ?: "",
+                            reason = doc.getString("reason") ?: "",
+                            status = doc.getString("status") ?: "Pending",
+                            createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                        )
+                    }.sortedByDescending { it.createdAt }
+                    _changeRequests.value = list
+                }
+            }
+    }
+
+    private fun seedFixedCategories(mId: String) {
+        val db = firestore ?: return
+        val currentType = _settings.value.businessType
+
+        val fixedFood = listOf("Dessert", "Burgers", "Pizza", "Chicken", "Drinks")
+        val fixedConvenience = listOf("Others")
+
+        val targetList = if (currentType == BusinessType.FOOD) fixedFood else fixedConvenience
+        targetList.forEachIndexed { index, catName ->
+            val docId = catName.lowercase().replace(" ", "_")
+            db.collection("merchants").document(mId).collection("categories").document(docId).set(
+                mapOf(
+                    "name" to catName,
+                    "sortOrder" to (index + 1),
+                    "visible" to true,
+                    "businessType" to if (currentType == BusinessType.FOOD) "food" else "convenience"
+                )
+            )
+        }
+    }
+
+    private fun syncCuisineTags(mId: String, items: List<MenuItem>) {
+        val db = firestore ?: return
+        val isFood = _settings.value.businessType == BusinessType.FOOD
+        val cuisineTags = if (isFood) {
+            items.filter { it.inStock }.map { it.categoryId }.distinct().filter { it.isNotBlank() }
+        } else {
+            emptyList()
+        }
+        db.collection("merchants").document(mId).update("cuisineTags", cuisineTags)
     }
 
     private fun detachFirestoreListeners() {
@@ -675,9 +804,11 @@ class MerchantRepository private constructor(context: Context) {
         payoutListener = null
         staffListener?.remove()
         staffListener = null
+        changeRequestsListener?.remove()
+        changeRequestsListener = null
     }
 
-    // --- Actions ---
+    // --- Order Actions ---
 
     fun confirmAcceptOrder(orderId: String, prepMinutes: Int) {
         val db = firestore ?: return
@@ -710,40 +841,37 @@ class MerchantRepository private constructor(context: Context) {
         )
     }
 
-    fun requestRiderForOrder(
-        orderId: String,
-        pickup: AddressLocation,
-        dropoff: AddressLocation,
-        note: String,
-        isSelfDelivery: Boolean
-    ) {
+    fun requestRiderForOrder(orderId: String) {
         val db = firestore ?: return
-        val mId = _merchantId.value ?: ""
-
-        val requestData = hashMapOf(
-            "orderId" to orderId,
-            "merchantId" to mId,
-            "pickup" to mapOf("street" to pickup.street, "city" to pickup.city, "latitude" to pickup.latitude, "longitude" to pickup.longitude),
-            "dropoff" to mapOf("street" to dropoff.street, "city" to dropoff.city, "latitude" to dropoff.latitude, "longitude" to dropoff.longitude),
-            "note" to note,
-            "isSelfDelivery" to isSelfDelivery,
-            "status" to "SEARCHING",
-            "requestedAt" to System.currentTimeMillis()
+        val currentUid = auth?.currentUser?.uid ?: ""
+        val riderRequestData = mapOf(
+            "status" to "Searching",
+            "requestedAt" to System.currentTimeMillis(),
+            "requestedBy" to currentUid
         )
-
-        db.collection("riderRequests").document(orderId).set(requestData)
         db.collection("orders").document(orderId).update(
             mapOf(
-                "riderRequestStatus" to "SEARCHING",
-                "isSelfDelivery" to isSelfDelivery
+                "status" to PlatformOrderStatuses.READY,
+                "riderRequest" to riderRequestData
+            )
+        )
+    }
+
+    fun retryRiderRequest(orderId: String) {
+        val db = firestore ?: return
+        db.collection("orders").document(orderId).update(
+            mapOf(
+                "riderRequest.status" to "Searching",
+                "riderRequest.requestedAt" to System.currentTimeMillis()
             )
         )
     }
 
     fun cancelRiderRequest(orderId: String) {
         val db = firestore ?: return
-        db.collection("riderRequests").document(orderId).update(mapOf("status" to "CANCELLED"))
-        db.collection("orders").document(orderId).update(mapOf("riderRequestStatus" to "CANCELLED"))
+        db.collection("orders").document(orderId).update(
+            mapOf("riderRequest.status" to "Cancelled")
+        )
     }
 
     fun completeOrderManually(orderId: String) {
@@ -820,6 +948,9 @@ class MerchantRepository private constructor(context: Context) {
 
         val mId = _merchantId.value ?: return
         firestore?.collection("merchants")?.document(mId)?.update(
+            "address", loc.formatted,
+            "lat", loc.latitude,
+            "lng", loc.longitude,
             "storeLocation", mapOf(
                 "street" to loc.street,
                 "city" to loc.city,
@@ -853,7 +984,6 @@ class MerchantRepository private constructor(context: Context) {
         val mId = _merchantId.value ?: return
         firestore?.collection("merchants")?.document(mId)?.update(
             mapOf(
-                "storeName" to storeName,
                 "phone" to phone,
                 "minimumOrder" to minOrder,
                 "defaultPrepTime" to prep,
@@ -895,90 +1025,175 @@ class MerchantRepository private constructor(context: Context) {
         docRef.set(data)
     }
 
-    // --- Menu Management Actions ---
+    // --- Menu Management Actions (Items live in merchants/{id}/items) ---
 
     fun saveMenuItem(item: MenuItem) {
         val mId = _merchantId.value ?: return
         val db = firestore ?: return
         val docId = item.id.ifBlank { UUID.randomUUID().toString() }
-        val itemMap = hashMapOf(
-            "categoryId" to item.categoryId,
+        val categoryName = _categories.value.find { it.id == item.categoryId }?.name ?: ""
+
+        val itemMap = hashMapOf<String, Any>(
             "name" to item.name,
             "description" to item.description,
             "price" to item.price,
+            "imageUrl" to item.imageUrl,
+            "categoryId" to item.categoryId,
+            "categoryName" to categoryName,
+            "available" to item.inStock,
             "inStock" to item.inStock,
             "soldOutReason" to (item.soldOutReason ?: ""),
             "businessType" to if (item.businessType == BusinessType.FOOD) "food" else "convenience",
-            "iconEmoji" to item.iconEmoji,
-            "imageUrl" to item.imageUrl,
-            "prepTimeMinutes" to item.prepTimeMinutes,
+            "prepTime" to item.prepTimeMinutes,
+            "tags" to item.tags,
             "sku" to item.sku,
             "unit" to item.unit,
             "stockCount" to item.stockCount,
             "lowStockAlertThreshold" to item.lowStockAlertThreshold
         )
-        db.collection("merchants").document(mId).collection("menuItems").document(docId).set(itemMap)
+        db.collection("merchants").document(mId).collection("items").document(docId).set(itemMap)
     }
 
     fun deleteMenuItem(itemId: String) {
         val mId = _merchantId.value ?: return
-        firestore?.collection("merchants")?.document(mId)?.collection("menuItems")?.document(itemId)?.delete()
+        firestore?.collection("merchants")?.document(mId)?.collection("items")?.document(itemId)?.delete()
     }
 
     fun toggleItemAvailability(itemId: String, inStock: Boolean) {
         val mId = _merchantId.value ?: return
-        firestore?.collection("merchants")?.document(mId)?.collection("menuItems")?.document(itemId)?.update(
-            "inStock", inStock
+        firestore?.collection("merchants")?.document(mId)?.collection("items")?.document(itemId)?.update(
+            mapOf("available" to inStock, "inStock" to inStock)
         )
     }
+
+    // --- Category Management Actions (Categories live in merchants/{id}/categories) ---
 
     fun addCategory(name: String, businessType: BusinessType) {
         val mId = _merchantId.value ?: return
         val db = firestore ?: return
-        val doc = db.collection("merchants").document(mId).collection("categories").document()
-        val maxOrder = _categories.value.maxOfOrNull { it.displayOrder } ?: 0
-        doc.set(
-            hashMapOf(
-                "name" to name,
-                "displayOrder" to (maxOrder + 1),
-                "isVisible" to true,
+        val docId = name.lowercase().trim().replace(" ", "_").ifBlank { UUID.randomUUID().toString() }
+        val newOrder = (_categories.value.maxOfOrNull { it.sortOrder } ?: 0) + 1
+        db.collection("merchants").document(mId).collection("categories").document(docId).set(
+            mapOf(
+                "name" to name.trim(),
+                "sortOrder" to newOrder,
+                "visible" to true,
                 "businessType" to if (businessType == BusinessType.FOOD) "food" else "convenience"
             )
         )
     }
 
-    fun deleteCategory(categoryId: String) {
+    fun deleteCategory(catId: String) {
         val mId = _merchantId.value ?: return
-        firestore?.collection("merchants")?.document(mId)?.collection("categories")?.document(categoryId)?.delete()
+        firestore?.collection("merchants")?.document(mId)?.collection("categories")?.document(catId)?.delete()
     }
 
-    fun toggleCategoryVisibility(categoryId: String) {
-        val mId = _merchantId.value ?: return
-        val current = _categories.value.find { it.id == categoryId } ?: return
-        firestore?.collection("merchants")?.document(mId)?.collection("categories")?.document(categoryId)?.update(
-            "isVisible", !current.isVisible
-        )
-    }
-
-    fun reorderCategory(categoryId: String, moveUp: Boolean) {
-        // Can be persisted by swapping displayOrder in Firestore
-    }
-
-    fun addStaff(name: String, role: String, email: String) {
+    fun reorderCategory(catId: String, moveUp: Boolean) {
         val mId = _merchantId.value ?: return
         val db = firestore ?: return
-        val doc = db.collection("users").document()
-        doc.set(
-            hashMapOf(
-                "name" to name,
-                "role" to "staff",
-                "staffRole" to role,
-                "email" to email,
-                "merchantId" to mId,
-                "active" to true,
-                "createdAt" to System.currentTimeMillis()
-            )
+        val currentList = _categories.value.sortedBy { it.sortOrder }.toMutableList()
+        val index = currentList.indexOfFirst { it.id == catId }
+        if (index == -1) return
+        val targetIndex = if (moveUp) index - 1 else index + 1
+        if (targetIndex in 0 until currentList.size) {
+            val item1 = currentList[index]
+            val item2 = currentList[targetIndex]
+            val order1 = item1.sortOrder
+            val order2 = item2.sortOrder
+            db.collection("merchants").document(mId).collection("categories").document(item1.id)
+                .update("sortOrder", order2)
+            db.collection("merchants").document(mId).collection("categories").document(item2.id)
+                .update("sortOrder", order1)
+        }
+    }
+
+    fun toggleCategoryVisibility(catId: String) {
+        val mId = _merchantId.value ?: return
+        val current = _categories.value.find { it.id == catId } ?: return
+        firestore?.collection("merchants")?.document(mId)?.collection("categories")?.document(catId)
+            ?.update("visible", !current.visible)
+    }
+
+    // --- Staff Management (Uses staffCreator FirebaseApp instance) ---
+
+    fun addStaff(
+        name: String,
+        phone: String,
+        email: String,
+        tempPass: String,
+        role: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+
+        try {
+            ensureFirebaseInitialized(appContext)
+            val defaultApp = FirebaseApp.getInstance()
+            val staffApp = try {
+                FirebaseApp.getInstance("staffCreator")
+            } catch (e: Exception) {
+                FirebaseApp.initializeApp(appContext, defaultApp.options, "staffCreator")
+            }
+            val staffAuth = FirebaseAuth.getInstance(staffApp)
+
+            staffAuth.createUserWithEmailAndPassword(email.trim(), tempPass)
+                .addOnSuccessListener { authResult ->
+                    val staffUid = authResult.user?.uid ?: ""
+                    staffAuth.signOut()
+
+                    val staffData = hashMapOf(
+                        "role" to "staff",
+                        "merchantId" to mId,
+                        "name" to name.trim(),
+                        "phone" to phone.trim(),
+                        "email" to email.trim(),
+                        "staffRole" to role,
+                        "status" to "Active",
+                        "active" to true,
+                        "createdAt" to System.currentTimeMillis()
+                    )
+
+                    db.collection("users").document(staffUid).set(staffData)
+                        .addOnSuccessListener {
+                            onResult(true, null)
+                        }
+                        .addOnFailureListener { ex ->
+                            onResult(false, ex.localizedMessage ?: "Failed to save staff record")
+                        }
+                }
+                .addOnFailureListener { ex ->
+                    onResult(false, ex.localizedMessage ?: "Failed to create staff login")
+                }
+        } catch (e: Exception) {
+            onResult(false, e.localizedMessage ?: "Staff creation error")
+        }
+    }
+
+    // --- Change Requests (Profile Read-Only Fields) ---
+
+    fun submitChangeRequest(
+        kind: String, // "type" | "shopName" | "email"
+        requestedValue: String,
+        reason: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant")
+        val db = firestore ?: return onResult(false, "Database unavailable")
+
+        val reqId = UUID.randomUUID().toString()
+        val data = hashMapOf(
+            "merchantId" to mId,
+            "kind" to kind,
+            "requestedValue" to requestedValue.trim(),
+            "reason" to reason.trim(),
+            "status" to "Pending",
+            "createdAt" to System.currentTimeMillis()
         )
+
+        db.collection("changeRequests").document(reqId).set(data)
+            .addOnSuccessListener { onResult(true, "Change request submitted to admin") }
+            .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to submit request") }
     }
 
     companion object {

@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,10 +10,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -19,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
 import com.example.data.model.BusinessType
 import com.example.data.model.MenuCategory
 import com.example.data.model.MenuItem
@@ -42,6 +48,7 @@ fun MenuItemEditDialog(
     var description by remember { mutableStateOf(item.description) }
     var priceText by remember { mutableStateOf(item.price.toString()) }
     var selectedCategoryId by remember { mutableStateOf(item.categoryId.ifEmpty { categories.firstOrNull()?.id ?: "" }) }
+    var imageUrl by remember { mutableStateOf(item.imageUrl) }
     var iconEmoji by remember { mutableStateOf(item.iconEmoji) }
 
     // Food fields
@@ -172,15 +179,62 @@ fun MenuItemEditDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Emoji Icon
-                    OutlinedTextField(
-                        value = iconEmoji,
-                        onValueChange = { iconEmoji = it },
-                        label = { Text("Visual Icon / Emoji (e.g. 🍔, 🍕, 🥛)") },
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Image URL Input & Preview
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                            .padding(12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = imageUrl,
+                            onValueChange = { imageUrl = it },
+                            label = { Text("Product Image URL (HTTPS)") },
+                            placeholder = { Text("https://example.com/item.jpg") },
+                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("menu_item_image_url_input")
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (imageUrl.isNotBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surface)
+                                        .border(1.dp, customColors.accentTint, RoundedCornerShape(8.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = imageUrl.trim(),
+                                        contentDescription = "Image preview",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text("Image Preview", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) "Valid URL structure"
+                                        else "Please provide a valid https:// URL",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) customColors.accent else MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     // Conditional: FOOD MODE Fields
                     if (businessType == BusinessType.FOOD) {
@@ -326,6 +380,7 @@ fun MenuItemEditDialog(
                                 description = description,
                                 price = parsedPrice,
                                 categoryId = selectedCategoryId,
+                                imageUrl = imageUrl.trim(),
                                 iconEmoji = iconEmoji.ifBlank { "📦" },
                                 prepTimeMinutes = parsedPrep,
                                 tags = selectedTags.toList(),

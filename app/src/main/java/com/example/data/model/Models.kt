@@ -134,6 +134,10 @@ data class Order(
     val rejectionReason: String? = null,
     val riderRequest: RiderRequest? = null,
     val rider: Rider? = null,
+    val riderId: String = "",
+    val riderName: String = "",
+    val riderPhone: String = "",
+    val riderLocation: AddressLocation? = null,
     val isTestOrder: Boolean = false
 ) {
     val totalItemCount: Int
@@ -150,10 +154,23 @@ data class MenuItemModifier(
 data class MenuCategory(
     val id: String = "",
     val name: String = "",
-    val displayOrder: Int = 0,
-    val isVisible: Boolean = true,
+    val sortOrder: Int = 0,
+    val visible: Boolean = true,
     val businessType: BusinessType = BusinessType.FOOD,
     val merchantId: String = ""
+) {
+    val displayOrder: Int get() = sortOrder
+    val isVisible: Boolean get() = visible
+}
+
+data class ChangeRequest(
+    val id: String = "",
+    val merchantId: String = "",
+    val kind: String = "shopName", // "type" | "shopName" | "email"
+    val requestedValue: String = "",
+    val reason: String = "",
+    val status: String = "Pending", // "Pending" | "Approved" | "Rejected"
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 data class MenuItem(

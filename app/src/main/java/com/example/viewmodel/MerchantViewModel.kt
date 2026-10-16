@@ -32,6 +32,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val payouts = repository.payouts
     val promos = repository.promos
     val staff = repository.staff
+    val changeRequests = repository.changeRequests
 
     // Navigation and Tab States
     private val _currentTab = MutableStateFlow(MerchantTab.DASHBOARD)
@@ -135,7 +136,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         repository.login(email, pass, isStaff, onResult)
     }
 
-    fun sendPasswordReset(email: String, onResult: (Boolean, String) -> Unit) {
+    fun sendPasswordReset(email: String, onResult: (Boolean, String?) -> Unit) {
         repository.sendPasswordReset(email, onResult)
     }
 
@@ -306,13 +307,18 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun confirmRequestRider(
         orderId: String,
-        pickup: AddressLocation,
-        dropoff: AddressLocation,
-        note: String,
-        isSelfDelivery: Boolean
+        pickup: AddressLocation = AddressLocation(),
+        dropoff: AddressLocation = AddressLocation(),
+        note: String = "",
+        isSelfDelivery: Boolean = false
     ) {
-        repository.requestRiderForOrder(orderId, pickup, dropoff, note, isSelfDelivery)
+        repository.requestRiderForOrder(orderId)
         _requestRiderTarget.value = null
+        SoundVibrationHelper.playClickHaptic(getApplication())
+    }
+
+    fun retryRiderRequest(orderId: String) {
+        repository.retryRiderRequest(orderId)
         SoundVibrationHelper.playClickHaptic(getApplication())
     }
 
@@ -511,7 +517,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun addStaff(name: String, role: String, email: String) {
-        repository.addStaff(name, role, email)
+        repository.addStaff(name, "", email, "Staff1234!", role) { _, _ -> }
+    }
+
+    fun addStaff(
+        name: String,
+        phone: String,
+        email: String,
+        tempPass: String,
+        role: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        repository.addStaff(name, phone, email, tempPass, role, onResult)
+    }
+
+    fun submitChangeRequest(
+        kind: String,
+        requestedValue: String,
+        reason: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        repository.submitChangeRequest(kind, requestedValue, reason, onResult)
     }
 }
 
