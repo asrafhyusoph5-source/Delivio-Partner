@@ -9,7 +9,6 @@ plugins {
 
 }
 
-
 Then, in your module (app-level) build.gradle.kts file, add both the google-services plugin and any Firebase SDKs that you want to use in your app:
 
 Module (app-level) Gradle file (<project>/<app-module>/build.gradle.kts):
