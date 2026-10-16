@@ -1,0 +1,6 @@
+{
+  "name": "Delivio Partner",
+  "description": "Merchant application for the Delivio delivery platform managing orders, menu, rider dispatch, and earnings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

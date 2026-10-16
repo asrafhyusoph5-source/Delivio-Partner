@@ -1,0 +1,128 @@
+package com.example.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.data.model.BusinessType
+import com.example.data.model.MerchantSettings
+import com.example.ui.theme.LocalDelivioColors
+import com.example.ui.theme.StatusClosedRed
+import com.example.ui.theme.StatusOpenGreen
+import com.example.ui.theme.StatusWarningAmber
+import com.example.util.FormatUtils
+
+@Composable
+fun DelivioTopBar(
+    settings: MerchantSettings,
+    onToggleOpen: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val customColors = LocalDelivioColors.current
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 3.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Store Identity & Status
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(customColors.accentTint),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (settings.businessType == BusinessType.FOOD) "🍔" else "🏪",
+                        fontSize = 20.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = settings.storeName,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Global Open/Close Status Chip (mirrored across tabs)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (settings.isOpen) StatusOpenGreen.copy(alpha = 0.15f)
+                                    else StatusClosedRed.copy(alpha = 0.15f)
+                                )
+                                .clickable { onToggleOpen() }
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .testTag("topbar_status_chip")
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (settings.isOpen) StatusOpenGreen else StatusClosedRed)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (settings.isOpen) "Open" else "Closed",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (settings.isOpen) StatusOpenGreen else StatusClosedRed
+                            )
+                        }
+
+                        if (settings.isPaused && settings.pauseUntilTimestamp != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Paused (${FormatUtils.formatRemainingTime(settings.pauseUntilTimestamp)})",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = StatusWarningAmber,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(StatusWarningAmber.copy(alpha = 0.15f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

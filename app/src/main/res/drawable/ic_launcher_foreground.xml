@@ -1,0 +1,43 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Storefront Canopy Roof -->
+    <path
+        android:fillColor="#212121"
+        android:pathData="M28,40 L80,40 L76,52 L32,52 Z" />
+    <!-- Awning stripes -->
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M38,40 L44,40 L43,52 L37,52 Z" />
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M51,40 L57,40 L57,52 L51,52 Z" />
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M64,40 L70,40 L69,52 L63,52 Z" />
+    <!-- Store building outline -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,52 L76,52 L76,76 C76,78.2 74.2,80 72,80 L36,80 C33.8,80 32,78.2 32,76 Z" />
+    <!-- Store door and window -->
+    <path
+        android:fillColor="#212121"
+        android:pathData="M48,60 L60,60 L60,80 L48,80 Z" />
+    <!-- Store window left -->
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M36,60 L44,60 L44,70 L36,70 Z" />
+    <!-- Store window right -->
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M64,60 L72,60 L72,70 L64,70 Z" />
+    <!-- Delivio "D" badge top right -->
+    <path
+        android:fillColor="#E53935"
+        android:pathData="M70,30 A8,8 0 1,0 70,46 A8,8 0 1,0 70,30" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M68,34 L71,34 C73,34 74,35 74,38 C74,41 73,42 71,42 L68,42 Z M70,36 L70,40 L71,40 C71.8,40 72.3,39.5 72.3,38 C72.3,36.5 71.8,36 71,36 Z" />
+</vector>

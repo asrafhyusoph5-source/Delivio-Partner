@@ -1,0 +1,324 @@
+package com.example.ui.screens
+
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.data.model.MerchantSettings
+import com.example.data.model.Order
+import com.example.data.model.Payout
+import com.example.ui.theme.LocalDelivioColors
+import com.example.ui.theme.StatusOpenGreen
+import com.example.util.FormatUtils
+
+@Composable
+fun EarningsScreen(
+    settings: MerchantSettings,
+    orders: List<Order>,
+    payouts: List<Payout>,
+    period: String,
+    onPeriodChange: (String) -> Unit,
+    onRequestPayoutClick: () -> Unit,
+    onEditBankDetailsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val customColors = LocalDelivioColors.current
+
+    // Financial calculations
+    val (grossSales, commissionRate) = when (period) {
+        "Today" -> 218.50 to 0.15
+        "This week" -> 1480.00 to 0.15
+        else -> 5920.00 to 0.15
+    }
+
+    val platformFee = grossSales * commissionRate
+    val netEarnings = grossSales - platformFee
+    val pendingPayoutBalance = 845.20
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Period Segmented Filter: Today / This week / This month
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("Today", "This week", "This month").forEach { filter ->
+                val isSelected = period == filter
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onPeriodChange(filter) },
+                    label = { Text(filter, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = customColors.accentTint,
+                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        // Net Earnings Hero Card
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = customColors.accentTint
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "Net Merchant Earnings ($period)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = FormatUtils.formatCurrency(netEarnings),
+                    style = MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 32.sp
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("Gross Sales", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(FormatUtils.formatCurrency(grossSales), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                    Column {
+                        Text("Platform Fee (15%)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("- ${FormatUtils.formatCurrency(platformFee)}", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                    Column {
+                        Text("Pending Balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(FormatUtils.formatCurrency(pendingPayoutBalance), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = StatusOpenGreen)
+                    }
+                }
+            }
+        }
+
+        // Bank Account & Payout Action Card
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("🏦", fontSize = 20.sp)
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(settings.bankName, fontWeight = FontWeight.Bold)
+                            Text("${settings.accountHolder} • ${settings.accountNumber}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    IconButton(onClick = onEditBankDetailsClick) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Bank Details", modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = onRequestPayoutClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = customColors.accent,
+                        contentColor = customColors.onAccent
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("request_payout_btn")
+                ) {
+                    Icon(Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Request Payout (${FormatUtils.formatCurrency(pendingPayoutBalance)})", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Report Export & Share Action
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Transaction History",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+
+            OutlinedButton(
+                onClick = {
+                    shareEarningsReport(context, period, grossSales, platformFee, netEarnings)
+                },
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Download Report", fontSize = 12.sp)
+            }
+        }
+
+        // Order Transactions List
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            orders.take(5).forEach { order ->
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "${order.orderNumber} • ${order.customerName}",
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "${FormatUtils.formatTimeAgo(order.placedAtTimestamp)} • ${order.paymentMethod}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "+ ${FormatUtils.formatCurrency(order.subtotal * 0.85)}",
+                                fontWeight = FontWeight.ExtraBold,
+                                color = StatusOpenGreen,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Gross: ${FormatUtils.formatCurrency(order.total)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Payouts History Section
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Recent Payout Dispatches",
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            payouts.forEach { payout ->
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(payout.reference, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                            Text("${payout.bankName} • ${payout.date}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(FormatUtils.formatCurrency(payout.amount), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = payout.status.uppercase(),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (payout.status == "Completed") StatusOpenGreen else customColors.accent
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun shareEarningsReport(
+    context: Context,
+    period: String,
+    gross: Double,
+    commission: Double,
+    net: Double
+) {
+    val reportText = """
+        DELIVIO PARTNER - EARNINGS STATEMENT
+        Period: $period
+        Generated: ${FormatUtils.formatDateTime(System.currentTimeMillis())}
+        ========================================
+        Gross Merchant Sales : ${FormatUtils.formatCurrency(gross)}
+        Platform Service Fee : -${FormatUtils.formatCurrency(commission)}
+        Net Merchant Payout  : ${FormatUtils.formatCurrency(net)}
+        ========================================
+        Confidential Merchant Financial Report
+        Powered by Delivio Partner OS
+    """.trimIndent()
+
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Delivio Earnings Report - $period")
+        putExtra(Intent.EXTRA_TEXT, reportText)
+    }
+    context.startActivity(Intent.createChooser(intent, "Download / Export Report"))
+}
