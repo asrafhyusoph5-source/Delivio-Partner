@@ -28,6 +28,7 @@ import coil.compose.AsyncImage
 import com.example.data.model.BusinessType
 import com.example.data.model.MenuCategory
 import com.example.data.model.MenuItem
+import com.example.util.CurrencyConstants
 import com.example.data.model.MenuItemModifier
 import com.example.ui.theme.LocalDelivioColors
 
@@ -124,7 +125,7 @@ fun MenuItemEditDialog(
                         OutlinedTextField(
                             value = priceText,
                             onValueChange = { priceText = it },
-                            label = { Text("Price ($)") },
+                            label = { Text("Price (${CurrencyConstants.SYMBOL})") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             shape = RoundedCornerShape(12.dp),
                             singleLine = true,

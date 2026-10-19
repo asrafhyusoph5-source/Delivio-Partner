@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 object FormatUtils {
     fun formatCurrency(amount: Double): String {
-        return "$%.2f".format(Locale.US, amount)
+        return "${CurrencyConstants.SYMBOL}%.2f".format(Locale.US, amount)
     }
 
     fun formatTimeAgo(timestamp: Long): String {
@@ -35,5 +35,21 @@ object FormatUtils {
         val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining)
         val seconds = TimeUnit.MILLISECONDS.toSeconds(remaining) % 60
         return "%02d:%02d".format(minutes, seconds)
+    }
+
+    fun parseDouble(value: Any?): Double? {
+        return when (value) {
+            is Number -> value.toDouble()
+            is String -> value.trim().toDoubleOrNull()
+            else -> null
+        }
+    }
+
+    fun parseInt(value: Any?): Int? {
+        return when (value) {
+            is Number -> value.toInt()
+            is String -> value.trim().toIntOrNull()
+            else -> null
+        }
     }
 }

@@ -180,7 +180,7 @@ fun NewOrderAlertDialog(
                         }
 
                         Text(
-                            text = order.paymentMethod,
+                            text = order.formattedPaymentMethod,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -205,13 +205,29 @@ fun NewOrderAlertDialog(
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
-                                        text = FormatUtils.formatCurrency(item.totalPrice),
+                                        text = FormatUtils.formatCurrency(item.lineTotal),
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Items subtotal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(order.subtotal), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Delivery fee", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(order.deliveryFee), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                        }
+                        Text(
+                            text = "Delivery fee goes to the rider.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(

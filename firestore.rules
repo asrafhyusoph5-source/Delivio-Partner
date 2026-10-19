@@ -4,12 +4,31 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function hasDoc() { return signedIn() && exists(/databases/$(db)/documents/users/$(request.auth.uid)); }
     function myDoc() { return get(/databases/$(db)/documents/users/$(request.auth.uid)).data; }
-    function myRole() { return hasDoc() ? myDoc().role : 'none'; }
+    function myRole() {
+      return hasDoc()
+        ? myDoc().get('role', 'none').lower()
+        : (signedIn() ? request.auth.token.get('role', 'none').lower() : 'none');
+    }
     function isAdmin() { return myRole() == 'admin'; }
-    function isMerchant() { return myRole() == 'merchant'; }
     function isRider() { return myRole() == 'rider'; }
-    function isStaffOf(mid) { return myRole() == 'staff' && myDoc().merchantId == mid && myDoc().status == 'active'; }
-    function canManage(mid) { return (isMerchant() && request.auth.uid == mid) || isStaffOf(mid); }
+    function isStaffOf(mid) {
+      return myRole() == 'staff'
+        && myDoc().get('merchantId', '') == mid
+        && myDoc().get('status', 'active').lower() == 'active';
+    }
+    function isMerchantOwner(mid) {
+      return signedIn() && mid != null
+        && ((request.auth.uid == mid && myRole() in ['merchant', 'owner', 'partner'])
+            || (hasDoc() && myRole() in ['merchant', 'owner', 'partner'] && myDoc().get('merchantId', '') == mid)
+            || (exists(/databases/$(db)/documents/merchants/$(mid))
+                && get(/databases/$(db)/documents/merchants/$(mid)).data.get('ownerUid', '') == request.auth.uid));
+    }
+    function isMerchant() {
+      return myRole() in ['merchant', 'owner', 'partner'];
+    }
+    function canManage(mid) {
+      return isMerchantOwner(mid) || isStaffOf(mid) || isAdmin();
+    }
     function touches(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasAny(keys); }
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
@@ -89,22 +108,22 @@ service cloud.firestore {
     match /orders/{oid} {
       allow read: if signedIn() && (resource.data.customerId == request.auth.uid
         || resource.data.merchantId == request.auth.uid
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId))
         || resource.data.riderId == request.auth.uid
         || (isRider() && resource.data.riderId == null)
-        || isStaffOf(resource.data.merchantId)
         || isAdmin());
       allow create: if signedIn() && request.resource.data.customerId == request.auth.uid
-        && request.resource.data.status == 'Placed Order'
+        && request.resource.data.status.lower() in ['placed order', 'placed', 'pending']
         && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
         && request.resource.data.get('riderId', null) == null;
       allow update: if isAdmin()
         || (resource.data.customerId == request.auth.uid
-            && resource.data.status == 'Placed Order'
-            && request.resource.data.status == 'Cancelled'
+            && resource.data.status.lower() in ['placed order', 'placed', 'pending']
+            && request.resource.data.status.lower() in ['cancelled', 'canceled']
             && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
-        || (resource.data.merchantId != null && canManage(resource.data.merchantId)
-            && resource.data.status in ['Placed Order','Preparing','Ready']
-            && request.resource.data.status in ['Preparing','Ready','Rejected','Cancelled']
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)
+            && resource.data.status.lower() in ['placed order','preparing','ready','pending']
+            && request.resource.data.status.lower() in ['preparing','ready','rejected','cancelled','canceled','searching']
             && !touches(['customerId','merchantId','serviceType','items','fees','paymentMethod','cityId','createdAt','riderId','riderName','riderPhone','riderLocation']))
         || (isRider() && (resource.data.riderId == request.auth.uid || resource.data.riderId == null)
             && request.resource.data.riderId == request.auth.uid

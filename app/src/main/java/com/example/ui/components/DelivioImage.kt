@@ -140,6 +140,87 @@ fun MerchantAvatarImage(
 }
 
 @Composable
+fun MerchantLogoView(
+    storeName: String,
+    logoUrl: String?,
+    bannerUrl: String? = null,
+    imageUrl: String? = null,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = CircleShape,
+    letterSize: androidx.compose.ui.unit.TextUnit = 16.sp
+) {
+    val cleanLogo = logoUrl?.trim().orEmpty()
+    val cleanBanner = bannerUrl?.trim().orEmpty()
+    val cleanImage = imageUrl?.trim().orEmpty()
+
+    val chosenUrl = when {
+        cleanLogo.isNotBlank() -> cleanLogo
+        cleanBanner.isNotBlank() -> cleanBanner
+        cleanImage.isNotBlank() -> cleanImage
+        else -> ""
+    }
+
+    val customColors = LocalDelivioColors.current
+    val initial = storeName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "D"
+
+    @Composable
+    fun LetterFallback() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(customColors.accentTint),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = initial,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = letterSize,
+                color = customColors.accent
+            )
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(customColors.accentTint),
+        contentAlignment = Alignment.Center
+    ) {
+        if (chosenUrl.isNotBlank()) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(chosenUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = storeName.ifBlank { "Merchant Logo" },
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(customColors.accentTint),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = customColors.accent
+                        )
+                    }
+                },
+                error = { errorState ->
+                    Log.e("ImageLoad", "Failed to load logo from URL: $chosenUrl", errorState.result.throwable)
+                    LetterFallback()
+                }
+            )
+        } else {
+            LetterFallback()
+        }
+    }
+}
+
+@Composable
 fun ImageUrlFieldWithLivePreview(
     label: String,
     url: String,

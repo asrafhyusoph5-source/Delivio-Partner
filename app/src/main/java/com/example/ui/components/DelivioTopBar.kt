@@ -50,24 +50,23 @@ fun DelivioTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                Box(
+                MerchantLogoView(
+                    storeName = settings.storeName,
+                    logoUrl = settings.logoUrl,
+                    bannerUrl = settings.bannerUrl,
+                    imageUrl = settings.imageUrl,
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(customColors.accentTint),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (settings.businessType == BusinessType.FOOD) "🍔" else "🏪",
-                        fontSize = 20.sp
-                    )
-                }
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    shape = RoundedCornerShape(10.dp),
+                    letterSize = 18.sp
+                )
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = settings.storeName,
+                        text = settings.storeName.ifBlank { "Merchant Store" },
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp

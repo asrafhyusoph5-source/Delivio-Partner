@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
             val payouts by viewModel.payouts.collectAsStateWithLifecycle()
             val promos by viewModel.promos.collectAsStateWithLifecycle()
             val staff by viewModel.staff.collectAsStateWithLifecycle()
+            val changeRequests by viewModel.changeRequests.collectAsStateWithLifecycle()
 
             val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
             val selectedOrderDetailId by viewModel.selectedOrderDetailId.collectAsStateWithLifecycle()
@@ -249,13 +250,27 @@ class MainActivity : ComponentActivity() {
                                     ProfileScreen(
                                         settings = settings,
                                         staff = staff,
-                                        onBusinessTypeChange = { viewModel.setBusinessType(it) },
+                                        changeRequests = changeRequests,
+                                        onRequestAdminChange = { kind, requestedValue, reason ->
+                                            viewModel.submitChangeRequest(kind, requestedValue, reason) { success, err ->
+                                                if (success) {
+                                                    viewModel.showSnackbar("Change request submitted to admin")
+                                                } else {
+                                                    viewModel.showSnackbar(err ?: "Failed to submit change request")
+                                                }
+                                            }
+                                        },
+                                        onUpdateMerchantProfile = { ownerName, phone, logoUrl ->
+                                            viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
+                                        },
                                         onRequestRiderManual = {
                                             val targetOrder = orders.firstOrNull { it.status == OrderStatus.READY }
                                                 ?: orders.firstOrNull { it.status == OrderStatus.PREPARING }
-                                                ?: orders.firstOrNull()
+                                                ?: orders.firstOrNull { it.status == OrderStatus.PLACED_ORDER }
                                             if (targetOrder != null) {
                                                 viewModel.openRequestRider(targetOrder)
+                                            } else {
+                                                viewModel.showSnackbar("No active orders found to request a rider.")
                                             }
                                         },
                                         onOpenColorPicker = { viewModel.openColorPicker() },

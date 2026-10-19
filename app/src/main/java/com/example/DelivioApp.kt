@@ -29,14 +29,15 @@ class DelivioApp : Application() {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 try {
                     val options = FirebaseOptions.Builder()
-                        .setApplicationId("1:102938475610:android:a1b2c3d4e5f6g7h8i9j0")
-                        .setProjectId("delivio-partner")
-                        .setApiKey("AIzaSyDummyKeyForPreviewAndLocalTesting00")
+                        .setApplicationId("1:490983557590:android:a1f1b3c89045b584467c77")
+                        .setProjectId("delivio-371d3")
+                        .setApiKey("AIzaSyB4ztWjU56WNWX9UKoKC1Icrm5eXxdMxjU")
+                        .setStorageBucket("delivio-371d3.firebasestorage.app")
                         .build()
                     FirebaseApp.initializeApp(this, options)
-                    Log.i("DelivioApp", "FirebaseApp successfully initialized with fallback options for preview")
+                    Log.i("DelivioApp", "FirebaseApp initialized with project delivio-371d3 options")
                 } catch (e2: Exception) {
-                    Log.e("DelivioApp", "Failed to initialize fallback FirebaseApp", e2)
+                    Log.e("DelivioApp", "Failed to initialize FirebaseApp with options", e2)
                 }
             }
         }

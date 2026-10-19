@@ -23,6 +23,8 @@ import com.example.data.model.BusinessType
 import com.example.data.model.ChangeRequest
 import com.example.data.model.MerchantSettings
 import com.example.data.model.StaffMember
+import com.example.ui.components.ImageUrlFieldWithLivePreview
+import com.example.ui.components.MerchantLogoView
 import com.example.ui.theme.DelivioYellow
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.parseHexColor
@@ -33,7 +35,7 @@ fun ProfileScreen(
     staff: List<StaffMember>,
     changeRequests: List<ChangeRequest> = emptyList(),
     onRequestAdminChange: (kind: String, requestedValue: String, reason: String) -> Unit = { _, _, _ -> },
-    onBusinessTypeChange: (BusinessType) -> Unit,
+    onUpdateMerchantProfile: (ownerName: String, phone: String, logoUrl: String) -> Unit = { _, _, _ -> },
     onRequestRiderManual: () -> Unit,
     onOpenColorPicker: () -> Unit,
     onToggleDarkMode: (Boolean) -> Unit,
@@ -55,6 +57,11 @@ fun ProfileScreen(
 ) {
     val customColors = LocalDelivioColors.current
 
+    var ownerNameInput by remember(settings.ownerName) { mutableStateOf(settings.ownerName) }
+    var phoneInput by remember(settings.phone) { mutableStateOf(settings.phone) }
+    var logoUrlInput by remember(settings.logoUrl) { mutableStateOf(settings.logoUrl) }
+    var showTypeChangeDialog by remember { mutableStateOf(false) }
+
     var soundEnabled by remember(settings.soundEnabled) { mutableStateOf(settings.soundEnabled) }
     var vibrationEnabled by remember(settings.vibrationEnabled) { mutableStateOf(settings.vibrationEnabled) }
     var pushEnabled by remember(settings.pushNotificationsEnabled) { mutableStateOf(settings.pushNotificationsEnabled) }
@@ -73,7 +80,7 @@ fun ProfileScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Merchant Profile Header Card
+        // 1. Merchant Profile Header Card (Live from merchants/{merchantId})
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -82,39 +89,91 @@ fun ProfileScreen(
         ) {
             Column(modifier = Modifier.padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Avatar / Store Logo Placeholder
-                    Box(
+                    MerchantLogoView(
+                        storeName = settings.storeName,
+                        logoUrl = settings.logoUrl,
+                        bannerUrl = settings.bannerUrl,
+                        imageUrl = settings.imageUrl,
                         modifier = Modifier
-                            .size(68.dp)
-                            .clip(CircleShape)
-                            .background(customColors.accentTint),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (settings.businessType == BusinessType.FOOD) "👨‍🍳" else "🏬",
-                            fontSize = 34.sp
-                        )
-                    }
+                            .size(72.dp)
+                            .clip(CircleShape),
+                        letterSize = 28.sp
+                    )
 
                     Spacer(modifier = Modifier.width(16.dp))
 
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = settings.storeName.ifBlank { "Merchant Store" },
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Locked name",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(2.dp))
+
                         Text(
-                            text = settings.storeName,
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold)
-                        )
-                        Text(
-                            text = "Owner: ${settings.ownerName}",
+                            text = if (settings.ownerName.isNotBlank()) "Owner: ${settings.ownerName}" else "Owner: Not set",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium
                         )
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = settings.email.ifBlank { "No email set" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (settings.email.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Read-only email",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+
                         Text(
-                            text = settings.email,
+                            text = if (settings.phone.isNotBlank()) "Phone: ${settings.phone}" else "Phone: Not set",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 12.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                )
+
+                // Address & Coordinates
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = customColors.accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
                         Text(
-                            text = settings.phone,
+                            text = settings.storeLocation.formatted.ifBlank { "No address set" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (settings.storeLocation.latitude != 0.0 || settings.storeLocation.longitude != 0.0)
+                                "Lat: %.5f • Lng: %.5f".format(settings.storeLocation.latitude, settings.storeLocation.longitude)
+                            else "GPS Coordinates not set",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -123,7 +182,96 @@ fun ProfileScreen(
             }
         }
 
-        // BUSINESS TYPE SELECTOR (Food vs Convenience Store)
+        // 2. BUSINESS TYPE IS LOCKED (Read-only chip with lock + Request a change)
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Business Type Architecture",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Locked per Merchant Agreement",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = customColors.accentTint,
+                        modifier = Modifier.padding(start = 8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Locked",
+                                tint = customColors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = settings.type.ifBlank { "Food & Dining" },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = customColors.accent
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val pendingTypeRequest = changeRequests.firstOrNull { it.kind == "type" && it.status == "Pending" }
+                if (pendingTypeRequest != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(10.dp)
+                        ) {
+                            Icon(Icons.Default.HourglassEmpty, contentDescription = null, tint = customColors.accent, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Pending Change Request: '${pendingTypeRequest.requestedValue}'",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                OutlinedButton(
+                    onClick = { showTypeChangeDialog = true },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("request_business_type_change_btn")
+                ) {
+                    Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Request a change", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // 3. EDIT PROFILE DETAILS (Owner name, Phone, Logo URL with live preview; Shop Name & Email locked)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -131,66 +279,116 @@ fun ProfileScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Business Type Architecture",
+                    text = "Store Profile Details",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                 )
                 Text(
-                    text = "Select your store type to tailor menu fields, kitchen prep timers, and inventory SKUs.",
+                    text = "Owner name, phone, and logo URL save directly to your store profile.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // Shop Name (Read-only)
+                OutlinedTextField(
+                    value = settings.storeName,
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    label = { Text("Shop Name") },
+                    leadingIcon = { Icon(Icons.Default.Storefront, contentDescription = null) },
+                    trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
+                    supportingText = { Text("Shop name cannot be edited directly", fontSize = 11.sp) },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("profile_shop_name_readonly")
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Email (Read-only)
+                OutlinedTextField(
+                    value = settings.email,
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    label = { Text("Login Email") },
+                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                    trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
+                    supportingText = { Text("Account login email is permanently fixed", fontSize = 11.sp) },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("profile_email_readonly")
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Owner Name (Editable)
+                OutlinedTextField(
+                    value = ownerNameInput,
+                    onValueChange = { ownerNameInput = it },
+                    label = { Text("Owner Name") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("profile_owner_name_input")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Phone (Editable)
+                OutlinedTextField(
+                    value = phoneInput,
+                    onValueChange = { phoneInput = it },
+                    label = { Text("Phone Number") },
+                    leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("profile_phone_input")
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Logo URL Field with live preview & status
+                ImageUrlFieldWithLivePreview(
+                    label = "Store Logo URL",
+                    url = logoUrlInput,
+                    onUrlChange = { logoUrlInput = it },
+                    placeholder = "https://example.com/logo.png",
+                    testTag = "profile_logo_url_input"
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = {
+                        onUpdateMerchantProfile(ownerNameInput, phoneInput, logoUrlInput)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = customColors.accent,
+                        contentColor = customColors.onAccent
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("save_profile_details_btn")
                 ) {
-                    val isFood = settings.businessType == BusinessType.FOOD
-                    val isConv = settings.businessType == BusinessType.CONVENIENCE
-
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isFood) customColors.accentTint else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onBusinessTypeChange(BusinessType.FOOD) }
-                            .testTag("business_type_food_btn")
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("🍔", fontSize = 28.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("Food & Dining", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("Kitchen Prep & Modifiers", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isConv) customColors.accentTint else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onBusinessTypeChange(BusinessType.CONVENIENCE) }
-                            .testTag("business_type_convenience_btn")
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("🏪", fontSize = 28.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("Convenience Store", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("SKUs, Barcodes & Units", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Save Profile Changes", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
             }
         }
 
-        // REQUEST A RIDER BUTTON (Directly Below Business Type Architecture)
+        // 4. REQUEST A RIDER BUTTON (Kept as requested!)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -251,7 +449,7 @@ fun ProfileScreen(
             }
         }
 
-        // STORE LOCATION & PICKUP PIN
+        // 5. STORE MAP LOCATION (PICKUP POINT)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -272,12 +470,14 @@ fun ProfileScreen(
 
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = settings.storeLocation.formatted,
+                    text = settings.storeLocation.formatted.ifBlank { "No address set" },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = "Lat: %.4f • Lng: %.4f".format(settings.storeLocation.latitude, settings.storeLocation.longitude),
+                    text = if (settings.storeLocation.latitude != 0.0 || settings.storeLocation.longitude != 0.0)
+                        "Lat: %.5f • Lng: %.5f".format(settings.storeLocation.latitude, settings.storeLocation.longitude)
+                    else "GPS Coordinates not set",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -293,7 +493,7 @@ fun ProfileScreen(
                 ) {
                     Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Set Map Location & Draggable Pin", fontWeight = FontWeight.Bold)
+                    Text("Set Location on OpenStreetMap", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -634,6 +834,74 @@ fun ProfileScreen(
             title = { Text("Select Language") },
             text = { Text("Current terminal language is set to English (US). Additional regional translations (Filipino, Spanish) can be toggled.") },
             confirmButton = { TextButton(onClick = { showLanguageDialog = false }) { Text("Save") } }
+        )
+    }
+
+    if (showTypeChangeDialog) {
+        val currentType = settings.type.ifBlank { "Food & Dining" }
+        val targetOption = if (currentType.contains("conv", ignoreCase = true)) "Food & Dining" else "Convenience Store"
+        var selectedValue by remember { mutableStateOf(targetOption) }
+        var changeReason by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showTypeChangeDialog = false },
+            title = { Text("Request Business Type Change") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Current Type: $currentType",
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Select Requested Type:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    listOf("Food & Dining", "Convenience Store").forEach { option ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { selectedValue = option }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(
+                                selected = selectedValue == option,
+                                onClick = { selectedValue = option }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(option, fontWeight = FontWeight.Medium)
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = changeReason,
+                        onValueChange = { changeReason = it },
+                        label = { Text("Reason for change") },
+                        placeholder = { Text("Describe reason for changing business type") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 3
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRequestAdminChange("type", selectedValue, changeReason.trim())
+                        showTypeChangeDialog = false
+                    },
+                    enabled = changeReason.isNotBlank()
+                ) {
+                    Text("Submit Request")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTypeChangeDialog = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

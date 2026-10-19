@@ -27,7 +27,7 @@ object ReceiptPrinterHelper {
         order.items.forEach { item ->
             val sizeStr = if (item.selectedSize != null) " (${item.selectedSize})" else ""
             sb.appendLine("${item.quantity}x ${item.name}$sizeStr")
-            sb.appendLine("    @ ${FormatUtils.formatCurrency(item.unitPrice)} = ${FormatUtils.formatCurrency(item.totalPrice)}")
+            sb.appendLine("    Line Total   : ${FormatUtils.formatCurrency(item.lineTotal)}")
             if (item.modifiers.isNotEmpty()) {
                 item.modifiers.forEach { mod ->
                     sb.appendLine("    + ${mod.name} (${FormatUtils.formatCurrency(mod.price)})")
@@ -38,11 +38,17 @@ object ReceiptPrinterHelper {
             }
         }
         sb.appendLine("----------------------------------------")
-        sb.appendLine("Subtotal        : ${FormatUtils.formatCurrency(order.subtotal)}")
+        sb.appendLine("Items Subtotal  : ${FormatUtils.formatCurrency(order.subtotal)}")
         sb.appendLine("Delivery Fee    : ${FormatUtils.formatCurrency(order.deliveryFee)}")
-        sb.appendLine("Platform Fee    : ${FormatUtils.formatCurrency(order.platformFee)}")
-        sb.appendLine("TOTAL AMOUNT    : ${FormatUtils.formatCurrency(order.total)}")
-        sb.appendLine("Payment Method  : ${order.paymentMethod}")
+        if (order.serviceFee > 0.0) {
+            sb.appendLine("Service Fee     : ${FormatUtils.formatCurrency(order.serviceFee)}")
+        }
+        if (order.discount > 0.0) {
+            sb.appendLine("Discount        : -${FormatUtils.formatCurrency(order.discount)}")
+        }
+        sb.appendLine("TOTAL           : ${FormatUtils.formatCurrency(order.total)}")
+        sb.appendLine("Payment Method  : ${order.formattedPaymentMethod}")
+        sb.appendLine("Note: Delivery fee goes to the rider.")
         sb.appendLine("Status          : ${order.status.displayTitle}")
         sb.appendLine("========================================")
         sb.appendLine("      THANK YOU FOR YOUR BUSINESS!")
@@ -67,12 +73,20 @@ object ReceiptPrinterHelper {
                     <td style="padding:6px 0; border-bottom:1px dashed #ddd;">
                         <strong>${item.quantity}x ${item.name}</strong> $sizeStr $modsStr $noteStr
                     </td>
-                    <td style="padding:6px 0; text-align:right; border-bottom:1px dashed #ddd;">
-                        ${FormatUtils.formatCurrency(item.totalPrice)}
+                    <td style="padding:6px 0; text-align:right; border-bottom:1px dashed #ddd; vertical-align:top;">
+                        <strong>${FormatUtils.formatCurrency(item.lineTotal)}</strong>
                     </td>
                 </tr>
             """.trimIndent())
         }
+
+        val serviceFeeRow = if (order.serviceFee > 0.0) {
+            "<tr><td>Service Fee</td><td style='text-align:right;'>${FormatUtils.formatCurrency(order.serviceFee)}</td></tr>"
+        } else ""
+
+        val discountRow = if (order.discount > 0.0) {
+            "<tr style='color:#d32f2f;'><td>Discount</td><td style='text-align:right;'>-${FormatUtils.formatCurrency(order.discount)}</td></tr>"
+        } else ""
 
         return """
             <!DOCTYPE html>
@@ -115,15 +129,17 @@ object ReceiptPrinterHelper {
                 </table>
                 <div class="dashed"></div>
                 <table>
-                    <tr><td>Subtotal</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.subtotal)}</td></tr>
+                    <tr><td>Items Subtotal</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.subtotal)}</td></tr>
                     <tr><td>Delivery Fee</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.deliveryFee)}</td></tr>
-                    <tr><td>Platform Fee</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.platformFee)}</td></tr>
+                    $serviceFeeRow
+                    $discountRow
                     <tr class="total-row" style="border-top:1px solid #111;">
                         <td style="padding-top:6px;">TOTAL</td>
                         <td style="text-align:right; padding-top:6px;">${FormatUtils.formatCurrency(order.total)}</td>
                     </tr>
                 </table>
-                <div style="margin-top:8px;"><strong>Payment:</strong> ${order.paymentMethod}</div>
+                <div style="margin-top:8px;"><strong>Payment:</strong> ${order.formattedPaymentMethod}</div>
+                <div style="margin-top:4px; font-size:11px; font-style:italic; color:#555;">Delivery fee goes to the rider.</div>
                 <div class="dashed"></div>
                 <div class="center" style="font-size:11px; margin-top:12px;">
                     Thank you for choosing Delivio!<br/>

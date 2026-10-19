@@ -252,8 +252,34 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun saveStoreLocation(location: AddressLocation) {
-        repository.saveStoreLocation(location)
-        _showMapLocationScreen.value = false
+        _isActionLoading.value = true
+        repository.saveStoreLocation(location) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _showMapLocationScreen.value = false
+                showSnackbar("Store location saved to Firestore")
+            } else {
+                showSnackbar(error ?: "Failed to save location")
+            }
+        }
+    }
+
+    fun updateMerchantProfile(
+        ownerName: String,
+        phone: String,
+        logoUrl: String,
+        onDone: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        _isActionLoading.value = true
+        repository.updateMerchantProfile(ownerName, phone, logoUrl) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                showSnackbar("Profile updated successfully")
+            } else {
+                showSnackbar(error ?: "Failed to update profile")
+            }
+            onDone(success, error)
+        }
     }
 
     fun updateStoreSettings(

@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MerchantSettings
 import com.example.data.model.Order
+import com.example.data.model.OrderStatus
 import com.example.data.model.Payout
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusOpenGreen
@@ -41,16 +42,40 @@ fun EarningsScreen(
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
 
-    // Financial calculations
-    val (grossSales, commissionRate) = when (period) {
-        "Today" -> 218.50 to 0.15
-        "This week" -> 1480.00 to 0.15
-        else -> 5920.00 to 0.15
+    val now = System.currentTimeMillis()
+    val startOfToday = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val oneWeekAgo = now - 7L * 24 * 60 * 60 * 1000
+    val oneMonthAgo = now - 30L * 24 * 60 * 60 * 1000
+
+    val deliveredOrders = orders.filter { it.status == OrderStatus.DELIVERED }
+
+    val filteredDeliveredOrders = when (period) {
+        "Today" -> {
+            val list = deliveredOrders.filter { it.placedAtTimestamp >= startOfToday }
+            if (list.isNotEmpty()) list else deliveredOrders
+        }
+        "This week" -> {
+            val list = deliveredOrders.filter { it.placedAtTimestamp >= oneWeekAgo }
+            if (list.isNotEmpty()) list else deliveredOrders
+        }
+        else -> {
+            val list = deliveredOrders.filter { it.placedAtTimestamp >= oneMonthAgo }
+            if (list.isNotEmpty()) list else deliveredOrders
+        }
     }
 
-    val platformFee = grossSales * commissionRate
-    val netEarnings = grossSales - platformFee
-    val pendingPayoutBalance = 845.20
+    // 3. EARNINGS: Count only the merchant's items subtotal for each Delivered order, not the delivery fee.
+    // Commission is calculated on that subtotal using merchants.commissionRate, with net earnings = subtotal - commission.
+    val itemsSubtotal = filteredDeliveredOrders.sumOf { it.subtotal }
+    val commissionRate = settings.commissionRate
+    val commissionFee = itemsSubtotal * commissionRate
+    val netEarnings = itemsSubtotal - commissionFee
+    val pendingPayoutBalance = netEarnings
 
     Column(
         modifier = modifier
@@ -111,12 +136,13 @@ fun EarningsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column {
-                        Text("Gross Sales", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(FormatUtils.formatCurrency(grossSales), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Items Subtotal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(FormatUtils.formatCurrency(itemsSubtotal), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                     Column {
-                        Text("Platform Fee (15%)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("- ${FormatUtils.formatCurrency(platformFee)}", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
+                        val pct = (commissionRate * 100).toInt()
+                        Text("Commission ($pct%)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("- ${FormatUtils.formatCurrency(commissionFee)}", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
                     }
                     Column {
                         Text("Pending Balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -195,7 +221,7 @@ fun EarningsScreen(
 
             OutlinedButton(
                 onClick = {
-                    shareEarningsReport(context, period, grossSales, platformFee, netEarnings)
+                    shareEarningsReport(context, period, itemsSubtotal, commissionFee, netEarnings)
                 },
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -208,8 +234,12 @@ fun EarningsScreen(
         }
 
         // Order Transactions List
+        val transactionOrders = filteredDeliveredOrders.ifEmpty { deliveredOrders }.ifEmpty { orders }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            orders.take(5).forEach { order ->
+            transactionOrders.take(10).forEach { order ->
+                val orderSubtotal = order.subtotal
+                val orderCommission = orderSubtotal * commissionRate
+                val orderNet = orderSubtotal - orderCommission
                 Card(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -229,7 +259,7 @@ fun EarningsScreen(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "${FormatUtils.formatTimeAgo(order.placedAtTimestamp)} • ${order.paymentMethod}",
+                                text = "${FormatUtils.formatTimeAgo(order.placedAtTimestamp)} • ${order.formattedPaymentMethod}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -237,13 +267,13 @@ fun EarningsScreen(
 
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "+ ${FormatUtils.formatCurrency(order.subtotal * 0.85)}",
+                                text = "+ ${FormatUtils.formatCurrency(orderNet)}",
                                 fontWeight = FontWeight.ExtraBold,
                                 color = StatusOpenGreen,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "Gross: ${FormatUtils.formatCurrency(order.total)}",
+                                text = "Subtotal: ${FormatUtils.formatCurrency(orderSubtotal)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -298,7 +328,7 @@ fun EarningsScreen(
 private fun shareEarningsReport(
     context: Context,
     period: String,
-    gross: Double,
+    subtotal: Double,
     commission: Double,
     net: Double
 ) {
@@ -307,10 +337,11 @@ private fun shareEarningsReport(
         Period: $period
         Generated: ${FormatUtils.formatDateTime(System.currentTimeMillis())}
         ========================================
-        Gross Merchant Sales : ${FormatUtils.formatCurrency(gross)}
-        Platform Service Fee : -${FormatUtils.formatCurrency(commission)}
-        Net Merchant Payout  : ${FormatUtils.formatCurrency(net)}
+        Items Subtotal       : ${FormatUtils.formatCurrency(subtotal)}
+        Platform Commission  : -${FormatUtils.formatCurrency(commission)}
+        Net Merchant Earnings: ${FormatUtils.formatCurrency(net)}
         ========================================
+        * Delivery fee goes directly to the rider.
         Confidential Merchant Financial Report
         Powered by Delivio Partner OS
     """.trimIndent()

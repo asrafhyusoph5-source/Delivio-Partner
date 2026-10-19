@@ -60,20 +60,31 @@ data class OrderItem(
     val menuItemId: String = "",
     val name: String = "",
     val quantity: Int = 1,
-    val unitPrice: Double = 0.0,
+    val price: Double = 0.0,
+    val unitPrice: Double = price,
     val selectedSize: String? = null,
     val modifiers: List<OrderModifier> = emptyList(),
     val notes: String? = null
 ) {
+    val effectivePrice: Double
+        get() = when {
+            price > 0.0 -> price
+            unitPrice > 0.0 -> unitPrice
+            else -> 0.0
+        }
+
+    val lineTotal: Double
+        get() = effectivePrice * quantity
+
     val totalPrice: Double
-        get() = (unitPrice + modifiers.sumOf { it.price }) * quantity
+        get() = lineTotal
 }
 
 data class AddressLocation(
     val street: String = "",
     val city: String = "",
-    val latitude: Double = 14.5492,
-    val longitude: Double = 121.0503,
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
     val notes: String = ""
 ) {
     val formatted: String
@@ -155,9 +166,11 @@ data class Order(
     val items: List<OrderItem> = emptyList(),
     val subtotal: Double = 0.0,
     val deliveryFee: Double = 0.0,
+    val serviceFee: Double = 0.0,
+    val discount: Double = 0.0,
     val platformFee: Double = 0.0,
     val total: Double = 0.0,
-    val paymentMethod: String = "Cash on Delivery",
+    val paymentMethod: String = "COD",
     val status: OrderStatus = OrderStatus.PLACED_ORDER,
     val placedAtTimestamp: Long = System.currentTimeMillis(),
     val prepMinutes: Int? = null,
@@ -176,6 +189,18 @@ data class Order(
 ) {
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
+
+    val formattedPaymentMethod: String
+        get() {
+            val pm = paymentMethod.trim().lowercase()
+            return when {
+                pm.contains("cod") || pm.contains("cash") -> "COD"
+                pm.contains("online") || pm.contains("card") || pm.contains("gcash") || pm.contains("maya") || pm.contains("wallet") || pm.contains("paid") -> "Paid Online"
+                paymentMethod.equals("COD", ignoreCase = true) -> "COD"
+                paymentMethod.equals("Paid Online", ignoreCase = true) -> "Paid Online"
+                else -> paymentMethod.ifBlank { "COD" }
+            }
+        }
 
     val effectiveDropoffLat: Double
         get() = dropoffLat ?: deliveryAddress.latitude
@@ -309,11 +334,12 @@ data class MerchantApplication(
 )
 
 data class MerchantSettings(
-    val storeName: String = "Delivio Partner",
+    val storeName: String = "",
     val ownerName: String = "",
     val email: String = "",
     val phone: String = "",
     val businessType: BusinessType = BusinessType.FOOD,
+    val type: String = "Food & Dining",
     val isOpen: Boolean = true,
     val isPaused: Boolean = false,
     val pauseUntilTimestamp: Long? = null,
@@ -328,10 +354,10 @@ data class MerchantSettings(
         DaySchedule("Sunday", true, "09:00", "21:00")
     ),
     val storeLocation: AddressLocation = AddressLocation(
-        street = "88 Rizal Avenue",
-        city = "Taguig, Metro Manila",
-        latitude = 14.5492,
-        longitude = 121.0503,
+        street = "",
+        city = "",
+        latitude = 0.0,
+        longitude = 0.0,
         notes = ""
     ),
     val minimumOrder: Double = 0.00,
@@ -348,5 +374,6 @@ data class MerchantSettings(
     val imageUrl: String = "",
     val bankName: String = "",
     val accountHolder: String = "",
-    val accountNumber: String = ""
+    val accountNumber: String = "",
+    val commissionRate: Double = 0.15
 )

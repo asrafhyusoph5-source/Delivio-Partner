@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.example.data.model.*
+import com.example.util.FormatUtils
 import com.example.util.PlatformOrderStatuses
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
@@ -37,12 +38,13 @@ class MerchantRepository private constructor(context: Context) {
             if (FirebaseApp.getApps(ctx).isEmpty()) {
                 try {
                     val options = FirebaseOptions.Builder()
-                        .setApplicationId("1:102938475610:android:a1b2c3d4e5f6g7h8i9j0")
-                        .setProjectId("delivio-partner")
-                        .setApiKey("AIzaSyDummyKeyForPreviewAndLocalTesting00")
+                        .setApplicationId("1:490983557590:android:a1f1b3c89045b584467c77")
+                        .setProjectId("delivio-371d3")
+                        .setApiKey("AIzaSyB4ztWjU56WNWX9UKoKC1Icrm5eXxdMxjU")
+                        .setStorageBucket("delivio-371d3.firebasestorage.app")
                         .build()
                     FirebaseApp.initializeApp(ctx, options)
-                    Log.i("MerchantRepo", "Initialized fallback FirebaseApp for preview environment")
+                    Log.i("MerchantRepo", "Initialized FirebaseApp with project delivio-371d3 options")
                 } catch (e2: Exception) {
                     Log.e("MerchantRepo", "Fallback FirebaseApp init failed", e2)
                 }
@@ -89,14 +91,14 @@ class MerchantRepository private constructor(context: Context) {
     // Settings
     private val _settings = MutableStateFlow(
         MerchantSettings(
-            storeName = prefs.getString("store_name", "Delivio Partner") ?: "Delivio Partner",
+            storeName = prefs.getString("store_name", "") ?: "",
             themeAccentHex = prefs.getString("theme_accent", "#FFC107") ?: "#FFC107",
             isDarkMode = prefs.getBoolean("is_dark_mode", false),
             storeLocation = AddressLocation(
-                street = prefs.getString("loc_street", "88 Rizal Avenue") ?: "88 Rizal Avenue",
-                city = prefs.getString("loc_city", "Taguig, Metro Manila") ?: "Taguig, Metro Manila",
-                latitude = prefs.getFloat("loc_lat", 14.5492f).toDouble(),
-                longitude = prefs.getFloat("loc_lng", 121.0503f).toDouble()
+                street = prefs.getString("loc_street", "") ?: "",
+                city = prefs.getString("loc_city", "") ?: "",
+                latitude = prefs.getFloat("loc_lat", 0f).toDouble(),
+                longitude = prefs.getFloat("loc_lng", 0f).toDouble()
             )
         )
     )
@@ -240,8 +242,8 @@ class MerchantRepository private constructor(context: Context) {
                         return@addOnSuccessListener
                     }
 
-                    if (role == "merchant") {
-                        val mId = uid
+                    if (role == "merchant" || role == "owner" || role == "partner") {
+                        val mId = userDoc.getString("merchantId")?.takeIf { it.isNotBlank() } ?: uid
                         val user = User(
                             id = uid,
                             name = userDoc.getString("name") ?: userDoc.getString("ownerName") ?: "Merchant",
@@ -451,25 +453,46 @@ class MerchantRepository private constructor(context: Context) {
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists()) {
-                    val bTypeStr = snapshot.getString("businessType")
-                    val bType = BusinessType.fromString(bTypeStr)
+                    val nameFromDoc = snapshot.getString("name") ?: snapshot.getString("storeName") ?: snapshot.getString("businessName") ?: _settings.value.storeName
+                    val typeRaw = snapshot.getString("type") ?: snapshot.getString("businessType") ?: "Food & Dining"
+                    val displayType = when {
+                        typeRaw.contains("conv", ignoreCase = true) -> "Convenience Store"
+                        typeRaw.contains("food", ignoreCase = true) || typeRaw.contains("din", ignoreCase = true) -> "Food & Dining"
+                        else -> typeRaw
+                    }
+                    val bType = if (displayType == "Convenience Store") BusinessType.CONVENIENCE else BusinessType.FOOD
+
+                    val rawAddr = snapshot.getString("address") ?: ""
+                    val rawLat = snapshot.getDouble("lat") ?: snapshot.getDouble("latitude")
+                    val rawLng = snapshot.getDouble("lng") ?: snapshot.getDouble("longitude")
                     val locMap = snapshot.get("storeLocation") as? Map<*, *>
-                    val loc = if (locMap != null) {
-                        AddressLocation(
-                            street = (locMap["street"] as? String) ?: "",
-                            city = (locMap["city"] as? String) ?: "",
-                            latitude = (locMap["latitude"] as? Number)?.toDouble() ?: 14.5492,
-                            longitude = (locMap["longitude"] as? Number)?.toDouble() ?: 121.0503,
-                            notes = (locMap["notes"] as? String) ?: ""
-                        )
-                    } else _settings.value.storeLocation
+                    val loc = AddressLocation(
+                        street = rawAddr.ifBlank { (locMap?.get("street") as? String) ?: "" },
+                        city = (locMap?.get("city") as? String) ?: "",
+                        latitude = rawLat ?: (locMap?.get("latitude") as? Number)?.toDouble() ?: (locMap?.get("lat") as? Number)?.toDouble() ?: 0.0,
+                        longitude = rawLng ?: (locMap?.get("longitude") as? Number)?.toDouble() ?: (locMap?.get("lng") as? Number)?.toDouble() ?: 0.0,
+                        notes = (locMap?.get("notes") as? String) ?: ""
+                    )
+
+                    val commRate = when (val cr = snapshot.get("commissionRate")) {
+                        is Number -> {
+                            val d = cr.toDouble()
+                            if (d > 1.0) d / 100.0 else d
+                        }
+                        is String -> {
+                            val d = cr.toDoubleOrNull() ?: 0.15
+                            if (d > 1.0) d / 100.0 else d
+                        }
+                        else -> 0.15
+                    }
 
                     _settings.value = _settings.value.copy(
-                        storeName = snapshot.getString("storeName") ?: snapshot.getString("businessName") ?: _settings.value.storeName,
+                        storeName = nameFromDoc,
                         ownerName = snapshot.getString("ownerName") ?: _settings.value.ownerName,
                         email = snapshot.getString("email") ?: _settings.value.email,
                         phone = snapshot.getString("phone") ?: _settings.value.phone,
                         businessType = bType,
+                        type = displayType,
                         isOpen = snapshot.getBoolean("isOpen") ?: true,
                         isPaused = snapshot.getBoolean("isPaused") ?: false,
                         pauseUntilTimestamp = snapshot.getLong("pauseUntilTimestamp"),
@@ -481,12 +504,13 @@ class MerchantRepository private constructor(context: Context) {
                         vibrationEnabled = snapshot.getBoolean("vibrationEnabled") ?: true,
                         themeAccentHex = snapshot.getString("themeAccentHex") ?: _settings.value.themeAccentHex,
                         isDarkMode = snapshot.getBoolean("isDarkMode") ?: _settings.value.isDarkMode,
-                        logoUrl = snapshot.getString("logoUrl") ?: "",
-                        bannerUrl = snapshot.getString("bannerUrl") ?: "",
-                        imageUrl = snapshot.getString("imageUrl") ?: "",
+                        logoUrl = snapshot.getString("logoUrl")?.trim() ?: "",
+                        bannerUrl = snapshot.getString("bannerUrl")?.trim() ?: "",
+                        imageUrl = snapshot.getString("imageUrl")?.trim() ?: "",
                         bankName = snapshot.getString("bankName") ?: "",
                         accountHolder = snapshot.getString("accountHolder") ?: "",
-                        accountNumber = snapshot.getString("accountNumber") ?: ""
+                        accountNumber = snapshot.getString("accountNumber") ?: "",
+                        commissionRate = commRate
                     )
                 }
             }
@@ -505,24 +529,43 @@ class MerchantRepository private constructor(context: Context) {
                         val statusStr = doc.getString("status") ?: PlatformOrderStatuses.PLACED_ORDER
                         val orderStatus = OrderStatus.fromString(statusStr)
 
-                        val itemsRaw = doc.get("items") as? List<Map<String, Any>> ?: emptyList()
-                        val items = itemsRaw.mapIndexed { idx, itm ->
-                            val modsRaw = itm["modifiers"] as? List<Map<String, Any>> ?: emptyList()
-                            val mods = modsRaw.map { m ->
+                        val itemsRaw = (doc.get("items") as? List<*>) ?: emptyList<Any>()
+                        val items = itemsRaw.mapIndexedNotNull { idx, itemObj ->
+                            val itm = itemObj as? Map<*, *> ?: return@mapIndexedNotNull null
+                            val modsRaw = (itm["modifiers"] as? List<*>) ?: emptyList<Any>()
+                            val mods = modsRaw.mapNotNull { mObj ->
+                                val m = mObj as? Map<*, *> ?: return@mapNotNull null
                                 OrderModifier(
-                                    name = m["name"] as? String ?: "",
-                                    price = (m["price"] as? Number)?.toDouble() ?: 0.0
+                                    name = (m["name"] as? String) ?: (m["title"] as? String) ?: "",
+                                    price = FormatUtils.parseDouble(m["price"]) ?: 0.0
                                 )
                             }
+
+                            // 1. READ PRICES CORRECTLY
+                            // Item price: items[i].price, falling back to unitPrice, then itemPrice, then 0.
+                            // Quantity: items[i].qty, falling back to quantity, then 1.
+                            // Accept numbers or numeric strings, and never crash on a missing value.
+                            val priceVal = FormatUtils.parseDouble(itm["price"])
+                                ?: FormatUtils.parseDouble(itm["unitPrice"])
+                                ?: FormatUtils.parseDouble(itm["itemPrice"])
+                                ?: 0.0
+
+                            val qtyVal = FormatUtils.parseInt(itm["qty"])
+                                ?: FormatUtils.parseInt(itm["quantity"])
+                                ?: 1
+
+                            val finalQty = if (qtyVal > 0) qtyVal else 1
+
                             OrderItem(
                                 id = (itm["id"] as? String) ?: "item_$idx",
                                 menuItemId = (itm["menuItemId"] as? String) ?: "",
-                                name = (itm["name"] as? String) ?: "Item",
-                                quantity = (itm["quantity"] as? Number)?.toInt() ?: 1,
-                                unitPrice = (itm["unitPrice"] as? Number)?.toDouble() ?: 0.0,
+                                name = (itm["name"] as? String) ?: (itm["title"] as? String) ?: "Item",
+                                quantity = finalQty,
+                                price = priceVal,
+                                unitPrice = priceVal,
                                 selectedSize = itm["selectedSize"] as? String,
                                 modifiers = mods,
-                                notes = itm["notes"] as? String
+                                notes = (itm["notes"] as? String) ?: (itm["note"] as? String)
                             )
                         }
 
@@ -591,8 +634,58 @@ class MerchantRepository private constructor(context: Context) {
                         } else null
 
                         val feesMap = doc.get("fees") as? Map<*, *>
-                        val feesDeliveryFee = (feesMap?.get("deliveryFee") as? Number)?.toDouble()
-                            ?: doc.getDouble("deliveryFee") ?: 0.0
+                        val lineTotalsSum = items.sumOf { it.lineTotal }
+
+                        // Items subtotal: fees.subtotal, or the sum of line totals
+                        val rawSubtotal = FormatUtils.parseDouble(feesMap?.get("subtotal"))
+                            ?: FormatUtils.parseDouble(doc.get("subtotal"))
+                            ?: lineTotalsSum
+                        val finalSubtotal = if (rawSubtotal <= 0.0 && lineTotalsSum > 0.0) lineTotalsSum else rawSubtotal
+
+                        // Delivery fee: fees.deliveryFee
+                        val deliveryFeeVal = FormatUtils.parseDouble(feesMap?.get("deliveryFee"))
+                            ?: FormatUtils.parseDouble(doc.get("deliveryFee"))
+                            ?: 0.0
+
+                        // Service fee: fees.serviceFee, if any
+                        val serviceFeeVal = FormatUtils.parseDouble(feesMap?.get("serviceFee"))
+                            ?: FormatUtils.parseDouble(doc.get("serviceFee"))
+                            ?: 0.0
+
+                        // Discount: if any
+                        val discountVal = FormatUtils.parseDouble(feesMap?.get("discount"))
+                            ?: FormatUtils.parseDouble(doc.get("discount"))
+                            ?: 0.0
+
+                        val platformFeeVal = FormatUtils.parseDouble(feesMap?.get("platformFee"))
+                            ?: FormatUtils.parseDouble(doc.get("platformFee"))
+                            ?: 0.0
+
+                        // Order total: fees.total, falling back to total, then totalAmount, then subtotal + deliveryFee + serviceFee - discount, then the sum of line totals.
+                        val calculatedTotal = (finalSubtotal + deliveryFeeVal + serviceFeeVal - discountVal).coerceAtLeast(0.0)
+
+                        val parsedFeesTotal = FormatUtils.parseDouble(feesMap?.get("total"))
+                        val parsedDocTotal = FormatUtils.parseDouble(doc.get("total"))
+                        val parsedTotalAmount = FormatUtils.parseDouble(doc.get("totalAmount"))
+
+                        var finalTotal = parsedFeesTotal
+                            ?: parsedDocTotal
+                            ?: parsedTotalAmount
+                            ?: if (calculatedTotal > 0.0) calculatedTotal else lineTotalsSum
+
+                        // Self-check guard: no value shows $0.00 when the order has prices
+                        if (finalTotal <= 0.0) {
+                            if (calculatedTotal > 0.0) {
+                                finalTotal = calculatedTotal
+                            } else if (lineTotalsSum > 0.0) {
+                                finalTotal = lineTotalsSum
+                            }
+                        }
+
+                        val rawPaymentMethod = (doc.getString("paymentMethod")
+                            ?: (doc.get("paymentMethod") as? String)
+                            ?: (doc.get("payment") as? Map<*, *>)?.get("method") as? String
+                            ?: "COD").trim()
 
                         val prepMins = doc.getLong("prepMinutes")?.toInt() ?: doc.getLong("prepTimeMinutes")?.toInt()
                         val prepEnd = doc.getLong("prepEndTime") ?: if (prepMins != null) {
@@ -609,11 +702,13 @@ class MerchantRepository private constructor(context: Context) {
                             dropoffLat = dropLat,
                             dropoffLng = dropLng,
                             items = items,
-                            subtotal = doc.getDouble("subtotal") ?: items.sumOf { it.totalPrice },
-                            deliveryFee = feesDeliveryFee,
-                            platformFee = doc.getDouble("platformFee") ?: 0.0,
-                            total = doc.getDouble("total") ?: items.sumOf { it.totalPrice },
-                            paymentMethod = doc.getString("paymentMethod") ?: "Cash on Delivery",
+                            subtotal = finalSubtotal,
+                            deliveryFee = deliveryFeeVal,
+                            serviceFee = serviceFeeVal,
+                            discount = discountVal,
+                            platformFee = platformFeeVal,
+                            total = finalTotal,
+                            paymentMethod = rawPaymentMethod,
                             status = orderStatus,
                             placedAtTimestamp = doc.getLong("placedAtTimestamp") ?: (doc.getTimestamp("createdAt")?.toDate()?.time ?: System.currentTimeMillis()),
                             prepMinutes = prepMins,
@@ -946,17 +1041,27 @@ class MerchantRepository private constructor(context: Context) {
             "note" to note.trim(),
             "feePayer" to "customer"
         )
-        val data = mapOf(
-            "status" to PlatformOrderStatuses.READY,
-            "statusHistory" to FieldValue.arrayUnion(
-                mapOf(
-                    "status" to PlatformOrderStatuses.READY,
-                    "at" to Timestamp.now()
-                )
-            ),
-            "updatedAt" to FieldValue.serverTimestamp(),
-            "riderRequest" to riderRequestData
-        )
+        val existingOrder = _orders.value.find { it.id == orderId }
+        val isAlreadyReady = existingOrder?.status == OrderStatus.READY
+
+        val data: Map<String, Any> = if (isAlreadyReady) {
+            mapOf(
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "riderRequest" to riderRequestData
+            )
+        } else {
+            mapOf(
+                "status" to PlatformOrderStatuses.READY,
+                "statusHistory" to FieldValue.arrayUnion(
+                    mapOf(
+                        "status" to PlatformOrderStatuses.READY,
+                        "at" to Timestamp.now()
+                    )
+                ),
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "riderRequest" to riderRequestData
+            )
+        }
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 onResult(true, null)
@@ -1122,21 +1227,15 @@ class MerchantRepository private constructor(context: Context) {
         firestore?.collection("merchants")?.document(mId ?: return)?.update("isDarkMode", isDark)
     }
 
-    fun saveStoreLocation(loc: AddressLocation) {
-        _settings.value = _settings.value.copy(storeLocation = loc)
-        prefs.edit()
-            .putString("loc_street", loc.street)
-            .putString("loc_city", loc.city)
-            .putFloat("loc_lat", loc.latitude.toFloat())
-            .putFloat("loc_lng", loc.longitude.toFloat())
-            .apply()
+    fun saveStoreLocation(loc: AddressLocation, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
 
-        val mId = _merchantId.value ?: return
-        firestore?.collection("merchants")?.document(mId)?.update(
-            "address", loc.formatted,
-            "lat", loc.latitude,
-            "lng", loc.longitude,
-            "storeLocation", mapOf(
+        val data = mapOf(
+            "address" to loc.formatted,
+            "lat" to loc.latitude,
+            "lng" to loc.longitude,
+            "storeLocation" to mapOf(
                 "street" to loc.street,
                 "city" to loc.city,
                 "latitude" to loc.latitude,
@@ -1144,6 +1243,54 @@ class MerchantRepository private constructor(context: Context) {
                 "notes" to loc.notes
             )
         )
+
+        db.collection("merchants").document(mId).update(data)
+            .addOnSuccessListener {
+                _settings.value = _settings.value.copy(storeLocation = loc)
+                prefs.edit()
+                    .putString("loc_street", loc.street)
+                    .putString("loc_city", loc.city)
+                    .putFloat("loc_lat", loc.latitude.toFloat())
+                    .putFloat("loc_lng", loc.longitude.toFloat())
+                    .apply()
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to save location"
+                Log.e("MerchantRepo", "Save location failed: $err", ex)
+                onResult(false, err)
+            }
+    }
+
+    fun updateMerchantProfile(
+        ownerName: String,
+        phone: String,
+        logoUrl: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+
+        val data = mapOf(
+            "ownerName" to ownerName.trim(),
+            "phone" to phone.trim(),
+            "logoUrl" to logoUrl.trim()
+        )
+
+        db.collection("merchants").document(mId).update(data)
+            .addOnSuccessListener {
+                _settings.value = _settings.value.copy(
+                    ownerName = ownerName.trim(),
+                    phone = phone.trim(),
+                    logoUrl = logoUrl.trim()
+                )
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to update profile"
+                Log.e("MerchantRepo", "Update profile failed: $err", ex)
+                onResult(false, err)
+            }
     }
 
     fun updateStoreSettings(

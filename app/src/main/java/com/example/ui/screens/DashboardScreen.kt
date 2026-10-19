@@ -55,8 +55,10 @@ fun DashboardScreen(
                 it.status == OrderStatus.RIDER_ON_THE_WAY
     }
 
-    val todayCompletedOrders = orders.filter { it.status == OrderStatus.DELIVERED }
-    val todayRevenue = orders.filter { it.status == OrderStatus.DELIVERED }.sumOf { it.total }
+    val deliveredOrders = orders.filter { it.status == OrderStatus.DELIVERED }
+    val deliveredSubtotal = deliveredOrders.sumOf { it.subtotal }
+    val commissionAmount = deliveredSubtotal * settings.commissionRate
+    val netEarnings = deliveredSubtotal - commissionAmount
 
     Column(
         modifier = modifier
@@ -206,15 +208,15 @@ fun DashboardScreen(
             KpiCard(
                 title = "Total Orders",
                 value = (orders.size).toString(),
-                subtitle = "${todayCompletedOrders.size} delivered",
+                subtitle = "${deliveredOrders.size} delivered",
                 icon = "📦",
                 modifier = Modifier.weight(1f)
             )
 
             KpiCard(
-                title = "Revenue",
-                value = FormatUtils.formatCurrency(todayRevenue + 142.50), // today's total
-                subtitle = "Gross sales",
+                title = "Net Earnings",
+                value = FormatUtils.formatCurrency(netEarnings),
+                subtitle = "Subtotal: ${FormatUtils.formatCurrency(deliveredSubtotal)}",
                 icon = "💰",
                 modifier = Modifier.weight(1f)
             )
@@ -283,7 +285,7 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text("Revenue Last 7 Days", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        Text("Weekly total: $2,840.00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Net: ${FormatUtils.formatCurrency(netEarnings)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("Daily", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = customColors.accent)
                 }

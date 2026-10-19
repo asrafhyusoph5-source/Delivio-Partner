@@ -16,6 +16,7 @@ import com.example.data.model.MenuItem
 import com.example.data.model.Order
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
+import com.example.util.CurrencyConstants
 import com.example.util.FormatUtils
 
 @Composable
@@ -267,7 +268,7 @@ fun RequestPayoutDialog(
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it },
-                    label = { Text("Withdrawal Amount ($)") },
+                    label = { Text("Withdrawal Amount (${CurrencyConstants.SYMBOL})") },
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
