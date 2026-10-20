@@ -43,9 +43,10 @@ fun RiderTrackingModal(
     order: Order,
     merchantLocation: AddressLocation,
     isSubmitting: Boolean = false,
-    onConfirmRequestRider: (distanceKm: Double, deliveryFee: Double, note: String) -> Unit,
+    onConfirmRequestRider: (distanceKm: Double, deliveryFee: Double, note: String, dropoffLat: Double?, dropoffLng: Double?, dropoffAddress: String?) -> Unit,
     onRetryRiderRequest: () -> Unit,
     onCancelRiderRequest: () -> Unit,
+    onOpenLocationPicker: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -57,8 +58,9 @@ fun RiderTrackingModal(
     var riderNote by remember { mutableStateOf(riderRequest?.note ?: "") }
 
     // Coordinates: Pickup & Dropoff
-    val pickupLat = merchantLocation.latitude.takeIf { it != 0.0 } ?: 14.5492
-    val pickupLng = merchantLocation.longitude.takeIf { it != 0.0 } ?: 121.0503
+    val hasMerchantLocation = merchantLocation.latitude != 0.0 && merchantLocation.longitude != 0.0
+    val pickupLat = if (hasMerchantLocation) merchantLocation.latitude else 14.5492
+    val pickupLng = if (hasMerchantLocation) merchantLocation.longitude else 121.0503
 
     val initialDropoffLat = order.dropoffLat ?: order.deliveryAddress.latitude.takeIf { it != 0.0 } ?: 14.5547
     val initialDropoffLng = order.dropoffLng ?: order.deliveryAddress.longitude.takeIf { it != 0.0 } ?: 121.0509
@@ -177,6 +179,53 @@ fun RiderTrackingModal(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                if (!hasMerchantLocation) {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Default.LocationOff, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(28.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Set your store location in Profile first",
+                                fontWeight = FontWeight.ExtraBold,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Your store pickup coordinates are needed so riders know where to pick up the order and accurate delivery fees can be calculated.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    onDismiss()
+                                    onOpenLocationPicker()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Icon(Icons.Default.PinDrop, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Set Store Location in Profile", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 // Map View: OpenStreetMap with Pickup, Drop-off, and Route line
                 Card(
@@ -463,9 +512,16 @@ fun RiderTrackingModal(
                 // Confirm Button
                 Button(
                     onClick = {
-                        onConfirmRequestRider(distanceKm, computedFee, riderNote)
+                        onConfirmRequestRider(
+                            distanceKm,
+                            computedFee,
+                            riderNote,
+                            currentDropoffLat.takeIf { !hasOriginalCoordinates },
+                            currentDropoffLng.takeIf { !hasOriginalCoordinates },
+                            dropoffAddressText.takeIf { !hasOriginalCoordinates }
+                        )
                     },
-                    enabled = !isSubmitting,
+                    enabled = !isSubmitting && hasMerchantLocation,
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = customColors.accent,
@@ -481,7 +537,11 @@ fun RiderTrackingModal(
                     } else {
                         Icon(Icons.Default.TwoWheeler, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Confirm & Request Rider", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+                        Text(
+                            text = if (hasMerchantLocation) "Confirm & Request Rider" else "Set Store Location to Proceed",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 15.sp
+                        )
                     }
                 }
 

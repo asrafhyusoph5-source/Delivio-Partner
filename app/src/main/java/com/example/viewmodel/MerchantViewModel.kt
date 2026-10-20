@@ -80,6 +80,12 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _requestRiderTarget = MutableStateFlow<Order?>(null)
     val requestRiderTarget: StateFlow<Order?> = _requestRiderTarget.asStateFlow()
 
+    private val _showChooseOrderDialog = MutableStateFlow(false)
+    val showChooseOrderDialog: StateFlow<Boolean> = _showChooseOrderDialog.asStateFlow()
+
+    private val _riderRequestError = MutableStateFlow<RiderRequestErrorInfo?>(null)
+    val riderRequestError: StateFlow<RiderRequestErrorInfo?> = _riderRequestError.asStateFlow()
+
     private val _receiptPreviewTarget = MutableStateFlow<Order?>(null)
     val receiptPreviewTarget: StateFlow<Order?> = _receiptPreviewTarget.asStateFlow()
 
@@ -368,6 +374,18 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun openChooseOrderDialog() {
+        _showChooseOrderDialog.value = true
+    }
+
+    fun closeChooseOrderDialog() {
+        _showChooseOrderDialog.value = false
+    }
+
+    fun dismissRiderRequestError() {
+        _riderRequestError.value = null
+    }
+
     fun openRequestRider(order: Order) {
         _requestRiderTarget.value = order
     }
@@ -377,21 +395,59 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun confirmRequestRider(
-        orderId: String,
+        order: Order,
         distanceKm: Double,
         deliveryFee: Double,
-        note: String
+        note: String,
+        dropoffLat: Double? = null,
+        dropoffLng: Double? = null,
+        dropoffAddress: String? = null
     ) {
         _isActionLoading.value = true
-        repository.requestRiderForOrder(orderId, distanceKm, deliveryFee, note) { success, error ->
+        repository.requestRiderForOrder(
+            order = order,
+            distanceKm = distanceKm,
+            deliveryFee = deliveryFee,
+            note = note,
+            dropoffLat = dropoffLat,
+            dropoffLng = dropoffLng,
+            dropoffAddress = dropoffAddress
+        ) { success, error, fieldsWritten ->
             _isActionLoading.value = false
             if (success) {
                 _requestRiderTarget.value = null
+                _currentTab.value = MerchantTab.ORDERS
+                _orderStatusFilter.value = "Ready"
                 SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Rider requested. Order moved to Ready tab.")
             } else {
-                showSnackbar(error ?: "Failed to request rider")
+                val formattedFields = formatFieldsToString(fieldsWritten)
+                _riderRequestError.value = RiderRequestErrorInfo(
+                    orderNumber = order.orderNumber,
+                    errorMessage = error ?: "Failed to write rider request to Firestore.",
+                    fieldsWritten = formattedFields
+                )
             }
         }
+    }
+
+    private fun formatFieldsToString(map: Map<String, Any>): String {
+        val sb = StringBuilder()
+        for ((key, value) in map) {
+            when (value) {
+                is Map<*, *> -> {
+                    sb.appendLine("$key: {")
+                    for ((subKey, subVal) in value) {
+                        sb.appendLine("  $subKey: $subVal")
+                    }
+                    sb.appendLine("}")
+                }
+                else -> {
+                    sb.appendLine("$key: $value")
+                }
+            }
+        }
+        return sb.toString().trimEnd()
     }
 
     fun retryRiderRequest(orderId: String) {

@@ -453,8 +453,75 @@ fun OrderCard(
                 }
             }
 
-            // READY STATUS: "Waiting for rider" banner
-            if (order.status == OrderStatus.READY) {
+            // Searching for rider or Ready banner
+            if (order.isSearchingRider) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onRequestRider() }
+                        .testTag("searching_for_rider_card")
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Searching for rider...",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            order.riderRequest?.requestedAt?.let { t ->
+                                Text(
+                                    text = FormatUtils.formatTimeAgo(t),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Distance: %.1f km".format(order.riderRequest?.distanceKm ?: 0.0),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Rider Fee: ${FormatUtils.formatCurrency(order.riderRequest?.deliveryFee ?: order.deliveryFee)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (!order.riderRequest?.note.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Note: ${order.riderRequest!!.note}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            } else if (order.status == OrderStatus.READY && rider == null) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier
@@ -464,10 +531,10 @@ fun OrderCard(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("🛵", fontSize = 16.sp)
+                    Text("🍽️", fontSize = 16.sp)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Food is Ready • Waiting for rider to pick up",
+                        text = "Food is Ready • Waiting for rider dispatch",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = StatusOpenGreen
@@ -575,16 +642,19 @@ fun OrderCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = onRequestRider,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                        ) {
-                            Icon(Icons.Default.TwoWheeler, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Request Rider", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        if (order.canRequestRider) {
+                            OutlinedButton(
+                                onClick = onRequestRider,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("card_request_rider_btn")
+                            ) {
+                                Icon(Icons.Default.TwoWheeler, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Request a Rider", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            }
                         }
 
                         Button(
@@ -595,7 +665,7 @@ fun OrderCard(
                                 contentColor = customColors.onAccent
                             ),
                             modifier = Modifier
-                                .weight(1.2f)
+                                .weight(if (order.canRequestRider) 1.2f else 1f)
                                 .height(44.dp)
                                 .testTag("card_set_ready_btn")
                         ) {
@@ -607,21 +677,58 @@ fun OrderCard(
                 }
 
                 OrderStatus.READY -> {
-                    Button(
-                        onClick = onPrintReceipt,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = customColors.accent,
-                            contentColor = customColors.onAccent
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .testTag("card_print_receipt_btn")
-                    ) {
-                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Print Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    if (order.canRequestRider) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = onRequestRider,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = customColors.accent,
+                                    contentColor = customColors.onAccent
+                                ),
+                                modifier = Modifier
+                                    .weight(1.2f)
+                                    .height(44.dp)
+                                    .testTag("card_request_rider_btn")
+                            ) {
+                                Icon(Icons.Default.TwoWheeler, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Request a Rider", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = onPrintReceipt,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("card_print_receipt_btn")
+                            ) {
+                                Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Print Receipt", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = onPrintReceipt,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = customColors.accent,
+                                contentColor = customColors.onAccent
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .testTag("card_print_receipt_btn")
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Print Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
                     }
                 }
 

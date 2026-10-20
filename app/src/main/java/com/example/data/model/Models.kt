@@ -185,7 +185,8 @@ data class Order(
     val riderLocation: AddressLocation? = null,
     val isTestOrder: Boolean = false,
     val cityId: String = "",
-    val serviceType: String = "food"
+    val serviceType: String = "food",
+    val hasPickup: Boolean = false
 ) {
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
@@ -211,7 +212,27 @@ data class Order(
     val hasDropoffCoordinates: Boolean
         get() = (dropoffLat != null && dropoffLat != 0.0) ||
                 (deliveryAddress.latitude != 0.0 && deliveryAddress.latitude != 14.5492)
+
+    val isSearchingRider: Boolean
+        get() = riderRequest?.status?.equals("Searching", ignoreCase = true) == true
+
+    val isRiderAssigned: Boolean
+        get() = riderId.isNotBlank() ||
+                riderRequest?.status?.equals("Rider assigned", ignoreCase = true) == true ||
+                riderRequest?.status?.equals("Assigned", ignoreCase = true) == true
+
+    val canRequestRider: Boolean
+        get() = (status == OrderStatus.PREPARING || status == OrderStatus.READY) &&
+                riderId.isBlank() &&
+                !isSearchingRider &&
+                !isRiderAssigned
 }
+
+data class RiderRequestErrorInfo(
+    val orderNumber: String = "",
+    val errorMessage: String = "",
+    val fieldsWritten: String = ""
+)
 
 data class MenuItemModifier(
     val id: String = "",

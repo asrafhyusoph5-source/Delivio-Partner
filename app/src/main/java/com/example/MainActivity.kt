@@ -70,6 +70,8 @@ class MainActivity : ComponentActivity() {
             val showBusinessHoursDialog by viewModel.showBusinessHoursDialog.collectAsStateWithLifecycle()
             val showStaffDialog by viewModel.showStaffDialog.collectAsStateWithLifecycle()
             val showSoldOutDurationTarget by viewModel.showSoldOutDurationTarget.collectAsStateWithLifecycle()
+            val showChooseOrderDialog by viewModel.showChooseOrderDialog.collectAsStateWithLifecycle()
+            val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
             val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
 
             var isRegistering by remember { mutableStateOf(false) }
@@ -264,14 +266,7 @@ class MainActivity : ComponentActivity() {
                                             viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
                                         },
                                         onRequestRiderManual = {
-                                            val targetOrder = orders.firstOrNull { it.status == OrderStatus.READY }
-                                                ?: orders.firstOrNull { it.status == OrderStatus.PREPARING }
-                                                ?: orders.firstOrNull { it.status == OrderStatus.PLACED_ORDER }
-                                            if (targetOrder != null) {
-                                                viewModel.openRequestRider(targetOrder)
-                                            } else {
-                                                viewModel.showSnackbar("No active orders found to request a rider.")
-                                            }
+                                            viewModel.openChooseOrderDialog()
                                         },
                                         onOpenColorPicker = { viewModel.openColorPicker() },
                                         onToggleDarkMode = { viewModel.toggleDarkMode(it) },
@@ -343,14 +338,17 @@ class MainActivity : ComponentActivity() {
                         order = target,
                         merchantLocation = settings.storeLocation,
                         isSubmitting = isActionLoading,
-                        onConfirmRequestRider = { distanceKm, deliveryFee, note ->
-                            viewModel.confirmRequestRider(target.id, distanceKm, deliveryFee, note)
+                        onConfirmRequestRider = { distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr ->
+                            viewModel.confirmRequestRider(target, distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr)
                         },
                         onRetryRiderRequest = {
                             viewModel.retryRiderRequest(target.id)
                         },
                         onCancelRiderRequest = {
                             viewModel.cancelRiderRequest(target.id)
+                        },
+                        onOpenLocationPicker = {
+                            viewModel.openMapLocation()
                         },
                         onDismiss = {
                             viewModel.closeRequestRider()
@@ -494,6 +492,30 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismiss = {
                             viewModel.closeStaffDialog()
+                        }
+                    )
+                }
+
+                // 15. Choose Order for Manual Rider Dispatch Dialog
+                if (showChooseOrderDialog) {
+                    ChooseOrderForDispatchDialog(
+                        orders = orders,
+                        onSelectOrder = { selectedOrder ->
+                            viewModel.closeChooseOrderDialog()
+                            viewModel.openRequestRider(selectedOrder)
+                        },
+                        onDismiss = {
+                            viewModel.closeChooseOrderDialog()
+                        }
+                    )
+                }
+
+                // 16. Rider Request Error Dialog (Never silent on failure)
+                riderRequestError?.let { errInfo ->
+                    RiderRequestErrorDialog(
+                        errorInfo = errInfo,
+                        onDismiss = {
+                            viewModel.dismissRiderRequestError()
                         }
                     )
                 }

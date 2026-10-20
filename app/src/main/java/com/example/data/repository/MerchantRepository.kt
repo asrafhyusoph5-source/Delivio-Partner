@@ -692,6 +692,9 @@ class MerchantRepository private constructor(context: Context) {
                             (doc.getLong("placedAtTimestamp") ?: System.currentTimeMillis()) + (prepMins * 60 * 1000L)
                         } else null
 
+                        val pickupMap = doc.get("pickup") as? Map<*, *>
+                        val hasPickup = pickupMap != null && pickupMap.isNotEmpty()
+
                         val order = Order(
                             id = doc.id,
                             merchantId = mId,
@@ -722,7 +725,8 @@ class MerchantRepository private constructor(context: Context) {
                             riderPhone = rPhone,
                             riderLocation = riderLoc,
                             cityId = doc.getString("cityId") ?: "",
-                            serviceType = doc.getString("serviceType") ?: "food"
+                            serviceType = doc.getString("serviceType") ?: "food",
+                            hasPickup = hasPickup
                         )
                         list.add(order)
                     }
@@ -1024,13 +1028,15 @@ class MerchantRepository private constructor(context: Context) {
     }
 
     fun requestRiderForOrder(
-        orderId: String,
+        order: Order,
         distanceKm: Double,
         deliveryFee: Double,
         note: String,
-        onResult: (Boolean, String?) -> Unit
+        dropoffLat: Double? = null,
+        dropoffLng: Double? = null,
+        dropoffAddress: String? = null,
+        onResult: (Boolean, String?, Map<String, Any>) -> Unit
     ) {
-        val db = firestore ?: return onResult(false, "Firestore unavailable")
         val currentUid = auth?.currentUser?.uid ?: _merchantId.value ?: ""
         val riderRequestData = mapOf(
             "status" to "Searching",
@@ -1041,35 +1047,79 @@ class MerchantRepository private constructor(context: Context) {
             "note" to note.trim(),
             "feePayer" to "customer"
         )
-        val existingOrder = _orders.value.find { it.id == orderId }
-        val isAlreadyReady = existingOrder?.status == OrderStatus.READY
 
-        val data: Map<String, Any> = if (isAlreadyReady) {
-            mapOf(
-                "updatedAt" to FieldValue.serverTimestamp(),
-                "riderRequest" to riderRequestData
-            )
-        } else {
-            mapOf(
-                "status" to PlatformOrderStatuses.READY,
-                "statusHistory" to FieldValue.arrayUnion(
-                    mapOf(
-                        "status" to PlatformOrderStatuses.READY,
-                        "at" to Timestamp.now()
-                    )
-                ),
-                "updatedAt" to FieldValue.serverTimestamp(),
-                "riderRequest" to riderRequestData
+        val updateData = mutableMapOf<String, Any>(
+            "status" to PlatformOrderStatuses.READY,
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.READY,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "riderRequest" to riderRequestData
+        )
+
+        // If the order has no pickup, also write pickup {label (shop name), address, lat, lng, contactName, contactPhone} from this merchant so the rider app can show the pickup pin.
+        if (!order.hasPickup) {
+            val storeLoc = _settings.value.storeLocation
+            updateData["pickup"] = mapOf(
+                "label" to _settings.value.storeName.ifBlank { "Merchant Store" },
+                "address" to storeLoc.formatted.ifBlank { "Store Location" },
+                "lat" to storeLoc.latitude,
+                "lng" to storeLoc.longitude,
+                "contactName" to _settings.value.ownerName.ifBlank { _settings.value.storeName },
+                "contactPhone" to _settings.value.phone
             )
         }
-        db.collection("orders").document(orderId).update(data)
+
+        // If drop-off coordinates were missing on order and set in form
+        if (dropoffLat != null && dropoffLng != null && !order.hasDropoffCoordinates) {
+            updateData["dropoffLat"] = dropoffLat
+            updateData["dropoffLng"] = dropoffLng
+            updateData["dropoff"] = mapOf(
+                "lat" to dropoffLat,
+                "lng" to dropoffLng,
+                "address" to (dropoffAddress ?: order.deliveryAddress.formatted)
+            )
+        }
+
+        val db = firestore
+        if (db == null) {
+            // Offline / mock update
+            val idx = _orders.value.indexOfFirst { it.id == order.id }
+            if (idx >= 0) {
+                val updated = _orders.value[idx].copy(
+                    status = OrderStatus.READY,
+                    hasPickup = true,
+                    riderRequest = RiderRequest(
+                        id = "rr_${order.id}",
+                        orderId = order.id,
+                        status = "Searching",
+                        requestedAt = System.currentTimeMillis(),
+                        requestedBy = currentUid,
+                        distanceKm = distanceKm,
+                        deliveryFee = deliveryFee,
+                        note = note.trim(),
+                        feePayer = "customer"
+                    )
+                )
+                val newList = _orders.value.toMutableList()
+                newList[idx] = updated
+                _orders.value = newList
+            }
+            onResult(true, null, updateData)
+            return
+        }
+
+        db.collection("orders").document(order.id).update(updateData)
             .addOnSuccessListener {
-                onResult(true, null)
+                onResult(true, null, updateData)
             }
             .addOnFailureListener { ex ->
                 val err = ex.localizedMessage ?: ex.message ?: "Failed to request rider"
                 Log.e("MerchantRepo", "Request rider failed: $err", ex)
-                onResult(false, err)
+                onResult(false, err, updateData)
             }
     }
 
