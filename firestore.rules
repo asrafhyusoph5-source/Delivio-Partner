@@ -112,10 +112,16 @@ service cloud.firestore {
         || resource.data.riderId == request.auth.uid
         || (isRider() && resource.data.riderId == null)
         || isAdmin());
-      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid
-        && request.resource.data.status.lower() in ['placed order', 'placed', 'pending']
-        && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
-        && request.resource.data.get('riderId', null) == null;
+      allow create: if signedIn() && (
+        (request.resource.data.customerId == request.auth.uid
+          && request.resource.data.status.lower() in ['placed order', 'placed', 'pending']
+          && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
+          && request.resource.data.get('riderId', null) == null)
+        || (request.resource.data.get('merchantId', null) != null && canManage(request.resource.data.merchantId)
+          && request.resource.data.serviceType == 'request_rider'
+          && request.resource.data.status.lower() == 'ready'
+          && request.resource.data.get('riderId', null) == null)
+        || isAdmin());
       allow update: if isAdmin()
         || (resource.data.customerId == request.auth.uid
             && resource.data.status.lower() in ['placed order', 'placed', 'pending']

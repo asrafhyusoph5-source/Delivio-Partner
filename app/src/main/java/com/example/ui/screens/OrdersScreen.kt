@@ -43,6 +43,8 @@ fun OrdersScreen(
     onSetReadyClick: (Order) -> Unit,
     onRequestRiderClick: (Order) -> Unit,
     onPrintReceiptClick: (Order) -> Unit,
+    onCancelRiderRequestClick: (Order) -> Unit = {},
+    onRetryRiderRequestClick: (Order) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -158,7 +160,9 @@ fun OrdersScreen(
                         onReject = { onRejectClick(order) },
                         onSetReady = { onSetReadyClick(order) },
                         onRequestRider = { onRequestRiderClick(order) },
-                        onPrintReceipt = { onPrintReceiptClick(order) }
+                        onPrintReceipt = { onPrintReceiptClick(order) },
+                        onCancelRiderRequest = { onCancelRiderRequestClick(order) },
+                        onRetryRiderRequest = { onRetryRiderRequestClick(order) }
                     )
                 }
             }
@@ -174,7 +178,9 @@ fun OrderCard(
     onReject: () -> Unit,
     onSetReady: () -> Unit,
     onRequestRider: () -> Unit,
-    onPrintReceipt: () -> Unit
+    onPrintReceipt: () -> Unit,
+    onCancelRiderRequest: () -> Unit = {},
+    onRetryRiderRequest: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
@@ -204,6 +210,32 @@ fun OrderCard(
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 16.sp
                     )
+                    if (order.serviceType.equals("request_rider", ignoreCase = true)) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = customColors.accentTint
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.TwoWheeler,
+                                    contentDescription = null,
+                                    tint = customColors.accent,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Request a Rider",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = customColors.accent
+                                )
+                            }
+                        }
+                    }
                     if (order.isTestOrder) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
@@ -454,12 +486,23 @@ fun OrderCard(
             }
 
             // Searching for rider or Ready banner
+            val requestedAt = order.riderRequest?.requestedAt
+            val elapsedMs = if (requestedAt != null) System.currentTimeMillis() - requestedAt else 0L
+            val elapsedMinutes = elapsedMs / 60000L
+            val isOver5MinNoRider = order.isSearchingRider && elapsedMinutes >= 5
+
             if (order.isSearchingRider) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isOver5MinNoRider) StatusWarningAmber.copy(alpha = 0.15f)
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isOver5MinNoRider) StatusWarningAmber else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onRequestRider() }
@@ -472,56 +515,120 @@ fun OrderCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Searching for rider...",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                if (isOver5MinNoRider) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = StatusWarningAmber,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "No rider yet",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp,
+                                        color = StatusWarningAmber
+                                    )
+                                } else {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Searching for rider...",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
-                            order.riderRequest?.requestedAt?.let { t ->
+                            if (requestedAt != null) {
                                 Text(
-                                    text = FormatUtils.formatTimeAgo(t),
+                                    text = FormatUtils.formatTimeAgo(requestedAt),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+
+                        if (isOver5MinNoRider) {
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Distance: %.1f km".format(order.riderRequest?.distanceKm ?: 0.0),
+                                text = "Over 5 minutes passed with no rider yet. You can retry the search or cancel.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                text = "Rider Fee: ${FormatUtils.formatCurrency(order.riderRequest?.deliveryFee ?: order.deliveryFee)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        if (!order.riderRequest?.note.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Note: ${order.riderRequest!!.note}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onCancelRiderRequest,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                    modifier = Modifier.weight(1f).height(38.dp)
+                                ) {
+                                    Text("Cancel", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                Button(
+                                    onClick = onRetryRiderRequest,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = customColors.accent,
+                                        contentColor = customColors.onAccent
+                                    ),
+                                    modifier = Modifier.weight(1f).height(38.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Retry", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Distance: %.1f km".format(order.riderRequest?.distanceKm ?: 0.0),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Rider Fee: ${FormatUtils.formatCurrency(order.riderRequest?.deliveryFee ?: order.deliveryFee)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (!order.riderRequest?.note.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Note: ${order.riderRequest!!.note}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onCancelRiderRequest,
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(36.dp)
+                            ) {
+                                Text("Cancel Request", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
-            } else if (order.status == OrderStatus.READY && rider == null) {
+            } else if (order.status == OrderStatus.READY && rider == null && order.riderName.isBlank()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier
@@ -543,55 +650,125 @@ fun OrderCard(
             }
 
             // RIDER CLAIMED TRACKING CARD
-            if (rider != null) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(customColors.accentTint)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Text(rider.avatarEmoji, fontSize = 22.sp)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Claimed by Rider: ${rider.name}",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
-                                )
-                            }
-                            Text(
-                                text = "${rider.vehiclePlate} • ★ ${rider.rating} • ${order.riderRequest?.status ?: "Assigned"}",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+            val assignedRiderName = order.riderName.ifBlank { rider?.name ?: "" }
+            val hasRiderClaimed = assignedRiderName.isNotBlank() || rider != null
+            val isBeforePickup = order.status != OrderStatus.RIDER_ON_THE_WAY &&
+                    order.status != OrderStatus.DELIVERED &&
+                    order.status != OrderStatus.CANCELLED &&
+                    order.status != OrderStatus.REJECTED &&
+                    !order.riderRequest?.status.equals("Picked up", ignoreCase = true) &&
+                    !order.riderRequest?.status.equals("On the way", ignoreCase = true) &&
+                    !order.riderRequest?.status.equals("Delivered", ignoreCase = true)
 
-                    // Direct Call Rider Icon
-                    IconButton(
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_DIAL).apply {
-                                data = Uri.parse("tel:${rider.phone}")
+            if (hasRiderClaimed) {
+                val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
+                val currentRiderStatus = order.riderRequest?.status ?: if (order.status == OrderStatus.RIDER_ON_THE_WAY) "On the way" else "Rider assigned"
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = customColors.accentTint.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                // Photo placeholder
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(customColors.accent),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = rider?.avatarEmoji ?: "🛵",
+                                        fontSize = 20.sp
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = assignedRiderName.ifBlank { "Delivery Rider" },
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        text = "Status: $currentRiderStatus",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = customColors.accent
+                                    )
+                                }
                             }
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(StatusOpenGreen)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Phone,
-                            contentDescription = "Call Rider",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
+
+                            // Call icon (dialer)
+                            if (rPhone.isNotBlank()) {
+                                IconButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                            data = Uri.parse("tel:$rPhone")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(StatusOpenGreen)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Phone,
+                                        contentDescription = "Call Rider",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Live rider location coordinates
+                        if (order.riderLocation != null && order.riderLocation.latitude != 0.0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Live rider: %.4f, %.4f".format(order.riderLocation.latitude, order.riderLocation.longitude),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(
+                                    onClick = onRequestRider,
+                                    contentPadding = PaddingValues(0.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Live Map", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        // Cancel request button before pickup
+                        if (isBeforePickup) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onCancelRiderRequest,
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(36.dp)
+                            ) {
+                                Text("Cancel request", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            }
+                        }
                     }
                 }
             }

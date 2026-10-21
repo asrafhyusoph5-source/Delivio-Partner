@@ -510,7 +510,8 @@ class MerchantRepository private constructor(context: Context) {
                         bankName = snapshot.getString("bankName") ?: "",
                         accountHolder = snapshot.getString("accountHolder") ?: "",
                         accountNumber = snapshot.getString("accountNumber") ?: "",
-                        commissionRate = commRate
+                        commissionRate = commRate,
+                        cityId = snapshot.getString("cityId") ?: snapshot.getString("city") ?: _settings.value.cityId.ifBlank { "taguig" }
                     )
                 }
             }
@@ -1123,13 +1124,185 @@ class MerchantRepository private constructor(context: Context) {
             }
     }
 
+    fun bookRiderDirect(
+        recipientName: String,
+        recipientPhone: String,
+        deliveryAddress: String,
+        dropoffArea: String,
+        dropoffLat: Double,
+        dropoffLng: Double,
+        whatToDeliver: String,
+        relatedOrderNumber: String,
+        codAmount: Double,
+        riderNote: String,
+        distanceKm: Double,
+        deliveryFee: Double,
+        serviceFee: Double,
+        onResult: (Boolean, String?, Map<String, Any>, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant logged in", emptyMap(), null)
+        val storeLoc = _settings.value.storeLocation
+        val cId = _settings.value.cityId.ifBlank { "taguig" }
+        val orderNum = "#R" + (1000..9999).random().toString()
+
+        val itemsList = if (whatToDeliver.isNotBlank()) {
+            listOf(mapOf("name" to whatToDeliver.trim(), "qty" to 1, "price" to 0.0, "unitPrice" to 0.0))
+        } else {
+            emptyList<Map<String, Any>>()
+        }
+
+        val totalFee = deliveryFee + serviceFee
+
+        val orderData = hashMapOf<String, Any?>(
+            "serviceType" to "request_rider",
+            "merchantId" to mId,
+            "merchantName" to _settings.value.storeName.ifBlank { "Merchant Store" },
+            "customerId" to null,
+            "customerName" to recipientName.trim(),
+            "customerPhone" to recipientPhone.trim(),
+            "status" to "Ready",
+            "statusHistory" to listOf(
+                mapOf("status" to "Ready", "at" to Timestamp.now())
+            ),
+            "riderId" to null,
+            "riderName" to null,
+            "riderPhone" to null,
+            "cityId" to cId,
+            "items" to itemsList,
+            "relatedOrderNumber" to relatedOrderNumber.trim(),
+            "note" to riderNote.trim(),
+            "paymentMethod" to "merchant",
+            "codAmount" to codAmount,
+            "fees" to mapOf(
+                "subtotal" to 0.0,
+                "deliveryFee" to deliveryFee,
+                "serviceFee" to serviceFee,
+                "discount" to 0.0,
+                "total" to totalFee,
+                "feePayer" to "merchant"
+            ),
+            "pickup" to mapOf(
+                "label" to _settings.value.storeName.ifBlank { "Merchant Store" },
+                "address" to storeLoc.formatted,
+                "lat" to storeLoc.latitude,
+                "lng" to storeLoc.longitude,
+                "contactName" to _settings.value.ownerName.ifBlank { _settings.value.storeName },
+                "contactPhone" to _settings.value.phone
+            ),
+            "dropoff" to mapOf(
+                "address" to deliveryAddress.trim(),
+                "area" to dropoffArea.trim(),
+                "lat" to dropoffLat,
+                "lng" to dropoffLng,
+                "contactName" to recipientName.trim(),
+                "contactPhone" to recipientPhone.trim()
+            ),
+            "riderRequest" to mapOf(
+                "status" to "Searching",
+                "requestedAt" to Timestamp.now(),
+                "requestedBy" to mId,
+                "distanceKm" to distanceKm,
+                "deliveryFee" to deliveryFee,
+                "note" to riderNote.trim(),
+                "feePayer" to "merchant",
+                "manual" to true
+            ),
+            "orderNumber" to orderNum,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        val nonNullMap = orderData.filterValues { it != null }.mapValues { it.value as Any }
+
+        val db = firestore
+        val tempId = "order_${System.currentTimeMillis()}"
+
+        val localOrder = Order(
+            id = tempId,
+            merchantId = mId,
+            orderNumber = orderNum,
+            customerName = recipientName.trim(),
+            customerPhone = recipientPhone.trim(),
+            deliveryAddress = AddressLocation(
+                street = deliveryAddress.trim(),
+                city = dropoffArea.trim(),
+                latitude = dropoffLat,
+                longitude = dropoffLng
+            ),
+            dropoffLat = dropoffLat,
+            dropoffLng = dropoffLng,
+            items = if (whatToDeliver.isNotBlank()) listOf(OrderItem(id = "item_1", name = whatToDeliver.trim(), quantity = 1, price = 0.0, unitPrice = 0.0)) else emptyList(),
+            subtotal = 0.0,
+            deliveryFee = deliveryFee,
+            serviceFee = serviceFee,
+            discount = 0.0,
+            platformFee = 0.0,
+            total = totalFee,
+            paymentMethod = "merchant",
+            status = OrderStatus.READY,
+            placedAtTimestamp = System.currentTimeMillis(),
+            riderRequest = RiderRequest(
+                id = "rr_$tempId",
+                orderId = tempId,
+                status = "Searching",
+                requestedAt = System.currentTimeMillis(),
+                requestedBy = mId,
+                distanceKm = distanceKm,
+                deliveryFee = deliveryFee,
+                note = riderNote.trim(),
+                feePayer = "merchant"
+            ),
+            cityId = cId,
+            serviceType = "request_rider",
+            hasPickup = true
+        )
+
+        if (db == null) {
+            _orders.value = listOf(localOrder) + _orders.value
+            onResult(true, null, nonNullMap, tempId)
+            return
+        }
+
+        val docRef = db.collection("orders").document()
+        docRef.set(orderData)
+            .addOnSuccessListener {
+                val realOrder = localOrder.copy(
+                    id = docRef.id,
+                    riderRequest = localOrder.riderRequest?.copy(id = "rr_${docRef.id}", orderId = docRef.id)
+                )
+                _orders.value = listOf(realOrder) + _orders.value.filter { it.id != docRef.id }
+                onResult(true, null, nonNullMap, docRef.id)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to write rider request to Firestore"
+                Log.e("MerchantRepo", "Book rider failed: $err", ex)
+                onResult(false, err, nonNullMap, null)
+            }
+    }
+
     fun retryRiderRequest(orderId: String, onResult: (Boolean, String?) -> Unit) {
-        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val db = firestore
         val data = mapOf(
             "riderRequest.status" to "Searching",
             "riderRequest.requestedAt" to Timestamp.now(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        val idx = _orders.value.indexOfFirst { it.id == orderId }
+        if (idx >= 0) {
+            val updated = _orders.value[idx].copy(
+                riderRequest = _orders.value[idx].riderRequest?.copy(
+                    status = "Searching",
+                    requestedAt = System.currentTimeMillis()
+                )
+            )
+            val list = _orders.value.toMutableList()
+            list[idx] = updated
+            _orders.value = list
+        }
+        if (db == null) {
+            onResult(true, null)
+            return
+        }
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 onResult(true, null)
@@ -1141,12 +1314,30 @@ class MerchantRepository private constructor(context: Context) {
             }
     }
 
-    fun cancelRiderRequest(orderId: String, onResult: (Boolean, String?) -> Unit) {
-        val db = firestore ?: return onResult(false, "Firestore unavailable")
+    fun cancelRiderRequest(orderId: String, reason: String = "Merchant cancelled rider request", onResult: (Boolean, String?) -> Unit) {
+        val db = firestore
+        val cancelReasonText = reason.ifBlank { "Merchant cancelled rider request" }
         val data = mapOf(
+            "status" to "Cancelled",
+            "cancelReason" to cancelReasonText,
             "riderRequest.status" to "Cancelled",
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        val idx = _orders.value.indexOfFirst { it.id == orderId }
+        if (idx >= 0) {
+            val updated = _orders.value[idx].copy(
+                status = OrderStatus.CANCELLED,
+                cancelReason = cancelReasonText,
+                riderRequest = _orders.value[idx].riderRequest?.copy(status = "Cancelled")
+            )
+            val list = _orders.value.toMutableList()
+            list[idx] = updated
+            _orders.value = list
+        }
+        if (db == null) {
+            onResult(true, null)
+            return
+        }
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 onResult(true, null)

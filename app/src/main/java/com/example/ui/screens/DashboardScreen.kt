@@ -55,10 +55,15 @@ fun DashboardScreen(
                 it.status == OrderStatus.RIDER_ON_THE_WAY
     }
 
-    val deliveredOrders = orders.filter { it.status == OrderStatus.DELIVERED }
+    val deliveredOrders = orders.filter {
+        it.status == OrderStatus.DELIVERED && !it.serviceType.equals("request_rider", ignoreCase = true)
+    }
     val deliveredSubtotal = deliveredOrders.sumOf { it.subtotal }
     val commissionAmount = deliveredSubtotal * settings.commissionRate
     val netEarnings = deliveredSubtotal - commissionAmount
+
+    val requestRiderOrders = orders.filter { it.serviceType.equals("request_rider", ignoreCase = true) }
+    val deliveryExpenses = requestRiderOrders.sumOf { it.deliveryFee }
 
     Column(
         modifier = modifier
@@ -241,6 +246,45 @@ fun DashboardScreen(
                 icon = "⭐",
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        if (deliveryExpenses > 0.0 || requestRiderOrders.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🛵", fontSize = 20.sp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Delivery expenses",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "${requestRiderOrders.size} manual rider requests",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Text(
+                        text = FormatUtils.formatCurrency(deliveryExpenses),
+                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
 
         // INTERACTIVE ANALYTICS CHARTS (Compose Canvas)

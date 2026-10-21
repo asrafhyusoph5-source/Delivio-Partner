@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
             val showStaffDialog by viewModel.showStaffDialog.collectAsStateWithLifecycle()
             val showSoldOutDurationTarget by viewModel.showSoldOutDurationTarget.collectAsStateWithLifecycle()
             val showChooseOrderDialog by viewModel.showChooseOrderDialog.collectAsStateWithLifecycle()
+            val showManualBookingForm by viewModel.showManualBookingForm.collectAsStateWithLifecycle()
             val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
             val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
 
@@ -266,7 +267,7 @@ class MainActivity : ComponentActivity() {
                                             viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
                                         },
                                         onRequestRiderManual = {
-                                            viewModel.openChooseOrderDialog()
+                                            viewModel.openManualBookingForm()
                                         },
                                         onOpenColorPicker = { viewModel.openColorPicker() },
                                         onToggleDarkMode = { viewModel.toggleDarkMode(it) },
@@ -496,16 +497,33 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                // 15. Choose Order for Manual Rider Dispatch Dialog
-                if (showChooseOrderDialog) {
-                    ChooseOrderForDispatchDialog(
-                        orders = orders,
-                        onSelectOrder = { selectedOrder ->
-                            viewModel.closeChooseOrderDialog()
-                            viewModel.openRequestRider(selectedOrder)
+                // 15. Manual Rider Booking Sheet (Pop-up booking form that needs no existing order)
+                if (showManualBookingForm) {
+                    ManualRiderBookingSheet(
+                        settings = settings,
+                        isSubmitting = isActionLoading,
+                        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, sFee ->
+                            viewModel.bookRiderDirect(
+                                recipientName = name,
+                                recipientPhone = phone,
+                                deliveryAddress = addr,
+                                dropoffArea = area,
+                                dropoffLat = lat,
+                                dropoffLng = lng,
+                                whatToDeliver = what,
+                                relatedOrderNumber = relOrder,
+                                codAmount = cod,
+                                riderNote = note,
+                                distanceKm = dist,
+                                deliveryFee = delFee,
+                                serviceFee = sFee
+                            )
+                        },
+                        onOpenLocationPicker = {
+                            viewModel.openMapLocation()
                         },
                         onDismiss = {
-                            viewModel.closeChooseOrderDialog()
+                            viewModel.closeManualBookingForm()
                         }
                     )
                 }

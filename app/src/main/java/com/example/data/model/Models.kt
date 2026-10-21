@@ -396,5 +396,6 @@ data class MerchantSettings(
     val bankName: String = "",
     val accountHolder: String = "",
     val accountNumber: String = "",
-    val commissionRate: Double = 0.15
+    val commissionRate: Double = 0.15,
+    val cityId: String = "taguig"
 )

@@ -21,7 +21,14 @@ data class RouteResult(
 data class NominatimResult(
     val displayName: String,
     val latitude: Double,
-    val longitude: Double
+    val longitude: Double,
+    val area: String = ""
+)
+
+data class ReverseGeocodeResult(
+    val formattedAddress: String = "",
+    val area: String = "",
+    val city: String = ""
 )
 
 object OsmRouteHelper {
@@ -110,11 +117,11 @@ object OsmRouteHelper {
         }
     }
 
-    suspend fun searchNominatim(query: String): List<NominatimResult> = withContext(Dispatchers.IO) {
+    suspend fun searchNominatim(query: String, countryCode: String = "ph"): List<NominatimResult> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
         try {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val url = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&limit=5"
+            val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+            val url = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&limit=6&countrycodes=$countryCode&addressdetails=1"
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", "DelivioPartner/1.0 (Android)")
@@ -131,14 +138,83 @@ object OsmRouteHelper {
                 val displayName = item.optString("display_name", "")
                 val lat = item.optDouble("lat", 0.0)
                 val lon = item.optDouble("lon", 0.0)
+                val addrObj = item.optJSONObject("address")
+                val areaName = addrObj?.optString("suburb")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("neighbourhood")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("quarter")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("residential")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("city_district")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("city")?.takeIf { it.isNotBlank() }
+                    ?: addrObj?.optString("town")?.takeIf { it.isNotBlank() }
+                    ?: ""
+
                 if (lat != 0.0 && lon != 0.0) {
-                    results.add(NominatimResult(displayName, lat, lon))
+                    results.add(NominatimResult(displayName, lat, lon, areaName))
                 }
             }
             results
         } catch (e: Exception) {
             Log.w("OsmRouteHelper", "Nominatim search failed: ${e.localizedMessage}")
             emptyList()
+        }
+    }
+
+    suspend fun reverseGeocode(lat: Double, lng: Double): ReverseGeocodeResult = withContext(Dispatchers.IO) {
+        if (lat == 0.0 && lng == 0.0) return@withContext ReverseGeocodeResult()
+        try {
+            val url = "https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&addressdetails=1"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "DelivioPartner/1.0 (Android)")
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext ReverseGeocodeResult(
+                    formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                    area = "Custom Pin"
+                )
+            }
+
+            val body = response.body?.string() ?: return@withContext ReverseGeocodeResult(
+                formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                area = "Custom Pin"
+            )
+            val json = JSONObject(body)
+            val displayName = json.optString("display_name", "")
+            val addrObj = json.optJSONObject("address")
+
+            val suburb = addrObj?.optString("suburb")?.takeIf { it.isNotBlank() }
+            val neighbourhood = addrObj?.optString("neighbourhood")?.takeIf { it.isNotBlank() }
+            val quarter = addrObj?.optString("quarter")?.takeIf { it.isNotBlank() }
+            val residential = addrObj?.optString("residential")?.takeIf { it.isNotBlank() }
+            val cityDistrict = addrObj?.optString("city_district")?.takeIf { it.isNotBlank() }
+            val city = addrObj?.optString("city")?.takeIf { it.isNotBlank() }
+                ?: addrObj?.optString("town")?.takeIf { it.isNotBlank() }
+                ?: addrObj?.optString("municipality")?.takeIf { it.isNotBlank() }
+                ?: ""
+
+            val area = suburb ?: neighbourhood ?: quarter ?: residential ?: cityDistrict ?: city ?: "Selected Area"
+
+            val road = addrObj?.optString("road")?.takeIf { it.isNotBlank() }
+            val houseNum = addrObj?.optString("house_number")?.takeIf { it.isNotBlank() }
+            val formatted = when {
+                road != null && city.isNotBlank() -> if (houseNum != null) "$houseNum $road, $city" else "$road, $city"
+                displayName.isNotBlank() -> displayName
+                else -> "Location (%.5f, %.5f)".format(lat, lng)
+            }
+
+            ReverseGeocodeResult(
+                formattedAddress = formatted,
+                area = area,
+                city = city
+            )
+        } catch (e: Exception) {
+            Log.w("OsmRouteHelper", "Reverse geocode failed: ${e.localizedMessage}")
+            ReverseGeocodeResult(
+                formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                area = "Pinned Location"
+            )
         }
     }
 }

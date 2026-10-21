@@ -83,6 +83,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _showChooseOrderDialog = MutableStateFlow(false)
     val showChooseOrderDialog: StateFlow<Boolean> = _showChooseOrderDialog.asStateFlow()
 
+    private val _showManualBookingForm = MutableStateFlow(false)
+    val showManualBookingForm: StateFlow<Boolean> = _showManualBookingForm.asStateFlow()
+
     private val _riderRequestError = MutableStateFlow<RiderRequestErrorInfo?>(null)
     val riderRequestError: StateFlow<RiderRequestErrorInfo?> = _riderRequestError.asStateFlow()
 
@@ -374,6 +377,63 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun openManualBookingForm() {
+        _showManualBookingForm.value = true
+    }
+
+    fun closeManualBookingForm() {
+        _showManualBookingForm.value = false
+    }
+
+    fun bookRiderDirect(
+        recipientName: String,
+        recipientPhone: String,
+        deliveryAddress: String,
+        dropoffArea: String,
+        dropoffLat: Double,
+        dropoffLng: Double,
+        whatToDeliver: String,
+        relatedOrderNumber: String,
+        codAmount: Double,
+        riderNote: String,
+        distanceKm: Double,
+        deliveryFee: Double,
+        serviceFee: Double
+    ) {
+        _isActionLoading.value = true
+        repository.bookRiderDirect(
+            recipientName = recipientName,
+            recipientPhone = recipientPhone,
+            deliveryAddress = deliveryAddress,
+            dropoffArea = dropoffArea,
+            dropoffLat = dropoffLat,
+            dropoffLng = dropoffLng,
+            whatToDeliver = whatToDeliver,
+            relatedOrderNumber = relatedOrderNumber,
+            codAmount = codAmount,
+            riderNote = riderNote,
+            distanceKm = distanceKm,
+            deliveryFee = deliveryFee,
+            serviceFee = serviceFee
+        ) { success, error, fieldsWritten, _ ->
+            _isActionLoading.value = false
+            if (success) {
+                _showManualBookingForm.value = false
+                _currentTab.value = MerchantTab.ORDERS
+                _orderStatusFilter.value = "Ready"
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Rider requested")
+            } else {
+                val formattedFields = formatFieldsToString(fieldsWritten)
+                _riderRequestError.value = RiderRequestErrorInfo(
+                    orderNumber = "Manual Booking",
+                    errorMessage = error ?: "Failed to write rider request to Firestore.",
+                    fieldsWritten = formattedFields
+                )
+            }
+        }
+    }
+
     fun openChooseOrderDialog() {
         _showChooseOrderDialog.value = true
     }
@@ -454,15 +514,19 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         repository.retryRiderRequest(orderId) { success, error ->
             if (success) {
                 SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Rider search restarted")
             } else {
                 showSnackbar(error ?: "Failed to retry rider request")
             }
         }
     }
 
-    fun cancelRiderRequest(orderId: String) {
-        repository.cancelRiderRequest(orderId) { success, error ->
-            if (!success) {
+    fun cancelRiderRequest(orderId: String, reason: String = "Merchant cancelled rider request") {
+        repository.cancelRiderRequest(orderId, reason) { success, error ->
+            if (success) {
+                _requestRiderTarget.value = null
+                showSnackbar("Rider request cancelled")
+            } else {
                 showSnackbar(error ?: "Failed to cancel rider request")
             }
         }

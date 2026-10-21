@@ -52,7 +52,9 @@ fun EarningsScreen(
     val oneWeekAgo = now - 7L * 24 * 60 * 60 * 1000
     val oneMonthAgo = now - 30L * 24 * 60 * 60 * 1000
 
-    val deliveredOrders = orders.filter { it.status == OrderStatus.DELIVERED }
+    val deliveredOrders = orders.filter {
+        it.status == OrderStatus.DELIVERED && !it.serviceType.equals("request_rider", ignoreCase = true)
+    }
 
     val filteredDeliveredOrders = when (period) {
         "Today" -> {
@@ -277,6 +279,90 @@ fun EarningsScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Delivery expenses for Request a Rider dispatches
+        val requestRiderOrders = orders.filter { it.serviceType.equals("request_rider", ignoreCase = true) }
+        val totalDeliveryExpenses = requestRiderOrders.sumOf { it.deliveryFee }
+
+        if (requestRiderOrders.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Delivery expenses",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = "- ${FormatUtils.formatCurrency(totalDeliveryExpenses)}",
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.titleSmall
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                requestRiderOrders.forEach { rOrder ->
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "${rOrder.orderNumber} • ${rOrder.customerName}",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = customColors.accentTint
+                                    ) {
+                                        Text(
+                                            text = "Request Rider",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = customColors.accent,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "${FormatUtils.formatTimeAgo(rOrder.placedAtTimestamp)} • Paid by you (merchant)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "- ${FormatUtils.formatCurrency(rOrder.deliveryFee)}",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = rOrder.status.displayTitle,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
