@@ -40,6 +40,9 @@ object ReceiptPrinterHelper {
         sb.appendLine("----------------------------------------")
         sb.appendLine("Items Subtotal  : ${FormatUtils.formatCurrency(order.subtotal)}")
         sb.appendLine("Delivery Fee    : ${FormatUtils.formatCurrency(order.deliveryFee)}")
+        if (order.tip > 0.0) {
+            sb.appendLine("Rider Tip       : ${FormatUtils.formatCurrency(order.tip)}")
+        }
         if (order.serviceFee > 0.0) {
             sb.appendLine("Service Fee     : ${FormatUtils.formatCurrency(order.serviceFee)}")
         }
@@ -79,6 +82,10 @@ object ReceiptPrinterHelper {
                 </tr>
             """.trimIndent())
         }
+
+        val tipRow = if (order.tip > 0.0) {
+            "<tr><td>Rider tip</td><td style='text-align:right;'>${FormatUtils.formatCurrency(order.tip)}</td></tr>"
+        } else ""
 
         val serviceFeeRow = if (order.serviceFee > 0.0) {
             "<tr><td>Service Fee</td><td style='text-align:right;'>${FormatUtils.formatCurrency(order.serviceFee)}</td></tr>"
@@ -131,6 +138,7 @@ object ReceiptPrinterHelper {
                 <table>
                     <tr><td>Items Subtotal</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.subtotal)}</td></tr>
                     <tr><td>Delivery Fee</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.deliveryFee)}</td></tr>
+                    $tipRow
                     $serviceFeeRow
                     $discountRow
                     <tr class="total-row" style="border-top:1px solid #111;">

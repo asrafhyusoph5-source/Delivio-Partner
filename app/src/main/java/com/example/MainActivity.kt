@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
             val showManualBookingForm by viewModel.showManualBookingForm.collectAsStateWithLifecycle()
             val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
             val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
+            val currentTime by viewModel.currentTime.collectAsStateWithLifecycle()
 
             var isRegistering by remember { mutableStateOf(false) }
 
@@ -145,7 +146,8 @@ class MainActivity : ComponentActivity() {
                             onReject = { viewModel.openRejectDialog(it) },
                             onSetReady = { viewModel.setOrderReady(it.id) },
                             onRequestRider = { viewModel.openRequestRider(it) },
-                            onPrintReceipt = { viewModel.openReceiptPreview(it) }
+                            onPrintReceipt = { viewModel.openReceiptPreview(it) },
+                            onMarkPickedUp = { viewModel.markOrderPickedUp(it.id) }
                         )
                     } else {
                         viewModel.closeOrderDetail()
@@ -184,7 +186,10 @@ class MainActivity : ComponentActivity() {
                                         onRejectClick = { viewModel.openRejectDialog(it) },
                                         onSetReadyClick = { viewModel.setOrderReady(it.id) },
                                         onRequestRiderClick = { viewModel.openRequestRider(it) },
-                                        onPrintReceiptClick = { viewModel.openReceiptPreview(it) }
+                                        onPrintReceiptClick = { viewModel.openReceiptPreview(it) },
+                                        onMarkPickedUpClick = { viewModel.markOrderPickedUp(it.id) },
+                                        onCancelOrderClick = { viewModel.cancelOrder(it.id, "Merchant cancelled scheduled order") },
+                                        currentTime = currentTime
                                     )
                                 }
 

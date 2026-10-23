@@ -1,14 +1,17 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
@@ -18,8 +21,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -27,6 +33,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.ui.theme.LocalDelivioColors
 
 @Composable
@@ -86,15 +93,48 @@ fun LoginScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                // App Logo & Brand Header
-                Box(
+                // App Logo & Brand Header with Delivio Partner Mascot
+                Surface(
                     modifier = Modifier
-                        .size(76.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(customColors.accentTint),
-                    contentAlignment = Alignment.Center
+                        .size(100.dp)
+                        .shadow(elevation = 8.dp, shape = RoundedCornerShape(26.dp)),
+                    shape = RoundedCornerShape(26.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, customColors.accent.copy(alpha = 0.35f))
                 ) {
-                    Text(if (isStaffMode) "👥" else "🛍️", fontSize = 38.sp)
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.delivio_partner_app_ic),
+                            contentDescription = "Delivio Partner Icon",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .size(88.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                        )
+                        if (isStaffMode) {
+                            Surface(
+                                shape = CircleShape,
+                                color = customColors.accent,
+                                shadowElevation = 3.dp,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(4.dp)
+                                    .size(24.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Badge,
+                                        contentDescription = "Staff Mode Badge",
+                                        tint = customColors.onAccent,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))

@@ -37,6 +37,7 @@ enum class OrderStatus(val displayTitle: String) {
     READY("Ready"),
     RIDER_ON_THE_WAY("Rider is on the way"),
     DELIVERED("Delivered"),
+    COMPLETED("Completed"),
     REJECTED("Rejected"),
     CANCELLED("Cancelled");
 
@@ -49,6 +50,9 @@ enum class OrderStatus(val displayTitle: String) {
         }
     }
 }
+
+const val SCHEDULED_LEAD_TIME_MS: Long = 30 * 60 * 1000L
+
 
 data class OrderModifier(
     val name: String = "",
@@ -186,10 +190,37 @@ data class Order(
     val isTestOrder: Boolean = false,
     val cityId: String = "",
     val serviceType: String = "food",
-    val hasPickup: Boolean = false
+    val hasPickup: Boolean = false,
+    val tip: Double = 0.0,
+    val fulfillment: String = "delivery",
+    val scheduledFor: Long? = null
 ) {
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
+
+    val isPickUp: Boolean
+        get() = fulfillment.equals("pickup", ignoreCase = true) || hasPickup
+
+    val isScheduled: Boolean
+        get() = fulfillment.equals("scheduled", ignoreCase = true) || scheduledFor != null
+
+    val isDelivery: Boolean
+        get() = !isPickUp && !isScheduled
+
+    fun isScheduledDue(now: Long = System.currentTimeMillis()): Boolean {
+        val target = scheduledFor ?: return true
+        return now >= (target - SCHEDULED_LEAD_TIME_MS)
+    }
+
+    val fulfillmentChipLabel: String
+        get() = when {
+            isPickUp -> "Pick Up"
+            isScheduled -> {
+                val timeStr = scheduledFor?.let { com.example.util.FormatUtils.formatScheduledDateTime(it) }
+                if (!timeStr.isNullOrBlank()) "Scheduled: $timeStr" else "Scheduled"
+            }
+            else -> "Delivery"
+        }
 
     val formattedPaymentMethod: String
         get() {
@@ -222,7 +253,8 @@ data class Order(
                 riderRequest?.status?.equals("Assigned", ignoreCase = true) == true
 
     val canRequestRider: Boolean
-        get() = (status == OrderStatus.PREPARING || status == OrderStatus.READY) &&
+        get() = !isPickUp &&
+                (status == OrderStatus.PREPARING || status == OrderStatus.READY) &&
                 riderId.isBlank() &&
                 !isSearchingRider &&
                 !isRiderAssigned

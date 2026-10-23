@@ -15,7 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,14 +41,43 @@ fun OrderDetailScreen(
     onReject: (Order) -> Unit,
     onSetReady: (Order) -> Unit,
     onRequestRider: (Order) -> Unit,
-    onPrintReceipt: (Order) -> Unit
+    onPrintReceipt: (Order) -> Unit,
+    onMarkPickedUp: (Order) -> Unit = {}
 ) {
     BackHandler { onBack() }
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
 
-    val hasRiderAssigned = order.riderRequest?.rider != null
-    val rider = order.riderRequest?.rider
+    var showConfirmPickedUpDialog by remember { mutableStateOf(false) }
+
+    if (showConfirmPickedUpDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmPickedUpDialog = false },
+            title = { Text("Mark Order as Picked Up?") },
+            text = {
+                Text("Confirm that customer \"${order.customerName}\" has picked up order ${order.orderNumber}. This will complete the order.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showConfirmPickedUpDialog = false
+                        onMarkPickedUp(order)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusOpenGreen)
+                ) {
+                    Text("Confirm Picked Up")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmPickedUpDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    val hasRiderAssigned = !order.isPickUp && order.riderRequest?.rider != null
+    val rider = if (!order.isPickUp) order.riderRequest?.rider else null
 
     Scaffold(
         topBar = {
@@ -69,10 +98,14 @@ fun OrderDetailScreen(
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Column {
-                        Text(
-                            text = "Order ${order.orderNumber}",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Order ${order.orderNumber}",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            FulfillmentChip(order = order)
+                        }
                         Text(
                             text = FormatUtils.formatDateTime(order.placedAtTimestamp),
                             style = MaterialTheme.typography.bodySmall,
@@ -80,7 +113,7 @@ fun OrderDetailScreen(
                         )
                     }
                     Spacer(modifier = Modifier.weight(1f))
-                    OrderStatusBadge(status = order.status)
+                    OrderStatusBadge(status = order.status, isPickUp = order.isPickUp)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
             }
@@ -160,7 +193,36 @@ fun OrderDetailScreen(
                             }
                         }
                         OrderStatus.READY -> {
-                            if (order.canRequestRider) {
+                            if (order.isPickUp) {
+                                Button(
+                                    onClick = { showConfirmPickedUpDialog = true },
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = StatusOpenGreen,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1.3f)
+                                        .height(50.dp)
+                                        .testTag("detail_mark_picked_up_btn")
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Mark as Picked Up", fontWeight = FontWeight.ExtraBold)
+                                }
+                                OutlinedButton(
+                                    onClick = { onPrintReceipt(order) },
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(50.dp)
+                                        .testTag("detail_print_receipt_btn")
+                                ) {
+                                    Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Receipt", fontWeight = FontWeight.Bold)
+                                }
+                            } else if (order.canRequestRider) {
                                 Button(
                                     onClick = { onRequestRider(order) },
                                     shape = RoundedCornerShape(14.dp),
@@ -391,29 +453,34 @@ fun OrderDetailScreen(
 
                     Row(verticalAlignment = Alignment.Top) {
                         Icon(
-                            imageVector = Icons.Default.LocationOn,
+                            imageVector = if (order.isPickUp) Icons.Default.ShoppingBag else Icons.Default.LocationOn,
                             contentDescription = null,
                             tint = customColors.accent,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            Text("Delivery Address", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                            Text(order.deliveryAddress.formatted, style = MaterialTheme.typography.bodyMedium)
-                            if (order.deliveryAddress.notes.isNotBlank()) {
-                                Text(
-                                    text = "Instructions: ${order.deliveryAddress.notes}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            if (order.isPickUp) {
+                                Text("Pick Up Order", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                Text("🛍️ Customer will pick up at store location.", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = customColors.accent)
+                            } else {
+                                Text("Delivery Address", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                Text(order.deliveryAddress.formatted, style = MaterialTheme.typography.bodyMedium)
+                                if (order.deliveryAddress.notes.isNotBlank()) {
+                                    Text(
+                                        text = "Instructions: ${order.deliveryAddress.notes}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Searching for Rider Card
-            if (order.isSearchingRider) {
+            // Searching for Rider Card (Delivery only)
+            if (!order.isPickUp && order.isSearchingRider) {
                 Card(
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
@@ -480,64 +547,66 @@ fun OrderDetailScreen(
                 }
             }
 
-            // Rider Contact Info Card (Rider call enabled once rider assigned; greyed out before)
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            // Rider Contact Info Card (Delivery only)
+            if (!order.isPickUp) {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(if (hasRiderAssigned) customColors.accentTint else MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(rider?.avatarEmoji ?: "🛵", fontSize = 20.sp)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = rider?.name ?: "No Rider Assigned",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (hasRiderAssigned) "${rider?.vehiclePlate} • ★ ${rider?.rating}" else "Rider call enabled after dispatch",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // Rider Call Button
-                    FilledIconButton(
-                        onClick = {
-                            if (hasRiderAssigned && rider != null) {
-                                val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:${rider.phone}")
-                                }
-                                context.startActivity(intent)
-                            }
-                        },
-                        enabled = hasRiderAssigned,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = StatusOpenGreen,
-                            contentColor = Color.White,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.testTag("call_rider_btn")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Phone, contentDescription = "Call Rider")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(if (hasRiderAssigned) customColors.accentTint else MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(rider?.avatarEmoji ?: "🛵", fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = rider?.name ?: "No Rider Assigned",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (hasRiderAssigned) "${rider?.vehiclePlate} • ★ ${rider?.rating}" else "Rider call enabled after dispatch",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Rider Call Button
+                        FilledIconButton(
+                            onClick = {
+                                if (hasRiderAssigned && rider != null) {
+                                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                                        data = Uri.parse("tel:${rider.phone}")
+                                    }
+                                    context.startActivity(intent)
+                                }
+                            },
+                            enabled = hasRiderAssigned,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = StatusOpenGreen,
+                                contentColor = Color.White,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.testTag("call_rider_btn")
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = "Call Rider")
+                        }
                     }
                 }
             }
@@ -596,10 +665,19 @@ fun OrderDetailScreen(
                         Text("Items subtotal", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(FormatUtils.formatCurrency(order.subtotal), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Delivery fee", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(FormatUtils.formatCurrency(order.deliveryFee), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    if (!order.isPickUp) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Delivery fee", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(order.deliveryFee), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    if (order.tip > 0.0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Rider tip", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(order.tip), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        }
                     }
                     if (order.serviceFee > 0.0) {
                         Spacer(modifier = Modifier.height(4.dp))

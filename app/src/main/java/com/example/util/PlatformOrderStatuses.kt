@@ -8,6 +8,7 @@ object PlatformOrderStatuses {
     const val READY = "Ready"
     const val RIDER_ON_THE_WAY = "Rider is on the way"
     const val DELIVERED = "Delivered"
+    const val COMPLETED = "Completed"
     const val REJECTED = "Rejected"
     const val CANCELLED = "Cancelled"
 
@@ -24,7 +25,7 @@ object PlatformOrderStatuses {
             MerchantOrderTab.NEW -> statusStr.equals(PLACED_ORDER, ignoreCase = true)
             MerchantOrderTab.PREPARING -> statusStr.equals(PREPARING, ignoreCase = true)
             MerchantOrderTab.READY -> statusStr.equals(READY, ignoreCase = true) || statusStr.equals(RIDER_ON_THE_WAY, ignoreCase = true)
-            MerchantOrderTab.COMPLETED -> statusStr.equals(DELIVERED, ignoreCase = true)
+            MerchantOrderTab.COMPLETED -> statusStr.equals(DELIVERED, ignoreCase = true) || statusStr.equals(COMPLETED, ignoreCase = true)
             MerchantOrderTab.CANCELLED -> statusStr.equals(REJECTED, ignoreCase = true) || statusStr.equals(CANCELLED, ignoreCase = true)
         }
     }

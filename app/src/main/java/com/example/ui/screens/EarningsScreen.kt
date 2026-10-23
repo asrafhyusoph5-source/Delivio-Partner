@@ -53,7 +53,7 @@ fun EarningsScreen(
     val oneMonthAgo = now - 30L * 24 * 60 * 60 * 1000
 
     val deliveredOrders = orders.filter {
-        it.status == OrderStatus.DELIVERED && !it.serviceType.equals("request_rider", ignoreCase = true)
+        (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) && !it.serviceType.equals("request_rider", ignoreCase = true)
     }
 
     val filteredDeliveredOrders = when (period) {

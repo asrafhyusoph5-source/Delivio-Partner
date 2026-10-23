@@ -693,8 +693,30 @@ class MerchantRepository private constructor(context: Context) {
                             (doc.getLong("placedAtTimestamp") ?: System.currentTimeMillis()) + (prepMins * 60 * 1000L)
                         } else null
 
+                        val tipVal = FormatUtils.parseDouble(feesMap?.get("tip"))
+                            ?: FormatUtils.parseDouble(doc.get("tip"))
+                            ?: 0.0
+
                         val pickupMap = doc.get("pickup") as? Map<*, *>
                         val hasPickup = pickupMap != null && pickupMap.isNotEmpty()
+
+                        val rawFulfillment = (doc.getString("fulfillment")
+                            ?: (doc.get("fulfillment") as? String)
+                            ?: (if (hasPickup) "pickup" else "delivery")).trim().lowercase()
+
+                        val fulfillmentVal = when (rawFulfillment) {
+                            "pickup", "pick up" -> "pickup"
+                            "scheduled" -> "scheduled"
+                            else -> "delivery"
+                        }
+
+                        val scheduledForVal: Long? = when (val sf = doc.get("scheduledFor")) {
+                            is Timestamp -> sf.toDate().time
+                            is java.util.Date -> sf.time
+                            is Number -> sf.toLong()
+                            is String -> sf.toLongOrNull()
+                            else -> null
+                        }
 
                         val order = Order(
                             id = doc.id,
@@ -727,7 +749,10 @@ class MerchantRepository private constructor(context: Context) {
                             riderLocation = riderLoc,
                             cityId = doc.getString("cityId") ?: "",
                             serviceType = doc.getString("serviceType") ?: "food",
-                            hasPickup = hasPickup
+                            hasPickup = hasPickup || fulfillmentVal == "pickup",
+                            tip = tipVal,
+                            fulfillment = fulfillmentVal,
+                            scheduledFor = scheduledForVal
                         )
                         list.add(order)
                     }
@@ -735,8 +760,12 @@ class MerchantRepository private constructor(context: Context) {
                     // Sort newest first
                     list.sortByDescending { it.placedAtTimestamp }
 
-                    // Alert on incoming Placed Order
-                    val newPlaced = list.filter { it.status == OrderStatus.PLACED_ORDER && !previousOrderIds.contains(it.id) }
+                    // Alert on incoming Placed Order (scheduled orders only alert once due)
+                    val newPlaced = list.filter {
+                        it.status == OrderStatus.PLACED_ORDER &&
+                        !previousOrderIds.contains(it.id) &&
+                        (!it.isScheduled || it.isScheduledDue())
+                    }
                     if (newPlaced.isNotEmpty()) {
                         _newOrderAlert.value = newPlaced.first()
                     }
@@ -1024,6 +1053,29 @@ class MerchantRepository private constructor(context: Context) {
             .addOnFailureListener { ex ->
                 val err = ex.localizedMessage ?: ex.message ?: "Failed to cancel order"
                 Log.e("MerchantRepo", "Cancel order failed: $err", ex)
+                onResult(false, err)
+            }
+    }
+
+    fun markOrderPickedUp(orderId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val data = mapOf(
+            "status" to PlatformOrderStatuses.COMPLETED,
+            "statusHistory" to FieldValue.arrayUnion(
+                mapOf(
+                    "status" to PlatformOrderStatuses.COMPLETED,
+                    "at" to Timestamp.now()
+                )
+            ),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to mark order as picked up"
+                Log.e("MerchantRepo", "Mark picked up failed: $err", ex)
                 onResult(false, err)
             }
     }

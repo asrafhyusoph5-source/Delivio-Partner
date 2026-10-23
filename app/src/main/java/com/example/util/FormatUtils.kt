@@ -29,6 +29,11 @@ object FormatUtils {
         return sdf.format(Date(timestamp))
     }
 
+    fun formatScheduledDateTime(timestamp: Long): String {
+        val sdf = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+        return sdf.format(Date(timestamp))
+    }
+
     fun formatRemainingTime(endTime: Long): String {
         val remaining = endTime - System.currentTimeMillis()
         if (remaining <= 0) return "Ready!"

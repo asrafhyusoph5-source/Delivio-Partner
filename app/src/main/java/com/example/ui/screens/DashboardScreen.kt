@@ -56,7 +56,7 @@ fun DashboardScreen(
     }
 
     val deliveredOrders = orders.filter {
-        it.status == OrderStatus.DELIVERED && !it.serviceType.equals("request_rider", ignoreCase = true)
+        (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) && !it.serviceType.equals("request_rider", ignoreCase = true)
     }
     val deliveredSubtotal = deliveredOrders.sumOf { it.subtotal }
     val commissionAmount = deliveredSubtotal * settings.commissionRate

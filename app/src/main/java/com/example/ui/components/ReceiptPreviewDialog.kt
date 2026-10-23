@@ -225,6 +225,12 @@ fun ReceiptPreviewDialog(
                             Text("DELIVERY FEE:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
                             Text(FormatUtils.formatCurrency(order.deliveryFee), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
                         }
+                        if (order.tip > 0.0) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("RIDER TIP:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
+                                Text(FormatUtils.formatCurrency(order.tip), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
+                            }
+                        }
                         if (order.serviceFee > 0.0) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("SERVICE FEE:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
