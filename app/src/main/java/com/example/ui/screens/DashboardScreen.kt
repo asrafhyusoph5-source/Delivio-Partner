@@ -44,9 +44,11 @@ fun DashboardScreen(
     onViewAllOrders: () -> Unit,
     soldOutItemsCount: Int,
     lowStockCount: Int,
+    currentTime: Long = System.currentTimeMillis(),
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
+    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime)
 
     val activeOrders = orders.filter {
         it.status == OrderStatus.PLACED_ORDER ||
@@ -76,7 +78,7 @@ fun DashboardScreen(
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (settings.isOpen) StatusOpenGreen.copy(alpha = 0.10f) else StatusClosedRed.copy(alpha = 0.10f)
+                containerColor = if (effectiveOpen) StatusOpenGreen.copy(alpha = 0.10f) else StatusClosedRed.copy(alpha = 0.10f)
             ),
             border = CardDefaults.outlinedCardBorder(),
             modifier = Modifier
@@ -89,23 +91,56 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
                                 .clip(CircleShape)
-                                .background(if (settings.isOpen) StatusOpenGreen else StatusClosedRed)
+                                .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (settings.autoSchedule) {
+                                        if (effectiveOpen) "Open" else "Closed"
+                                    } else {
+                                        if (effectiveOpen) "Open - Accepting Orders" else "Closed - Not Accepting Orders"
+                                    },
+                                    fontWeight = FontWeight.ExtraBold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
+                                )
+                                if (settings.autoSchedule) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFF8B5CF6).copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = "Automatic",
+                                            color = Color(0xFF8B5CF6),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            val nextDesc = if (settings.autoSchedule) {
+                                com.example.util.BusinessHoursHelper.getNextScheduleChangeDescription(settings, currentTime)
+                            } else ""
                             Text(
-                                text = if (settings.isOpen) "Open - Accepting Orders" else "Closed - Not Accepting Orders",
-                                fontWeight = FontWeight.ExtraBold,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (settings.isOpen) StatusOpenGreen else StatusClosedRed
-                            )
-                            Text(
-                                text = if (settings.isOpen) "Store is currently visible to customers" else "Store is hidden from customer marketplace",
+                                text = if (nextDesc.isNotBlank()) {
+                                    nextDesc
+                                } else if (effectiveOpen) {
+                                    "Store is currently visible to customers"
+                                } else {
+                                    "Store is hidden from customer marketplace"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -113,7 +148,7 @@ fun DashboardScreen(
                     }
 
                     Switch(
-                        checked = settings.isOpen,
+                        checked = effectiveOpen,
                         onCheckedChange = { onToggleOpen() },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = StatusOpenGreen,
@@ -125,19 +160,39 @@ fun DashboardScreen(
                     )
                 }
 
-                // If Closed, display prominent warning banner
-                if (!settings.isOpen) {
+                // After closing, show red banner: "Closed - not receiving new orders until <time> or until you reopen"
+                if (!effectiveOpen) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "⚠️ Incoming orders are currently paused. Switch toggle to open store whenever ready.",
-                        fontSize = 12.sp,
-                        color = StatusClosedRed,
-                        fontWeight = FontWeight.Medium
-                    )
+                    val closedUntilTimeStr = com.example.util.BusinessHoursHelper.formatClosedUntilTime(settings, currentTime)
+                    val bannerText = if (closedUntilTimeStr != null) {
+                        "Closed - not receiving new orders until $closedUntilTimeStr or until you reopen"
+                    } else {
+                        "Closed - not receiving new orders until you reopen"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = StatusClosedRed.copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, StatusClosedRed.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().testTag("dashboard_closed_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("🚫", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = bannerText,
+                                fontSize = 12.sp,
+                                color = StatusClosedRed,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
 
                 // Pause Options if Open
-                if (settings.isOpen) {
+                if (effectiveOpen) {
                     Spacer(modifier = Modifier.height(12.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(10.dp))

@@ -7,6 +7,8 @@ import com.example.data.model.*
 import com.example.data.repository.MerchantRepository
 import com.example.util.PlatformOrderStatuses
 import com.example.util.SoundVibrationHelper
+import com.example.util.FOOD_CATEGORIES
+import com.example.util.CONVENIENCE_CATEGORIES
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,6 +38,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val promos = repository.promos
     val staff = repository.staff
     val changeRequests = repository.changeRequests
+    val walletTransactions = repository.walletTransactions
+    val sharedWalletBalance = repository.sharedWalletBalance
 
     // Periodic time ticker for checking scheduled orders (every 30 seconds)
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
@@ -71,6 +75,18 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
                 checkDueScheduledOrders(now)
             }
         }
+
+        // 1-minute ticker: evaluate and write isOpen = effectiveOpen when it changes and clear expired values
+        viewModelScope.launch {
+            repository.checkAndUpdateEffectiveOpen(System.currentTimeMillis())
+            while (isActive) {
+                delay(60_000L)
+                repository.checkAndUpdateEffectiveOpen(System.currentTimeMillis())
+            }
+        }
+
+        // Ensure categories and cuisineTags on app start
+        onMenuOpened()
     }
 
     private fun checkDueScheduledOrders(now: Long) {
@@ -97,6 +113,14 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     // Orders tab filter
     private val _orderStatusFilter = MutableStateFlow<String>("New")
     val orderStatusFilter: StateFlow<String> = _orderStatusFilter.asStateFlow()
+
+    // Fulfillment filter ("All", "Delivery", "Pick Up", "Scheduled")
+    private val _fulfillmentFilter = MutableStateFlow<String>("All")
+    val fulfillmentFilter: StateFlow<String> = _fulfillmentFilter.asStateFlow()
+
+    fun setFulfillmentFilter(filter: String) {
+        _fulfillmentFilter.value = filter
+    }
 
     // Unaccepted (New) orders count for badge: Placed Orders that are not upcoming scheduled
     val newOrdersCount: StateFlow<Int> = orders.combine(_currentTime) { orderList, now ->
@@ -177,6 +201,53 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _showSoldOutDurationTarget = MutableStateFlow<MenuItem?>(null)
     val showSoldOutDurationTarget: StateFlow<MenuItem?> = _showSoldOutDurationTarget.asStateFlow()
 
+    // Edit Order while Preparing
+    private val _editOrderTarget = MutableStateFlow<Order?>(null)
+    val editOrderTarget: StateFlow<Order?> = _editOrderTarget.asStateFlow()
+
+    private val _editOrderError = MutableStateFlow<String?>(null)
+    val editOrderError: StateFlow<String?> = _editOrderError.asStateFlow()
+
+    fun openEditOrder(order: Order) {
+        _editOrderTarget.value = order
+        repository.fetchOrderDirect(order.id) { fresh ->
+            if (fresh != null) {
+                _editOrderTarget.value = fresh
+            }
+        }
+    }
+
+    fun closeEditOrder() {
+        _editOrderTarget.value = null
+    }
+
+    fun dismissEditOrderError() {
+        _editOrderError.value = null
+    }
+
+    // Wallet Screen & Cash Out
+    private val _showWalletScreen = MutableStateFlow(false)
+    val showWalletScreen: StateFlow<Boolean> = _showWalletScreen.asStateFlow()
+
+    fun openWalletScreen() {
+        _showWalletScreen.value = true
+    }
+
+    fun closeWalletScreen() {
+        _showWalletScreen.value = false
+    }
+
+    private val _showCashOutComingSoon = MutableStateFlow(false)
+    val showCashOutComingSoon: StateFlow<Boolean> = _showCashOutComingSoon.asStateFlow()
+
+    fun openCashOutComingSoon() {
+        _showCashOutComingSoon.value = true
+    }
+
+    fun closeCashOutComingSoon() {
+        _showCashOutComingSoon.value = false
+    }
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
@@ -196,6 +267,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     fun selectTab(tab: MerchantTab) {
         _currentTab.value = tab
         _selectedOrderDetailId.value = null
+        if (tab == MerchantTab.MENU) {
+            onMenuOpened()
+        }
     }
 
     fun openOrderDetail(orderId: String) {
@@ -264,23 +338,23 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleStoreOpen() {
-        val currentOpen = settings.value.isOpen
-        if (currentOpen) {
+        val currentEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings.value)
+        if (currentEffectiveOpen) {
             val activeOrders = orders.value.filter {
                 it.status == OrderStatus.PREPARING || it.status == OrderStatus.READY || it.status == OrderStatus.PLACED_ORDER
             }
             if (activeOrders.isNotEmpty()) {
                 _showCloseConfirmation.value = true
             } else {
-                repository.toggleStoreOpen(false)
+                repository.closeStore()
             }
         } else {
-            repository.toggleStoreOpen(true)
+            repository.openStore()
         }
     }
 
     fun confirmStoreClose() {
-        repository.toggleStoreOpen(false)
+        repository.closeStore()
         _showCloseConfirmation.value = false
     }
 
@@ -376,13 +450,55 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun confirmAcceptOrder(orderId: String, prepMinutes: Int) {
         _isActionLoading.value = true
-        repository.confirmAcceptOrder(orderId, prepMinutes) { success, error ->
+        val targetOrder = orders.value.find { it.id == orderId }
+        val isPickUp = targetOrder?.isPickUp ?: false
+        repository.confirmAcceptOrder(orderId, prepMinutes, isPickUp) { success, error ->
             _isActionLoading.value = false
             if (success) {
                 _prepTimePickerTarget.value = null
                 SoundVibrationHelper.playClickHaptic(getApplication())
             } else {
                 showSnackbar(error ?: "Failed to accept order")
+            }
+        }
+    }
+
+    fun requestRiderAgain(orderId: String) {
+        _isActionLoading.value = true
+        repository.requestRiderAgain(orderId) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Searching for rider again...")
+            } else {
+                showSnackbar(error ?: "Failed to request rider again")
+            }
+        }
+    }
+
+    fun confirmEditOrder(order: Order, newItems: List<OrderItem>, reason: String) {
+        _isActionLoading.value = true
+        repository.editOrderPreparing(order, newItems, reason) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _editOrderTarget.value = null
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Order updated successfully")
+            } else {
+                _editOrderError.value = error ?: "Failed to edit order"
+            }
+        }
+    }
+
+    fun saveBusinessHours(hours: Map<String, DayHours>, autoSchedule: Boolean) {
+        _isActionLoading.value = true
+        repository.saveBusinessHours(hours, autoSchedule) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                _showBusinessHoursDialog.value = false
+                showSnackbar("Business hours saved successfully")
+            } else {
+                showSnackbar(error ?: "Failed to save business hours")
             }
         }
     }
@@ -687,11 +803,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         clearItemSelection()
     }
 
+    fun onMenuOpened() {
+        repository.ensureCategoriesConfigured()
+        repository.syncCuisineTags()
+    }
+
     fun openAddMenuItem(categoryId: String? = null) {
-        val defaultCat = categoryId ?: categories.value.firstOrNull { it.businessType == settings.value.businessType }?.id ?: ""
+        val isFood = settings.value.businessType == BusinessType.FOOD
+        val allowedList = if (isFood) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+        val selectedCatName = if (categoryId != null && categoryId != "UNCATEGORIZED") {
+            val found = categories.value.find { it.id == categoryId }?.name ?: ""
+            if (allowedList.any { it.equals(found, ignoreCase = true) }) found else allowedList.first()
+        } else {
+            allowedList.first()
+        }
+        val targetCatId = categories.value.find { it.name.equals(selectedCatName, ignoreCase = true) }?.id
+            ?: selectedCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+
         _editingMenuItem.value = MenuItem(
             id = "",
-            categoryId = defaultCat,
+            categoryId = targetCatId,
+            categoryName = selectedCatName,
             name = "",
             description = "",
             price = 5.00,
@@ -726,20 +858,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         repository.saveMenuItem(duplicate)
     }
 
+    fun quickAssignCategory(item: MenuItem, newCategoryName: String) {
+        val catDoc = categories.value.find { it.name.equals(newCategoryName, ignoreCase = true) }
+        val catId = catDoc?.id ?: newCategoryName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+        repository.assignItemCategory(item.id, catId, newCategoryName)
+        showSnackbar("""Assigned "${item.name}" to $newCategoryName""")
+    }
+
     fun addCategory(name: String) {
-        repository.addCategory(name, settings.value.businessType)
+        // Disabled per business type category rules
     }
 
     fun deleteCategory(catId: String) {
-        repository.deleteCategory(catId)
+        // Disabled per business type category rules
     }
 
     fun reorderCategory(catId: String, moveUp: Boolean) {
-        repository.reorderCategory(catId, moveUp)
+        // Disabled per business type category rules
     }
 
     fun toggleCategoryVisibility(catId: String) {
-        repository.toggleCategoryVisibility(catId)
+        // Disabled per business type category rules
     }
 
     // --- Earnings & Finance ---

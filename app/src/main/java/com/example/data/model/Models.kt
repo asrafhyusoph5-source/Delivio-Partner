@@ -53,6 +53,29 @@ enum class OrderStatus(val displayTitle: String) {
 
 const val SCHEDULED_LEAD_TIME_MS: Long = 30 * 60 * 1000L
 
+enum class FulfillmentType(val label: String) {
+    PICK_UP("Pick Up"),
+    SCHEDULED("Scheduled"),
+    DELIVERY("Delivery")
+}
+
+fun fulfillmentOf(order: Order): FulfillmentType {
+    val clean = order.fulfillment.trim().lowercase().replace("[\\s_\\-]".toRegex(), "")
+    return when (clean) {
+        "pickup" -> FulfillmentType.PICK_UP
+        "scheduled", "scheduleddelivery" -> FulfillmentType.SCHEDULED
+        "delivery" -> FulfillmentType.DELIVERY
+        else -> {
+            // If missing: Scheduled when scheduledFor exists, otherwise Delivery.
+            // Never infer Pick Up from a missing dropoff or a zero delivery fee.
+            if (order.scheduledFor != null && order.scheduledFor > 0) {
+                FulfillmentType.SCHEDULED
+            } else {
+                FulfillmentType.DELIVERY
+            }
+        }
+    }
+}
 
 data class OrderModifier(
     val name: String = "",
@@ -193,46 +216,121 @@ data class Order(
     val hasPickup: Boolean = false,
     val tip: Double = 0.0,
     val fulfillment: String = "delivery",
-    val scheduledFor: Long? = null
+    val scheduledFor: Long? = null,
+    val isEdited: Boolean = false,
+    val editedAt: Long? = null,
+    val editedBy: String = "",
+    val editNote: String = "",
+    val originalItems: List<OrderItem> = emptyList(),
+    val originalTotal: Double? = null,
+    val cashToCollect: Double? = null,
+    val walletAdjustDue: Double? = null,
+    val riderVehicle: String = "",
+    val feesRaw: Map<String, Any?> = emptyMap(),
+    val rawJson: String = ""
 ) {
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
 
+    val fulfillmentType: FulfillmentType
+        get() = fulfillmentOf(this)
+
     val isPickUp: Boolean
-        get() = fulfillment.equals("pickup", ignoreCase = true) || hasPickup
+        get() = fulfillmentType == FulfillmentType.PICK_UP
 
     val isScheduled: Boolean
-        get() = fulfillment.equals("scheduled", ignoreCase = true) || scheduledFor != null
+        get() = fulfillmentType == FulfillmentType.SCHEDULED
 
     val isDelivery: Boolean
-        get() = !isPickUp && !isScheduled
+        get() = fulfillmentType == FulfillmentType.DELIVERY
 
     fun isScheduledDue(now: Long = System.currentTimeMillis()): Boolean {
         val target = scheduledFor ?: return true
         return now >= (target - SCHEDULED_LEAD_TIME_MS)
     }
 
+    val scheduledForFormatted: String
+        get() = scheduledFor?.let { com.example.util.FormatUtils.formatScheduledDateTime(it) } ?: ""
+
+    val receiptTotal: Double
+        get() = if (isPickUp) (subtotal + serviceFee - discount).coerceAtLeast(0.0) else total
+
     val fulfillmentChipLabel: String
-        get() = when {
-            isPickUp -> "Pick Up"
-            isScheduled -> {
-                val timeStr = scheduledFor?.let { com.example.util.FormatUtils.formatScheduledDateTime(it) }
-                if (!timeStr.isNullOrBlank()) "Scheduled: $timeStr" else "Scheduled"
+        get() = when (fulfillmentType) {
+            FulfillmentType.PICK_UP -> "Pick Up"
+            FulfillmentType.SCHEDULED -> {
+                val timeStr = scheduledForFormatted
+                if (timeStr.isNotBlank()) "Scheduled: $timeStr" else "Scheduled"
             }
-            else -> "Delivery"
+            FulfillmentType.DELIVERY -> "Delivery"
+        }
+
+    fun toDebugJson(): String {
+        return try {
+            val json = org.json.JSONObject()
+            json.put("id", id)
+            json.put("orderNumber", orderNumber)
+            json.put("customerName", customerName)
+            json.put("customerPhone", customerPhone)
+            json.put("status", status.name)
+            json.put("fulfillment", fulfillment)
+            json.put("fulfillmentType", fulfillmentType.name)
+            json.put("scheduledFor", scheduledFor)
+            json.put("paymentMethod", paymentMethod)
+            json.put("subtotal", subtotal)
+            json.put("deliveryFee", deliveryFee)
+            json.put("serviceFee", serviceFee)
+            json.put("discount", discount)
+            json.put("tip", tip)
+            json.put("total", total)
+            json.put("cashToCollect", cashToCollect)
+            json.put("walletAdjustDue", walletAdjustDue)
+            json.put("isEdited", isEdited)
+            json.put("editedAt", editedAt)
+            json.put("editedBy", editedBy)
+            json.put("editNote", editNote)
+            val itemsArr = org.json.JSONArray()
+            items.forEach { itm ->
+                val itmJson = org.json.JSONObject()
+                itmJson.put("id", itm.id)
+                itmJson.put("name", itm.name)
+                itmJson.put("quantity", itm.quantity)
+                itmJson.put("price", itm.effectivePrice)
+                itemsArr.put(itmJson)
+            }
+            json.put("items", itemsArr)
+            json.toString(2)
+        } catch (_: Exception) {
+            "{ \"id\": \"$id\", \"orderNumber\": \"$orderNumber\" }"
+        }
+    }
+
+    val effectivePaymentLabel: String
+        get() {
+            val pm = paymentMethod.trim().lowercase()
+            val isCash = pm.contains("cod") || pm.contains("cash") || paymentMethod.equals("COD", ignoreCase = true)
+            val isWallet = pm.contains("wallet")
+            return when {
+                isPickUp && isCash -> {
+                    val collectAmount = if (cashToCollect != null && cashToCollect > 0.0) cashToCollect else total
+                    "Pay at pickup - collect ${com.example.util.FormatUtils.formatCurrency(collectAmount)}"
+                }
+                !isPickUp && isCash -> "Cash on Delivery (rider collects)"
+                isWallet -> "Paid with Delivio Wallet"
+                else -> {
+                    val provider = when {
+                        pm.contains("gcash") -> "GCash"
+                        pm.contains("maya") -> "Maya"
+                        pm.contains("card") -> "Card"
+                        else -> paymentMethod.ifBlank { "online" }
+                    }
+                    "Paid online ($provider)"
+                }
+            }
         }
 
     val formattedPaymentMethod: String
-        get() {
-            val pm = paymentMethod.trim().lowercase()
-            return when {
-                pm.contains("cod") || pm.contains("cash") -> "COD"
-                pm.contains("online") || pm.contains("card") || pm.contains("gcash") || pm.contains("maya") || pm.contains("wallet") || pm.contains("paid") -> "Paid Online"
-                paymentMethod.equals("COD", ignoreCase = true) -> "COD"
-                paymentMethod.equals("Paid Online", ignoreCase = true) -> "Paid Online"
-                else -> paymentMethod.ifBlank { "COD" }
-            }
-        }
+        get() = effectivePaymentLabel
 
     val effectiveDropoffLat: Double
         get() = dropoffLat ?: deliveryAddress.latitude
@@ -251,6 +349,20 @@ data class Order(
         get() = riderId.isNotBlank() ||
                 riderRequest?.status?.equals("Rider assigned", ignoreCase = true) == true ||
                 riderRequest?.status?.equals("Assigned", ignoreCase = true) == true
+
+    fun canRequestRiderAgain(now: Long = System.currentTimeMillis()): Boolean {
+        if (isPickUp) return false
+        if (status != OrderStatus.PREPARING && status != OrderStatus.READY) return false
+        if (riderId.isNotBlank()) return false
+        val req = riderRequest ?: return false
+        val reqStatus = req.status.lowercase()
+        if (reqStatus in listOf("cancelled", "released", "rejected")) return true
+        if (reqStatus == "searching") {
+            val reqAt = req.requestedAt ?: return false
+            return (now - reqAt) >= 5 * 60 * 1000L
+        }
+        return false
+    }
 
     val canRequestRider: Boolean
         get() = !isPickUp &&
@@ -299,6 +411,7 @@ data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
     val categoryId: String = "",
+    val categoryName: String = "",
     val name: String = "",
     val description: String = "",
     val price: Double = 0.0,
@@ -321,7 +434,19 @@ data class MenuItem(
     val stockCount: Int = 50,
     val lowStockAlertThreshold: Int = 5,
     val discountPercentage: Double? = null
-)
+) {
+    val available: Boolean get() = inStock
+
+    fun getEffectiveCategoryName(categories: List<MenuCategory>): String {
+        if (categoryName.isNotBlank()) return categoryName
+        return categories.find { it.id == categoryId }?.name ?: ""
+    }
+
+    fun isCategoryInAllowedList(allowedCategories: List<String>, categories: List<MenuCategory>): Boolean {
+        val eff = getEffectiveCategoryName(categories)
+        return allowedCategories.any { it.equals(eff, ignoreCase = true) }
+    }
+}
 
 data class PromoDeal(
     val id: String = "",
@@ -344,6 +469,30 @@ data class Payout(
     val date: String = "",
     val bankName: String = "",
     val accountNumber: String = ""
+)
+
+data class DayHours(
+    val open: String = "08:00",
+    val close: String = "22:00",
+    val closed: Boolean = false
+) {
+    val isOvernight: Boolean
+        get() = !closed && close < open && close != "00:00"
+
+    val isOpen24Hours: Boolean
+        get() = !closed && ((open == "00:00" && close == "23:59") || (open == "00:00" && close == "00:00"))
+}
+
+data class WalletTransaction(
+    val id: String = "",
+    val title: String = "",
+    val description: String = "",
+    val amount: Double = 0.0,
+    val type: String = "credit", // "credit" or "debit"
+    val dateTimestamp: Long = System.currentTimeMillis(),
+    val reference: String = "",
+    val merchantId: String = "",
+    val customerId: String = ""
 )
 
 data class DaySchedule(
@@ -397,6 +546,16 @@ data class MerchantSettings(
     val isPaused: Boolean = false,
     val pauseUntilTimestamp: Long? = null,
     val autoScheduleEnabled: Boolean = true,
+    val autoSchedule: Boolean = true,
+    val hours: Map<String, DayHours> = mapOf(
+        "mon" to DayHours("08:00", "22:00", false),
+        "tue" to DayHours("08:00", "22:00", false),
+        "wed" to DayHours("08:00", "22:00", false),
+        "thu" to DayHours("08:00", "22:00", false),
+        "fri" to DayHours("08:00", "23:00", false),
+        "sat" to DayHours("09:00", "23:00", false),
+        "sun" to DayHours("09:00", "21:00", false)
+    ),
     val weeklySchedule: List<DaySchedule> = listOf(
         DaySchedule("Monday", true, "08:00", "22:00"),
         DaySchedule("Tuesday", true, "08:00", "22:00"),
@@ -429,5 +588,12 @@ data class MerchantSettings(
     val accountHolder: String = "",
     val accountNumber: String = "",
     val commissionRate: Double = 0.15,
-    val cityId: String = "taguig"
+    val cityId: String = "taguig",
+    val linkedCustomerUid: String? = null,
+    val walletBalance: Double = 0.0,
+    val status: String = "active",
+    val timezone: String = "Asia/Manila",
+    val closedUntil: Long? = null,
+    val openUntil: Long? = null,
+    val closedAt: Long? = null
 )

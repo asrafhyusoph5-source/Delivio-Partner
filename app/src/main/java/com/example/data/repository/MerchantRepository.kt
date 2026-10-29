@@ -6,10 +6,13 @@ import android.util.Log
 import com.example.data.model.*
 import com.example.util.FormatUtils
 import com.example.util.PlatformOrderStatuses
+import com.example.util.FOOD_CATEGORIES
+import com.example.util.CONVENIENCE_CATEGORIES
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -132,6 +135,13 @@ class MerchantRepository private constructor(context: Context) {
     private val _changeRequests = MutableStateFlow<List<ChangeRequest>>(emptyList())
     val changeRequests: StateFlow<List<ChangeRequest>> = _changeRequests.asStateFlow()
 
+    // Wallet Transactions & Shared Wallet
+    private val _walletTransactions = MutableStateFlow<List<WalletTransaction>>(emptyList())
+    val walletTransactions: StateFlow<List<WalletTransaction>> = _walletTransactions.asStateFlow()
+
+    private val _sharedWalletBalance = MutableStateFlow<Double?>(null)
+    val sharedWalletBalance: StateFlow<Double?> = _sharedWalletBalance.asStateFlow()
+
     // Active Firestore snapshot listeners
     private var ordersListener: ListenerRegistration? = null
     private var settingsListener: ListenerRegistration? = null
@@ -140,6 +150,13 @@ class MerchantRepository private constructor(context: Context) {
     private var payoutListener: ListenerRegistration? = null
     private var staffListener: ListenerRegistration? = null
     private var changeRequestsListener: ListenerRegistration? = null
+    private var walletMerchantListener: ListenerRegistration? = null
+    private var walletCustomerListener: ListenerRegistration? = null
+    private var linkedUserListener: ListenerRegistration? = null
+
+    private var rawMerchantTxList = listOf<WalletTransaction>()
+    private var rawCustomerTxList = listOf<WalletTransaction>()
+    private var listenedLinkedCustomerId: String? = null
 
     private var previousOrderIds = mutableSetOf<String>()
 
@@ -486,6 +503,51 @@ class MerchantRepository private constructor(context: Context) {
                         else -> 0.15
                     }
 
+                    val autoSched = snapshot.getBoolean("autoSchedule") ?: snapshot.getBoolean("autoScheduleEnabled") ?: true
+                    val linkedCust = snapshot.getString("linkedCustomerUid") ?: snapshot.getString("linkedCustomerId")
+                    val wBalance = FormatUtils.parseDouble(snapshot.get("walletBalance")) ?: 0.0
+                    val shopStatus = snapshot.getString("status") ?: "active"
+                    val shopTz = snapshot.getString("timezone") ?: "Asia/Manila"
+
+                    val hoursRaw = snapshot.get("hours") as? Map<*, *>
+                    val hoursParsed = if (hoursRaw != null && hoursRaw.isNotEmpty()) {
+                        hoursRaw.mapNotNull { (k, v) ->
+                            val dayKey = (k as? String)?.trim()?.lowercase() ?: return@mapNotNull null
+                            val vMap = v as? Map<*, *> ?: return@mapNotNull null
+                            val op = (vMap["open"] as? String) ?: "08:00"
+                            val cl = (vMap["close"] as? String) ?: "22:00"
+                            val isCl = (vMap["closed"] as? Boolean) ?: false
+                            dayKey to DayHours(open = op, close = cl, closed = isCl)
+                        }.toMap()
+                    } else {
+                        _settings.value.hours
+                    }
+
+                    val closedUntilVal: Long? = when (val cu = snapshot.get("closedUntil")) {
+                        is Timestamp -> cu.toDate().time
+                        is java.util.Date -> cu.time
+                        is Number -> cu.toLong()
+                        else -> null
+                    }
+                    val openUntilVal: Long? = when (val ou = snapshot.get("openUntil")) {
+                        is Timestamp -> ou.toDate().time
+                        is java.util.Date -> ou.time
+                        is Number -> ou.toLong()
+                        else -> null
+                    }
+                    val closedAtVal: Long? = when (val ca = snapshot.get("closedAt")) {
+                        is Timestamp -> ca.toDate().time
+                        is java.util.Date -> ca.time
+                        is Number -> ca.toLong()
+                        else -> null
+                    }
+                    val pauseUntilVal: Long? = when (val pu = snapshot.get("pauseUntilTime") ?: snapshot.get("pauseUntilTimestamp")) {
+                        is Timestamp -> pu.toDate().time
+                        is java.util.Date -> pu.time
+                        is Number -> pu.toLong()
+                        else -> null
+                    }
+
                     _settings.value = _settings.value.copy(
                         storeName = nameFromDoc,
                         ownerName = snapshot.getString("ownerName") ?: _settings.value.ownerName,
@@ -495,8 +557,10 @@ class MerchantRepository private constructor(context: Context) {
                         type = displayType,
                         isOpen = snapshot.getBoolean("isOpen") ?: true,
                         isPaused = snapshot.getBoolean("isPaused") ?: false,
-                        pauseUntilTimestamp = snapshot.getLong("pauseUntilTimestamp"),
-                        autoScheduleEnabled = snapshot.getBoolean("autoSchedule") ?: snapshot.getBoolean("autoScheduleEnabled") ?: true,
+                        pauseUntilTimestamp = pauseUntilVal,
+                        autoScheduleEnabled = autoSched,
+                        autoSchedule = autoSched,
+                        hours = hoursParsed,
                         storeLocation = loc,
                         minimumOrder = snapshot.getDouble("minimumOrder") ?: 0.0,
                         defaultPrepTime = snapshot.getLong("defaultPrepTime")?.toInt() ?: 15,
@@ -511,8 +575,17 @@ class MerchantRepository private constructor(context: Context) {
                         accountHolder = snapshot.getString("accountHolder") ?: "",
                         accountNumber = snapshot.getString("accountNumber") ?: "",
                         commissionRate = commRate,
-                        cityId = snapshot.getString("cityId") ?: snapshot.getString("city") ?: _settings.value.cityId.ifBlank { "taguig" }
+                        cityId = snapshot.getString("cityId") ?: snapshot.getString("city") ?: _settings.value.cityId.ifBlank { "taguig" },
+                        linkedCustomerUid = linkedCust,
+                        walletBalance = wBalance,
+                        status = shopStatus,
+                        timezone = shopTz,
+                        closedUntil = closedUntilVal,
+                        openUntil = openUntilVal,
+                        closedAt = closedAtVal
                     )
+
+                    syncWalletListeners(mId, linkedCust)
                 }
             }
 
@@ -697,18 +770,10 @@ class MerchantRepository private constructor(context: Context) {
                             ?: FormatUtils.parseDouble(doc.get("tip"))
                             ?: 0.0
 
-                        val pickupMap = doc.get("pickup") as? Map<*, *>
-                        val hasPickup = pickupMap != null && pickupMap.isNotEmpty()
-
                         val rawFulfillment = (doc.getString("fulfillment")
                             ?: (doc.get("fulfillment") as? String)
-                            ?: (if (hasPickup) "pickup" else "delivery")).trim().lowercase()
-
-                        val fulfillmentVal = when (rawFulfillment) {
-                            "pickup", "pick up" -> "pickup"
-                            "scheduled" -> "scheduled"
-                            else -> "delivery"
-                        }
+                            ?: "").trim()
+                        val hasPickup = doc.getBoolean("hasPickup") ?: false
 
                         val scheduledForVal: Long? = when (val sf = doc.get("scheduledFor")) {
                             is Timestamp -> sf.toDate().time
@@ -716,6 +781,43 @@ class MerchantRepository private constructor(context: Context) {
                             is Number -> sf.toLong()
                             is String -> sf.toLongOrNull()
                             else -> null
+                        }
+
+                        val editedAtVal: Long? = when (val t = doc.get("editedAt")) {
+                            is Timestamp -> t.toDate().time
+                            is Number -> t.toLong()
+                            else -> null
+                        }
+                        val isEditedVal = doc.getBoolean("isEdited") ?: (editedAtVal != null)
+                        val editedByVal = doc.getString("editedBy") ?: ""
+                        val editNoteVal = doc.getString("editNote") ?: ""
+                        val origTotalVal = FormatUtils.parseDouble(doc.get("originalTotal"))
+                        val cashCollectVal = FormatUtils.parseDouble(doc.get("cashToCollect"))
+                        val walletAdjustVal = FormatUtils.parseDouble(doc.get("walletAdjustDue"))
+                        val riderVeh = doc.getString("riderVehicle") ?: doc.getString("riderVehiclePlate") ?: (rider?.vehiclePlate ?: "")
+
+                        val origItemsRaw = (doc.get("originalItems") as? List<*>) ?: emptyList<Any>()
+                        val origItems = origItemsRaw.mapIndexedNotNull { idx, itemObj ->
+                            val itm = itemObj as? Map<*, *> ?: return@mapIndexedNotNull null
+                            val pVal = FormatUtils.parseDouble(itm["price"]) ?: FormatUtils.parseDouble(itm["unitPrice"]) ?: 0.0
+                            val qVal = FormatUtils.parseInt(itm["qty"]) ?: FormatUtils.parseInt(itm["quantity"]) ?: 1
+                            OrderItem(
+                                id = (itm["id"] as? String) ?: "orig_$idx",
+                                name = (itm["name"] as? String) ?: (itm["title"] as? String) ?: "Item",
+                                quantity = if (qVal > 0) qVal else 1,
+                                price = pVal,
+                                unitPrice = pVal
+                            )
+                        }
+
+                        val feesRawMap: Map<String, Any?> = feesMap?.entries?.associate {
+                            (it.key?.toString() ?: "") to it.value
+                        } ?: emptyMap()
+
+                        val rawJsonStr = try {
+                            org.json.JSONObject(doc.data ?: emptyMap<String, Any>()).toString(2)
+                        } catch (_: Exception) {
+                            ""
                         }
 
                         val order = Order(
@@ -749,10 +851,21 @@ class MerchantRepository private constructor(context: Context) {
                             riderLocation = riderLoc,
                             cityId = doc.getString("cityId") ?: "",
                             serviceType = doc.getString("serviceType") ?: "food",
-                            hasPickup = hasPickup || fulfillmentVal == "pickup",
+                            hasPickup = hasPickup,
                             tip = tipVal,
-                            fulfillment = fulfillmentVal,
-                            scheduledFor = scheduledForVal
+                            fulfillment = rawFulfillment,
+                            scheduledFor = scheduledForVal,
+                            isEdited = isEditedVal,
+                            editedAt = editedAtVal,
+                            editedBy = editedByVal,
+                            editNote = editNoteVal,
+                            originalItems = origItems,
+                            originalTotal = origTotalVal,
+                            cashToCollect = cashCollectVal,
+                            walletAdjustDue = walletAdjustVal,
+                            riderVehicle = riderVeh,
+                            feesRaw = feesRawMap,
+                            rawJson = rawJsonStr
                         )
                         list.add(order)
                     }
@@ -760,11 +873,14 @@ class MerchantRepository private constructor(context: Context) {
                     // Sort newest first
                     list.sortByDescending { it.placedAtTimestamp }
 
-                    // Alert on incoming Placed Order (scheduled orders only alert once due)
+                    // Alert on incoming Placed Order (scheduled orders only alert once due; closed store suppresses alerts for orders after close)
+                    val isShopEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(_settings.value)
+                    val closedAtTimestamp = _settings.value.closedAt
                     val newPlaced = list.filter {
                         it.status == OrderStatus.PLACED_ORDER &&
                         !previousOrderIds.contains(it.id) &&
-                        (!it.isScheduled || it.isScheduledDue())
+                        (!it.isScheduled || it.isScheduledDue()) &&
+                        (isShopEffectiveOpen || closedAtTimestamp == null || it.placedAtTimestamp <= closedAtTimestamp)
                     }
                     if (newPlaced.isNotEmpty()) {
                         _newOrderAlert.value = newPlaced.first()
@@ -788,6 +904,7 @@ class MerchantRepository private constructor(context: Context) {
                             id = doc.id,
                             merchantId = mId,
                             categoryId = doc.getString("categoryId") ?: "",
+                            categoryName = doc.getString("categoryName") ?: "",
                             name = doc.getString("name") ?: "",
                             description = doc.getString("description") ?: "",
                             price = doc.getDouble("price") ?: 0.0,
@@ -816,22 +933,18 @@ class MerchantRepository private constructor(context: Context) {
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
-                    if (snapshot.isEmpty) {
-                        // Seed fixed categories on first use
-                        seedFixedCategories(mId)
-                    } else {
-                        val cats = snapshot.documents.map { doc ->
-                            MenuCategory(
-                                id = doc.id,
-                                merchantId = mId,
-                                name = doc.getString("name") ?: "",
-                                sortOrder = doc.getLong("sortOrder")?.toInt() ?: doc.getLong("displayOrder")?.toInt() ?: 0,
-                                visible = doc.getBoolean("visible") ?: doc.getBoolean("isVisible") ?: true,
-                                businessType = BusinessType.fromString(doc.getString("businessType"))
-                            )
-                        }.sortedBy { it.sortOrder }
-                        _categories.value = cats
-                    }
+                    val cats = snapshot.documents.map { doc ->
+                        MenuCategory(
+                            id = doc.id,
+                            merchantId = mId,
+                            name = doc.getString("name") ?: "",
+                            sortOrder = doc.getLong("sortOrder")?.toInt() ?: doc.getLong("displayOrder")?.toInt() ?: 0,
+                            visible = doc.getBoolean("visible") ?: doc.getBoolean("isVisible") ?: true,
+                            businessType = BusinessType.fromString(doc.getString("businessType"))
+                        )
+                    }.sortedBy { it.sortOrder }
+                    _categories.value = cats
+                    ensureCategoriesConfigured(mId)
                 }
             }
 
@@ -909,36 +1022,81 @@ class MerchantRepository private constructor(context: Context) {
             }
     }
 
-    private fun seedFixedCategories(mId: String) {
+    fun ensureCategoriesConfigured(customMid: String? = null) {
+        val mId = customMid ?: _merchantId.value ?: return
         val db = firestore ?: return
-        val currentType = _settings.value.businessType
+        val isFood = _settings.value.businessType == BusinessType.FOOD ||
+                _settings.value.type.contains("food", ignoreCase = true)
+        val allowedList = if (isFood) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
 
-        val fixedFood = listOf("Dessert", "Burgers", "Pizza", "Chicken", "Drinks")
-        val fixedConvenience = listOf("Others")
+        db.collection("merchants").document(mId).collection("categories").get()
+            .addOnSuccessListener { snapshot ->
+                val existingDocs = snapshot.documents
+                // 1. Create or ensure each allowed category has one document (name, sortOrder, visible true)
+                allowedList.forEachIndexed { index, catName ->
+                    val existingDoc = existingDocs.find {
+                        it.getString("name")?.equals(catName, ignoreCase = true) == true
+                    }
+                    val expectedOrder = index + 1
+                    val docData = mapOf(
+                        "name" to catName,
+                        "sortOrder" to expectedOrder,
+                        "visible" to true,
+                        "businessType" to if (isFood) "food" else "convenience"
+                    )
+                    if (existingDoc == null) {
+                        val docId = catName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+                        db.collection("merchants").document(mId).collection("categories").document(docId).set(docData)
+                    } else {
+                        val currentVisible = existingDoc.getBoolean("visible") ?: true
+                        val currentOrder = existingDoc.getLong("sortOrder")?.toInt() ?: 0
+                        if (!currentVisible || currentOrder != expectedOrder) {
+                            db.collection("merchants").document(mId).collection("categories").document(existingDoc.id)
+                                .update(mapOf("visible" to true, "sortOrder" to expectedOrder))
+                        }
+                    }
+                }
 
-        val targetList = if (currentType == BusinessType.FOOD) fixedFood else fixedConvenience
-        targetList.forEachIndexed { index, catName ->
-            val docId = catName.lowercase().replace(" ", "_")
-            db.collection("merchants").document(mId).collection("categories").document(docId).set(
-                mapOf(
-                    "name" to catName,
-                    "sortOrder" to (index + 1),
-                    "visible" to true,
-                    "businessType" to if (currentType == BusinessType.FOOD) "food" else "convenience"
-                )
-            )
-        }
+                // 2. Set visible false on old category documents that are not in the list
+                existingDocs.forEach { doc ->
+                    val name = doc.getString("name") ?: ""
+                    val isAllowed = allowedList.any { it.equals(name, ignoreCase = true) }
+                    val currentVisible = doc.getBoolean("visible") ?: true
+                    if (!isAllowed && currentVisible) {
+                        db.collection("merchants").document(mId).collection("categories").document(doc.id)
+                            .update("visible", false)
+                    }
+                }
+            }
+            .addOnFailureListener { ex ->
+                Log.w("MerchantRepo", "Failed to ensure categories", ex)
+            }
     }
 
-    private fun syncCuisineTags(mId: String, items: List<MenuItem>) {
+    fun syncCuisineTags(customMid: String? = null, customItems: List<MenuItem>? = null) {
+        val mId = customMid ?: _merchantId.value ?: return
         val db = firestore ?: return
-        val isFood = _settings.value.businessType == BusinessType.FOOD
-        val cuisineTags = if (isFood) {
-            items.filter { it.inStock }.map { it.categoryId }.distinct().filter { it.isNotBlank() }
-        } else {
-            emptyList()
-        }
+        val items = customItems ?: _menuItems.value
+        val cats = _categories.value
+
+        // distinct categoryName values of items where available == true, for both types
+        val cuisineTags = items
+            .filter { it.inStock }
+            .map { item ->
+                val name = if (item.categoryName.isNotBlank()) {
+                    item.categoryName
+                } else {
+                    cats.find { it.id == item.categoryId }?.name ?: ""
+                }
+                name.trim()
+            }
+            .filter { it.isNotBlank() }
+            .distinct()
+
         db.collection("merchants").document(mId).update("cuisineTags", cuisineTags)
+            .addOnFailureListener { ex ->
+                Log.w("MerchantRepo", "Failed to sync cuisineTags", ex)
+            }
     }
 
     private fun detachFirestoreListeners() {
@@ -956,13 +1114,105 @@ class MerchantRepository private constructor(context: Context) {
         staffListener = null
         changeRequestsListener?.remove()
         changeRequestsListener = null
+        walletMerchantListener?.remove()
+        walletMerchantListener = null
+        walletCustomerListener?.remove()
+        walletCustomerListener = null
+        linkedUserListener?.remove()
+        linkedUserListener = null
+    }
+
+    private fun syncWalletListeners(mId: String, linkedCustomerUid: String?) {
+        val db = firestore ?: return
+
+        // 1. Merchant wallet transactions: where merchantId == mId
+        if (walletMerchantListener == null) {
+            walletMerchantListener = db.collection("walletTransactions")
+                .whereEqualTo("merchantId", mId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w("MerchantRepo", "Wallet merchant listener error", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        rawMerchantTxList = snapshot.documents.mapNotNull { parseWalletTx(it) }
+                        updateMergedWalletTransactions()
+                    }
+                }
+        }
+
+        // 2. Customer linked wallet
+        if (!linkedCustomerUid.isNullOrBlank() && linkedCustomerUid != listenedLinkedCustomerId) {
+            listenedLinkedCustomerId = linkedCustomerUid
+            walletCustomerListener?.remove()
+            linkedUserListener?.remove()
+
+            // Listen to customer wallet transactions
+            walletCustomerListener = db.collection("walletTransactions")
+                .whereEqualTo("customerId", linkedCustomerUid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w("MerchantRepo", "Wallet customer listener error", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        rawCustomerTxList = snapshot.documents.mapNotNull { parseWalletTx(it) }
+                        updateMergedWalletTransactions()
+                    }
+                }
+
+            // Listen to user document for live balance
+            linkedUserListener = db.collection("users").document(linkedCustomerUid)
+                .addSnapshotListener { doc, _ ->
+                    if (doc != null && doc.exists()) {
+                        val bal = FormatUtils.parseDouble(doc.get("walletBalance")) ?: 0.0
+                        _sharedWalletBalance.value = bal
+                    }
+                }
+        } else if (linkedCustomerUid.isNullOrBlank()) {
+            listenedLinkedCustomerId = null
+            walletCustomerListener?.remove()
+            walletCustomerListener = null
+            linkedUserListener?.remove()
+            linkedUserListener = null
+            rawCustomerTxList = emptyList()
+            _sharedWalletBalance.value = null
+            updateMergedWalletTransactions()
+        }
+    }
+
+    private fun parseWalletTx(doc: com.google.firebase.firestore.DocumentSnapshot): WalletTransaction? {
+        val amount = FormatUtils.parseDouble(doc.get("amount")) ?: return null
+        val ts = when (val t = doc.get("createdAt") ?: doc.get("timestamp") ?: doc.get("date")) {
+            is Timestamp -> t.toDate().time
+            is Number -> t.toLong()
+            else -> System.currentTimeMillis()
+        }
+        return WalletTransaction(
+            id = doc.id,
+            title = doc.getString("title") ?: doc.getString("type") ?: "Wallet Transaction",
+            description = doc.getString("description") ?: doc.getString("note") ?: "",
+            amount = amount,
+            type = doc.getString("type") ?: if (amount >= 0) "credit" else "debit",
+            dateTimestamp = ts,
+            reference = doc.getString("reference") ?: ("TX-" + doc.id.take(6).uppercase()),
+            merchantId = doc.getString("merchantId") ?: "",
+            customerId = doc.getString("customerId") ?: ""
+        )
+    }
+
+    private fun updateMergedWalletTransactions() {
+        val combined = (rawMerchantTxList + rawCustomerTxList)
+            .distinctBy { it.id }
+            .sortedByDescending { it.dateTimestamp }
+        _walletTransactions.value = combined
     }
 
     // --- Order Status Actions (Writes only exact fields, waits for Firestore success) ---
 
-    fun confirmAcceptOrder(orderId: String, prepMinutes: Int, onResult: (Boolean, String?) -> Unit) {
+    fun confirmAcceptOrder(orderId: String, prepMinutes: Int, isPickUp: Boolean = false, onResult: (Boolean, String?) -> Unit) {
         val db = firestore ?: return onResult(false, "Firestore unavailable")
-        val data = mapOf(
+        val data = mutableMapOf<String, Any>(
             "status" to PlatformOrderStatuses.PREPARING,
             "statusHistory" to FieldValue.arrayUnion(
                 mapOf(
@@ -973,6 +1223,17 @@ class MerchantRepository private constructor(context: Context) {
             "prepMinutes" to prepMinutes,
             "updatedAt" to FieldValue.serverTimestamp()
         )
+
+        // For Delivery and Scheduled orders, Accept writes riderRequest {status "Searching", requestedAt, auto true, feePayer "customer"} in one update. Pick Up orders get no riderRequest.
+        if (!isPickUp) {
+            data["riderRequest"] = mapOf(
+                "status" to "Searching",
+                "requestedAt" to Timestamp.now(),
+                "auto" to true,
+                "feePayer" to "customer"
+            )
+        }
+
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 dismissNewOrderAlert()
@@ -981,6 +1242,259 @@ class MerchantRepository private constructor(context: Context) {
             .addOnFailureListener { ex ->
                 val err = ex.localizedMessage ?: ex.message ?: "Failed to accept order"
                 Log.e("MerchantRepo", "Accept order failed: $err", ex)
+                onResult(false, err)
+            }
+    }
+
+    fun confirmAcceptOrder(orderId: String, prepMinutes: Int, onResult: (Boolean, String?) -> Unit) {
+        val order = _orders.value.find { it.id == orderId }
+        val isPickUp = order?.isPickUp ?: false
+        confirmAcceptOrder(orderId, prepMinutes, isPickUp, onResult)
+    }
+
+    fun requestRiderAgain(orderId: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val db = firestore
+        val data = mapOf(
+            "riderRequest.status" to "Searching",
+            "riderRequest.requestedAt" to Timestamp.now(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val idx = _orders.value.indexOfFirst { it.id == orderId }
+        if (idx >= 0) {
+            val updated = _orders.value[idx].copy(
+                riderRequest = _orders.value[idx].riderRequest?.copy(
+                    status = "Searching",
+                    requestedAt = System.currentTimeMillis()
+                )
+            )
+            val list = _orders.value.toMutableList()
+            list[idx] = updated
+            _orders.value = list
+        }
+        if (db == null) {
+            onResult(true, null)
+            return
+        }
+        db.collection("orders").document(orderId).update(data)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to request rider again"
+                Log.e("MerchantRepo", "Request rider again failed: $err", ex)
+                onResult(false, err)
+            }
+    }
+
+    fun fetchOrderDirect(orderId: String, onResult: (Order?) -> Unit) {
+        val db = firestore
+        if (db == null) {
+            onResult(_orders.value.find { it.id == orderId })
+            return
+        }
+        db.collection("orders").document(orderId).get()
+            .addOnSuccessListener { doc ->
+                if (doc != null && doc.exists()) {
+                    val statusStr = doc.getString("status") ?: PlatformOrderStatuses.PLACED_ORDER
+                    val orderStatus = OrderStatus.fromString(statusStr)
+
+                    val itemsRaw = (doc.get("items") as? List<*>) ?: emptyList<Any>()
+                    val freshItems = itemsRaw.mapIndexedNotNull { idx, itemObj ->
+                        val itm = itemObj as? Map<*, *> ?: return@mapIndexedNotNull null
+                        val modsRaw = (itm["modifiers"] as? List<*>) ?: emptyList<Any>()
+                        val mods = modsRaw.mapNotNull { mObj ->
+                            val m = mObj as? Map<*, *> ?: return@mapNotNull null
+                            OrderModifier(
+                                name = (m["name"] as? String) ?: (m["title"] as? String) ?: "",
+                                price = FormatUtils.parseDouble(m["price"]) ?: 0.0
+                            )
+                        }
+                        val priceVal = FormatUtils.parseDouble(itm["price"])
+                            ?: FormatUtils.parseDouble(itm["unitPrice"])
+                            ?: FormatUtils.parseDouble(itm["itemPrice"])
+                            ?: 0.0
+                        val qtyVal = FormatUtils.parseInt(itm["qty"])
+                            ?: FormatUtils.parseInt(itm["quantity"])
+                            ?: 1
+                        OrderItem(
+                            id = (itm["id"] as? String) ?: "item_$idx",
+                            menuItemId = (itm["menuItemId"] as? String) ?: "",
+                            name = (itm["name"] as? String) ?: (itm["title"] as? String) ?: "Item",
+                            quantity = if (qtyVal > 0) qtyVal else 1,
+                            price = priceVal,
+                            unitPrice = priceVal,
+                            selectedSize = itm["selectedSize"] as? String,
+                            modifiers = mods,
+                            notes = (itm["notes"] as? String) ?: (itm["note"] as? String)
+                        )
+                    }
+
+                    val existing = _orders.value.find { it.id == orderId }
+                    val updated = (existing ?: Order(
+                        id = doc.id,
+                        merchantId = doc.getString("merchantId") ?: _merchantId.value ?: "",
+                        orderNumber = doc.getString("orderNumber") ?: ("#" + doc.id.takeLast(4).uppercase()),
+                        status = orderStatus
+                    )).copy(
+                        items = freshItems,
+                        status = orderStatus
+                    )
+
+                    val currentList = _orders.value.toMutableList()
+                    val idx = currentList.indexOfFirst { it.id == orderId }
+                    if (idx >= 0) {
+                        currentList[idx] = updated
+                        _orders.value = currentList
+                    }
+                    onResult(updated)
+                } else {
+                    onResult(_orders.value.find { it.id == orderId })
+                }
+            }
+            .addOnFailureListener {
+                onResult(_orders.value.find { it.id == orderId })
+            }
+    }
+
+    fun editOrderPreparing(
+        order: Order,
+        newItems: List<OrderItem>,
+        reason: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore
+        val currentUid = auth?.currentUser?.uid ?: _merchantId.value ?: "merchant"
+
+        val newSubtotal = newItems.sumOf { it.effectivePrice * it.quantity }
+        val delFee = order.deliveryFee
+        val discount = order.discount
+        val tip = order.tip
+
+        val feesRaw = order.feesRaw
+        val serviceFeeType = (feesRaw["serviceFeeType"] as? String) ?: ""
+        val serviceFeeRate = FormatUtils.parseDouble(feesRaw["serviceFeeRate"])
+            ?: FormatUtils.parseDouble(feesRaw["serviceFeePercent"]) ?: 0.0
+
+        val newServiceFee = if (serviceFeeType.equals("percent", ignoreCase = true) && serviceFeeRate > 0.0) {
+            val rate = if (serviceFeeRate > 1.0) serviceFeeRate / 100.0 else serviceFeeRate
+            rate * (newSubtotal + delFee)
+        } else {
+            order.serviceFee
+        }
+
+        val vatPercent = FormatUtils.parseDouble(feesRaw["vatPercent"]) ?: 0.0
+        val vatMode = (feesRaw["vatMode"] as? String) ?: "exclusive"
+        val vatBase = (feesRaw["vatBase"] as? String) ?: "subtotal"
+
+        val vatBaseAmount = if (vatBase.contains("service", ignoreCase = true)) {
+            newSubtotal + newServiceFee
+        } else {
+            newSubtotal
+        }
+
+        val newVat = if (vatPercent > 0.0) {
+            val rate = if (vatPercent > 1.0) vatPercent / 100.0 else vatPercent
+            if (vatMode.equals("inclusive", ignoreCase = true)) {
+                vatBaseAmount - (vatBaseAmount / (1.0 + rate))
+            } else {
+                vatBaseAmount * rate
+            }
+        } else {
+            FormatUtils.parseDouble(feesRaw["vat"]) ?: 0.0
+        }
+
+        val vatToAddToTotal = if (vatMode.equals("exclusive", ignoreCase = true)) newVat else 0.0
+        val newTotal = (newSubtotal + delFee + newServiceFee + vatToAddToTotal + tip - discount).coerceAtLeast(0.0)
+
+        val updatedFeesMap = HashMap<String, Any>()
+        feesRaw.forEach { (k, v) -> if (v != null) updatedFeesMap[k] = v }
+        updatedFeesMap["subtotal"] = newSubtotal
+        updatedFeesMap["deliveryFee"] = delFee
+        updatedFeesMap["serviceFee"] = newServiceFee
+        updatedFeesMap["discount"] = discount
+        updatedFeesMap["tip"] = tip
+        if (vatPercent > 0.0) {
+            updatedFeesMap["vat"] = newVat
+        }
+        updatedFeesMap["total"] = newTotal
+
+        val isCash = order.paymentMethod.trim().lowercase().let { it.contains("cod") || it.contains("cash") }
+        val isWallet = order.paymentMethod.trim().lowercase().contains("wallet")
+
+        val cashToCollect = if (isCash) newTotal else 0.0
+        val walletAdjustDue = if (isWallet) (order.total - newTotal).coerceAtLeast(0.0) else 0.0
+
+        val itemsSerialized = newItems.map { itm ->
+            mapOf(
+                "id" to itm.id,
+                "menuItemId" to itm.menuItemId,
+                "name" to itm.name,
+                "price" to itm.effectivePrice,
+                "unitPrice" to itm.effectivePrice,
+                "qty" to itm.quantity,
+                "quantity" to itm.quantity,
+                "selectedSize" to (itm.selectedSize ?: ""),
+                "notes" to (itm.notes ?: "")
+            )
+        }
+
+        val originalItemsToSave = if (order.originalItems.isNotEmpty()) order.originalItems else order.items
+        val originalItemsSerialized = originalItemsToSave.map { itm ->
+            mapOf(
+                "id" to itm.id,
+                "name" to itm.name,
+                "price" to itm.effectivePrice,
+                "qty" to itm.quantity
+            )
+        }
+        val originalTotalToSave = order.originalTotal ?: order.total
+
+        val updateData = mapOf(
+            "items" to itemsSerialized,
+            "fees" to updatedFeesMap,
+            "cashToCollect" to cashToCollect,
+            "walletAdjustDue" to walletAdjustDue,
+            "editedAt" to FieldValue.serverTimestamp(),
+            "editedBy" to currentUid,
+            "editNote" to reason.trim(),
+            "originalItems" to originalItemsSerialized,
+            "originalTotal" to originalTotalToSave,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        if (db == null) {
+            val idx = _orders.value.indexOfFirst { it.id == order.id }
+            if (idx >= 0) {
+                val updated = _orders.value[idx].copy(
+                    items = newItems,
+                    subtotal = newSubtotal,
+                    serviceFee = newServiceFee,
+                    total = newTotal,
+                    isEdited = true,
+                    editedAt = System.currentTimeMillis(),
+                    editedBy = currentUid,
+                    editNote = reason.trim(),
+                    originalItems = originalItemsToSave,
+                    originalTotal = originalTotalToSave,
+                    cashToCollect = cashToCollect,
+                    walletAdjustDue = walletAdjustDue,
+                    feesRaw = updatedFeesMap
+                )
+                val list = _orders.value.toMutableList()
+                list[idx] = updated
+                _orders.value = list
+            }
+            onResult(true, null)
+            return
+        }
+
+        db.collection("orders").document(order.id).update(updateData)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to update edited order"
+                Log.e("MerchantRepo", "Edit order failed: $err", ex)
                 onResult(false, err)
             }
     }
@@ -1471,19 +1985,111 @@ class MerchantRepository private constructor(context: Context) {
     // --- Store Settings Updates ---
 
     fun toggleStoreOpen(isOpen: Boolean) {
-        val mId = _merchantId.value
-        val db = firestore
-        if (mId != null && db != null) {
-            db.collection("merchants").document(mId).update(
-                mapOf(
-                    "isOpen" to isOpen,
-                    "isPaused" to false,
-                    "pauseUntilTimestamp" to null
-                )
-            )
+        if (isOpen) {
+            openStore()
+        } else {
+            closeStore()
         }
-        _settings.value = _settings.value.copy(isOpen = isOpen, isPaused = false, pauseUntilTimestamp = null)
-        prefs.edit().putBoolean("is_open", isOpen).apply()
+    }
+
+    fun closeStore(onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore
+        val now = System.currentTimeMillis()
+        val nextOpen = if (_settings.value.autoSchedule) {
+            com.example.util.BusinessHoursHelper.getNextScheduledOpenTimestamp(_settings.value, now)
+        } else {
+            com.example.util.BusinessHoursHelper.TIMESTAMP_2100_01_01_MS
+        }
+        val updateData = mutableMapOf<String, Any?>(
+            "isOpen" to false,
+            "closedUntil" to nextOpen,
+            "openUntil" to null,
+            "isPaused" to false,
+            "pauseUntilTimestamp" to null,
+            "closedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (db != null) {
+            db.collection("merchants").document(mId).update(updateData)
+                .addOnSuccessListener {
+                    _settings.value = _settings.value.copy(
+                        isOpen = false,
+                        closedUntil = nextOpen,
+                        openUntil = null,
+                        isPaused = false,
+                        pauseUntilTimestamp = null,
+                        closedAt = now
+                    )
+                    prefs.edit().putBoolean("is_open", false).apply()
+                    onResult(true, null)
+                }
+                .addOnFailureListener { ex ->
+                    val err = ex.localizedMessage ?: "Failed to close store"
+                    Log.e("MerchantRepo", "Close store failed: $err", ex)
+                    onResult(false, err)
+                }
+        } else {
+            _settings.value = _settings.value.copy(
+                isOpen = false,
+                closedUntil = nextOpen,
+                openUntil = null,
+                isPaused = false,
+                pauseUntilTimestamp = null,
+                closedAt = now
+            )
+            prefs.edit().putBoolean("is_open", false).apply()
+            onResult(true, null)
+        }
+    }
+
+    fun openStore(onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore
+        val now = System.currentTimeMillis()
+        val isInside = com.example.util.BusinessHoursHelper.isInsideScheduleWindow(_settings.value.hours, _settings.value.timezone, now)
+        val nextClose = if (_settings.value.autoSchedule && !isInside) {
+            com.example.util.BusinessHoursHelper.getNextClosingTimestamp(_settings.value, now)
+        } else {
+            null
+        }
+        val updateData = mutableMapOf<String, Any?>(
+            "isOpen" to true,
+            "closedUntil" to null,
+            "openUntil" to nextClose,
+            "isPaused" to false,
+            "pauseUntilTimestamp" to null,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (db != null) {
+            db.collection("merchants").document(mId).update(updateData)
+                .addOnSuccessListener {
+                    _settings.value = _settings.value.copy(
+                        isOpen = true,
+                        closedUntil = null,
+                        openUntil = nextClose,
+                        isPaused = false,
+                        pauseUntilTimestamp = null
+                    )
+                    prefs.edit().putBoolean("is_open", true).apply()
+                    onResult(true, null)
+                }
+                .addOnFailureListener { ex ->
+                    val err = ex.localizedMessage ?: "Failed to open store"
+                    Log.e("MerchantRepo", "Open store failed: $err", ex)
+                    onResult(false, err)
+                }
+        } else {
+            _settings.value = _settings.value.copy(
+                isOpen = true,
+                closedUntil = null,
+                openUntil = nextClose,
+                isPaused = false,
+                pauseUntilTimestamp = null
+            )
+            prefs.edit().putBoolean("is_open", true).apply()
+            onResult(true, null)
+        }
     }
 
     fun pauseOrders(minutes: Int) {
@@ -1503,7 +2109,92 @@ class MerchantRepository private constructor(context: Context) {
     }
 
     fun resumeOrders() {
-        toggleStoreOpen(true)
+        openStore()
+    }
+
+    fun saveBusinessHours(
+        hours: Map<String, DayHours>,
+        autoSchedule: Boolean,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+
+        val hoursData = hours.mapValues { (_, dh) ->
+            mapOf(
+                "open" to dh.open,
+                "close" to dh.close,
+                "closed" to dh.closed
+            )
+        }
+
+        val updateData = mapOf(
+            "hours" to hoursData,
+            "autoSchedule" to autoSchedule,
+            "autoScheduleEnabled" to autoSchedule
+        )
+
+        db.collection("merchants").document(mId).update(updateData)
+            .addOnSuccessListener {
+                _settings.value = _settings.value.copy(
+                    hours = hours,
+                    autoSchedule = autoSchedule,
+                    autoScheduleEnabled = autoSchedule
+                )
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to save business hours")
+            }
+    }
+
+    fun checkAndUpdateEffectiveOpen(nowMs: Long = System.currentTimeMillis()) {
+        val mId = _merchantId.value ?: return
+        val currentSettings = _settings.value
+        val db = firestore
+
+        val updates = mutableMapOf<String, Any?>()
+        var updatedClosedUntil = currentSettings.closedUntil
+        var updatedOpenUntil = currentSettings.openUntil
+
+        // Clear expired closedUntil
+        if (currentSettings.closedUntil != null && nowMs >= currentSettings.closedUntil) {
+            updates["closedUntil"] = null
+            updatedClosedUntil = null
+        }
+
+        // Clear expired openUntil
+        if (currentSettings.openUntil != null && nowMs >= currentSettings.openUntil) {
+            updates["openUntil"] = null
+            updatedOpenUntil = null
+        }
+
+        val settingsWithCleared = currentSettings.copy(
+            closedUntil = updatedClosedUntil,
+            openUntil = updatedOpenUntil
+        )
+
+        val effective = com.example.util.BusinessHoursHelper.isEffectiveOpen(settingsWithCleared, nowMs)
+        if (effective != currentSettings.isOpen) {
+            updates["isOpen"] = effective
+        }
+
+        if (updates.isNotEmpty()) {
+            updates["updatedAt"] = FieldValue.serverTimestamp()
+            if (db != null) {
+                db.collection("merchants").document(mId).update(updates)
+                    .addOnSuccessListener {
+                        _settings.value = settingsWithCleared.copy(isOpen = effective)
+                        prefs.edit().putBoolean("is_open", effective).apply()
+                    }
+                    .addOnFailureListener { ex ->
+                        Log.w("MerchantRepo", "Failed to auto-sync effectiveOpen", ex)
+                    }
+            } else {
+                _settings.value = settingsWithCleared.copy(isOpen = effective)
+                prefs.edit().putBoolean("is_open", effective).apply()
+            }
+        }
     }
 
     fun updateThemeAccent(hex: String) {
@@ -1656,7 +2347,9 @@ class MerchantRepository private constructor(context: Context) {
         val mId = _merchantId.value ?: return
         val db = firestore ?: return
         val docId = item.id.ifBlank { UUID.randomUUID().toString() }
-        val categoryName = _categories.value.find { it.id == item.categoryId }?.name ?: ""
+        val categoryName = item.categoryName.ifBlank {
+            _categories.value.find { it.id == item.categoryId }?.name ?: ""
+        }
 
         val itemMap = hashMapOf<String, Any>(
             "name" to item.name,
@@ -1672,23 +2365,45 @@ class MerchantRepository private constructor(context: Context) {
             "prepTime" to item.prepTimeMinutes,
             "tags" to item.tags,
             "sku" to item.sku,
+            "barcode" to item.barcode,
             "unit" to item.unit,
             "stockCount" to item.stockCount,
             "lowStockAlertThreshold" to item.lowStockAlertThreshold
         )
         db.collection("merchants").document(mId).collection("items").document(docId).set(itemMap)
+            .addOnSuccessListener {
+                syncCuisineTags(mId)
+            }
     }
 
     fun deleteMenuItem(itemId: String) {
         val mId = _merchantId.value ?: return
         firestore?.collection("merchants")?.document(mId)?.collection("items")?.document(itemId)?.delete()
+            ?.addOnSuccessListener {
+                syncCuisineTags(mId)
+            }
     }
 
     fun toggleItemAvailability(itemId: String, inStock: Boolean) {
         val mId = _merchantId.value ?: return
         firestore?.collection("merchants")?.document(mId)?.collection("items")?.document(itemId)?.update(
             mapOf("available" to inStock, "inStock" to inStock)
-        )
+        )?.addOnSuccessListener {
+            syncCuisineTags(mId)
+        }
+    }
+
+    fun assignItemCategory(itemId: String, categoryId: String, categoryName: String) {
+        val mId = _merchantId.value ?: return
+        val db = firestore ?: return
+        db.collection("merchants").document(mId).collection("items").document(itemId).update(
+            mapOf(
+                "categoryId" to categoryId,
+                "categoryName" to categoryName
+            )
+        ).addOnSuccessListener {
+            syncCuisineTags(mId)
+        }
     }
 
     // --- Category Management Actions (Categories live in merchants/{id}/categories) ---

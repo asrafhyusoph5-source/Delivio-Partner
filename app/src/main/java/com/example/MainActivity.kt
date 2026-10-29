@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
             val selectedOrderDetailId by viewModel.selectedOrderDetailId.collectAsStateWithLifecycle()
             val newOrdersCount by viewModel.newOrdersCount.collectAsStateWithLifecycle()
             val orderStatusFilter by viewModel.orderStatusFilter.collectAsStateWithLifecycle()
+            val fulfillmentFilter by viewModel.fulfillmentFilter.collectAsStateWithLifecycle()
 
             val menuSearchQuery by viewModel.menuSearchQuery.collectAsStateWithLifecycle()
             val menuStockFilter by viewModel.menuStockFilter.collectAsStateWithLifecycle()
@@ -59,6 +60,8 @@ class MainActivity : ComponentActivity() {
             val prepTimePickerTarget by viewModel.prepTimePickerTarget.collectAsStateWithLifecycle()
             val requestRiderTarget by viewModel.requestRiderTarget.collectAsStateWithLifecycle()
             val receiptPreviewTarget by viewModel.receiptPreviewTarget.collectAsStateWithLifecycle()
+            val editOrderTarget by viewModel.editOrderTarget.collectAsStateWithLifecycle()
+            val editOrderError by viewModel.editOrderError.collectAsStateWithLifecycle()
             val showColorPickerSheet by viewModel.showColorPickerSheet.collectAsStateWithLifecycle()
             val showPauseSheet by viewModel.showPauseSheet.collectAsStateWithLifecycle()
             val showCloseConfirmation by viewModel.showCloseConfirmation.collectAsStateWithLifecycle()
@@ -73,8 +76,14 @@ class MainActivity : ComponentActivity() {
             val showChooseOrderDialog by viewModel.showChooseOrderDialog.collectAsStateWithLifecycle()
             val showManualBookingForm by viewModel.showManualBookingForm.collectAsStateWithLifecycle()
             val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
+            val showWalletScreen by viewModel.showWalletScreen.collectAsStateWithLifecycle()
+            val showCashOutComingSoon by viewModel.showCashOutComingSoon.collectAsStateWithLifecycle()
+            val walletTransactions by viewModel.walletTransactions.collectAsStateWithLifecycle()
+            val sharedWalletBalance by viewModel.sharedWalletBalance.collectAsStateWithLifecycle()
             val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
             val currentTime by viewModel.currentTime.collectAsStateWithLifecycle()
+
+            val isOwner = currentUser?.role != "staff"
 
             var isRegistering by remember { mutableStateOf(false) }
 
@@ -134,6 +143,15 @@ class MainActivity : ComponentActivity() {
                         onSaveLocation = { viewModel.saveStoreLocation(it) },
                         onBack = { viewModel.closeMapLocation() }
                     )
+                } else if (showWalletScreen) {
+                    // Full-screen Delivio Wallet view (Owner only)
+                    WalletScreen(
+                        settings = settings,
+                        sharedWalletBalance = sharedWalletBalance,
+                        transactions = walletTransactions,
+                        onCashOutClick = { viewModel.openCashOutComingSoon() },
+                        onBack = { viewModel.closeWalletScreen() }
+                    )
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -147,7 +165,10 @@ class MainActivity : ComponentActivity() {
                             onSetReady = { viewModel.setOrderReady(it.id) },
                             onRequestRider = { viewModel.openRequestRider(it) },
                             onPrintReceipt = { viewModel.openReceiptPreview(it) },
-                            onMarkPickedUp = { viewModel.markOrderPickedUp(it.id) }
+                            onMarkPickedUp = { viewModel.markOrderPickedUp(it.id) },
+                            onEditOrder = { viewModel.openEditOrder(it) },
+                            onRequestRiderAgain = { viewModel.requestRiderAgain(it.id) },
+                            currentTime = currentTime
                         )
                     } else {
                         viewModel.closeOrderDetail()
@@ -158,7 +179,8 @@ class MainActivity : ComponentActivity() {
                         topBar = {
                             DelivioTopBar(
                                 settings = settings,
-                                onToggleOpen = { viewModel.toggleStoreOpen() }
+                                onToggleOpen = { viewModel.toggleStoreOpen() },
+                                currentTime = currentTime
                             )
                         },
                         bottomBar = {
@@ -181,6 +203,8 @@ class MainActivity : ComponentActivity() {
                                         orders = orders,
                                         activeFilter = orderStatusFilter,
                                         onFilterChanged = { viewModel.setOrderStatusFilter(it) },
+                                        fulfillmentFilter = fulfillmentFilter,
+                                        onFulfillmentFilterChanged = { viewModel.setFulfillmentFilter(it) },
                                         onOrderClick = { viewModel.openOrderDetail(it.id) },
                                         onAcceptClick = { viewModel.openPrepTimePicker(it) },
                                         onRejectClick = { viewModel.openRejectDialog(it) },
@@ -189,11 +213,16 @@ class MainActivity : ComponentActivity() {
                                         onPrintReceiptClick = { viewModel.openReceiptPreview(it) },
                                         onMarkPickedUpClick = { viewModel.markOrderPickedUp(it.id) },
                                         onCancelOrderClick = { viewModel.cancelOrder(it.id, "Merchant cancelled scheduled order") },
+                                        onEditOrderClick = { viewModel.openEditOrder(it) },
+                                        onRequestRiderAgainClick = { viewModel.requestRiderAgain(it.id) },
                                         currentTime = currentTime
                                     )
                                 }
 
                                 MerchantTab.MENU -> {
+                                    LaunchedEffect(Unit) {
+                                        viewModel.onMenuOpened()
+                                    }
                                     MenuScreen(
                                         categories = categories,
                                         menuItems = menuItems,
@@ -216,6 +245,7 @@ class MainActivity : ComponentActivity() {
                                         onAddItem = { viewModel.openAddMenuItem(selectedCategoryId) },
                                         onEditItem = { viewModel.openEditMenuItem(it) },
                                         onDuplicateItem = { viewModel.duplicateMenuItem(it) },
+                                        onQuickAssignCategory = { item, cat -> viewModel.quickAssignCategory(item, cat) },
                                         onAddCategory = { viewModel.addCategory(it) },
                                         onReorderCategory = { id, up -> viewModel.reorderCategory(id, up) },
                                         onToggleCategoryVisibility = { viewModel.toggleCategoryVisibility(it) },
@@ -238,7 +268,8 @@ class MainActivity : ComponentActivity() {
                                         onOrderClick = { viewModel.openOrderDetail(it.id) },
                                         onViewAllOrders = { viewModel.selectTab(MerchantTab.ORDERS) },
                                         soldOutItemsCount = soldOutCount,
-                                        lowStockCount = lowStockCount
+                                        lowStockCount = lowStockCount,
+                                        currentTime = currentTime
                                     )
                                 }
 
@@ -280,6 +311,10 @@ class MainActivity : ComponentActivity() {
                                         onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
                                         onOpenStaffDialog = { viewModel.openStaffDialog() },
                                         onLogout = { viewModel.logout() },
+                                        isOwner = isOwner,
+                                        walletBalance = if (!settings.linkedCustomerUid.isNullOrBlank() && sharedWalletBalance != null) sharedWalletBalance!! else settings.walletBalance,
+                                        isSharedWallet = !settings.linkedCustomerUid.isNullOrBlank(),
+                                        onOpenWallet = { viewModel.openWalletScreen() },
                                         onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
                                             viewModel.updateStoreSettings(
                                                 storeName, phone, minOrder, prep,
@@ -481,8 +516,11 @@ class MainActivity : ComponentActivity() {
                 // 13. Business Hours Dialog
                 if (showBusinessHoursDialog) {
                     BusinessHoursDialog(
-                        schedule = settings.weeklySchedule,
-                        autoScheduleEnabled = settings.autoScheduleEnabled,
+                        initialHours = settings.hours,
+                        initialAutoSchedule = settings.autoSchedule,
+                        onSave = { hours, autoSchedule ->
+                            viewModel.saveBusinessHours(hours, autoSchedule)
+                        },
                         onDismiss = {
                             viewModel.closeBusinessHoursDialog()
                         }
@@ -539,6 +577,46 @@ class MainActivity : ComponentActivity() {
                         errorInfo = errInfo,
                         onDismiss = {
                             viewModel.dismissRiderRequestError()
+                        }
+                    )
+                }
+
+                // 17. Edit Order Dialog while Preparing
+                editOrderTarget?.let { target ->
+                    key(target.id) {
+                        OrderEditDialog(
+                            order = target,
+                            availableShopItems = menuItems.filter { it.businessType == settings.businessType && it.available && it.inStock },
+                            onConfirm = { ord, newItems, reason ->
+                                viewModel.confirmEditOrder(ord, newItems, reason)
+                            },
+                            onDismiss = {
+                                viewModel.closeEditOrder()
+                            }
+                        )
+                    }
+                }
+
+                // 17b. Edit Order Error Dialog with Copy button
+                editOrderError?.let { errText ->
+                    EditOrderErrorDialog(
+                        errorMessage = errText,
+                        onDismiss = {
+                            viewModel.dismissEditOrderError()
+                        }
+                    )
+                }
+
+                // 18. Cash Out Coming Soon Dialog
+                if (showCashOutComingSoon) {
+                    AlertDialog(
+                        onDismissRequest = { viewModel.closeCashOutComingSoon() },
+                        title = { Text("Cash Out", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+                        text = { Text("Coming soon. Payout transfers directly from Delivio Wallet will be available in an upcoming update.") },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.closeCashOutComingSoon() }) {
+                                Text("OK")
+                            }
                         }
                     )
                 }

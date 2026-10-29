@@ -28,6 +28,7 @@ import com.example.ui.components.MerchantLogoView
 import com.example.ui.theme.DelivioYellow
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.parseHexColor
+import com.example.util.FormatUtils
 
 @Composable
 fun ProfileScreen(
@@ -43,6 +44,10 @@ fun ProfileScreen(
     onOpenBusinessHours: () -> Unit,
     onOpenStaffDialog: () -> Unit,
     onLogout: () -> Unit,
+    isOwner: Boolean = true,
+    walletBalance: Double = 0.0,
+    isSharedWallet: Boolean = false,
+    onOpenWallet: () -> Unit = {},
     onUpdateStoreSettings: (
         storeName: String,
         phone: String,
@@ -176,6 +181,72 @@ fun ProfileScreen(
                             else "GPS Coordinates not set",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // WALLET ROW (Owner only; hidden from staff)
+        if (isOwner) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenWallet() }
+                    .testTag("profile_wallet_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(customColors.accentTint),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalanceWallet,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Delivio Wallet",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = if (isSharedWallet) "Shared wallet (linked customer account)" else "Merchant store wallet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = FormatUtils.formatCurrency(walletBalance),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 17.sp,
+                            color = customColors.accent
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Wallet",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

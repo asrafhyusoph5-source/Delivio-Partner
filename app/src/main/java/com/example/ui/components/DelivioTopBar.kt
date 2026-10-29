@@ -27,9 +27,11 @@ import com.example.util.FormatUtils
 fun DelivioTopBar(
     settings: MerchantSettings,
     onToggleOpen: () -> Unit,
+    currentTime: Long = System.currentTimeMillis(),
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
+    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime)
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -78,13 +80,13 @@ fun DelivioTopBar(
                     Spacer(modifier = Modifier.height(2.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Global Open/Close Status Chip (mirrored across tabs)
+                        // Global Open/Close Status Chip (showing effectiveOpen)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(
-                                    if (settings.isOpen) StatusOpenGreen.copy(alpha = 0.15f)
+                                    if (effectiveOpen) StatusOpenGreen.copy(alpha = 0.15f)
                                     else StatusClosedRed.copy(alpha = 0.15f)
                                 )
                                 .clickable { onToggleOpen() }
@@ -95,14 +97,28 @@ fun DelivioTopBar(
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (settings.isOpen) StatusOpenGreen else StatusClosedRed)
+                                    .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = if (settings.isOpen) "Open" else "Closed",
+                                text = if (effectiveOpen) "Open" else "Closed",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (settings.isOpen) StatusOpenGreen else StatusClosedRed
+                                color = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
+                            )
+                        }
+
+                        if (settings.autoSchedule) {
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Auto",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = customColors.accent,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(customColors.accentTint)
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
                             )
                         }
 
@@ -116,7 +132,6 @@ fun DelivioTopBar(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(StatusWarningAmber.copy(alpha = 0.15f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +35,8 @@ import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
+import com.example.util.FOOD_CATEGORIES
+import com.example.util.CONVENIENCE_CATEGORIES
 
 @Composable
 fun MenuScreen(
@@ -58,26 +61,63 @@ fun MenuScreen(
     onAddItem: () -> Unit,
     onEditItem: (MenuItem) -> Unit,
     onDuplicateItem: (String) -> Unit,
-    onAddCategory: (String) -> Unit,
-    onReorderCategory: (categoryId: String, moveUp: Boolean) -> Unit,
-    onToggleCategoryVisibility: (String) -> Unit,
-    onDeleteCategory: (String) -> Unit,
+    onQuickAssignCategory: (MenuItem, String) -> Unit = { _, _ -> },
+    onAddCategory: (String) -> Unit = {},
+    onReorderCategory: (categoryId: String, moveUp: Boolean) -> Unit = { _, _ -> },
+    onToggleCategoryVisibility: (String) -> Unit = {},
+    onDeleteCategory: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
     var showBulkPriceDialog by remember { mutableStateOf(false) }
     var bulkPriceDeltaText by remember { mutableStateOf("10") } // 10%
+    var quickAssignTargetItem by remember { mutableStateOf<MenuItem?>(null) }
 
-    // Filter categories by business type
-    val filteredCategories = remember(categories, businessType) {
-        categories.filter { it.businessType == businessType }.sortedBy { it.displayOrder }
+    // Fixed allowed categories by business type (exact spelling and order)
+    val allowedCategories = remember(businessType) {
+        if (businessType == BusinessType.FOOD) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+    }
+
+    fun resolveCategoryName(item: MenuItem): String {
+        if (item.categoryName.isNotBlank()) return item.categoryName
+        return categories.find { it.id == item.categoryId }?.name ?: ""
+    }
+
+    // Uncategorized items: items whose categoryName is not in the allowed list
+    val uncategorizedItems = remember(menuItems, allowedCategories, categories, businessType) {
+        menuItems.filter { item ->
+            item.businessType == businessType &&
+                    !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
+        }
+    }
+
+    // Counts for each allowed category
+    val categoryCounts = remember(menuItems, allowedCategories, categories, businessType) {
+        allowedCategories.associateWith { catName ->
+            menuItems.count { item ->
+                item.businessType == businessType &&
+                        resolveCategoryName(item).equals(catName, ignoreCase = true)
+            }
+        }
+    }
+
+    val totalThisTypeCount = remember(menuItems, businessType) {
+        menuItems.count { it.businessType == businessType }
     }
 
     // Filter items by category, business type, stock, and search query
-    val displayedItems = remember(menuItems, businessType, selectedCategoryId, stockFilter, searchQuery) {
+    val displayedItems = remember(menuItems, businessType, selectedCategoryId, stockFilter, searchQuery, allowedCategories, categories) {
         menuItems.filter { item ->
             val matchType = item.businessType == businessType
-            val matchCategory = selectedCategoryId == null || item.categoryId == selectedCategoryId
+            val itemCat = resolveCategoryName(item)
+            val matchCategory = when (selectedCategoryId) {
+                null -> true
+                "UNCATEGORIZED" -> !allowedCategories.any { it.equals(itemCat, ignoreCase = true) }
+                else -> {
+                    val targetName = categories.find { it.id == selectedCategoryId }?.name ?: selectedCategoryId
+                    itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
+                }
+            }
             val matchStock = when (stockFilter) {
                 "In stock" -> item.inStock
                 "Sold out" -> !item.inStock
@@ -191,7 +231,52 @@ fun MenuScreen(
             }
         }
 
-        // Category Filter Chips & Category Manager Button
+        // Uncategorized Items Banner (if any legacy/unassigned items exist)
+        if (uncategorizedItems.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .testTag("uncategorized_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("⚠️", fontSize = 22.sp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${uncategorizedItems.size} ${if (uncategorizedItems.size == 1) "item needs" else "items need"} a category",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "Legacy categories detected. Customers can still view them; assign them to an official category below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    FilledTonalButton(
+                        onClick = { onCategorySelect("UNCATEGORIZED") },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("fix_uncategorized_banner_btn")
+                    ) {
+                        Text("Fix Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Category Filter Chips: "All" plus the list, with item counts (zero is fine)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -203,24 +288,41 @@ fun MenuScreen(
             FilterChip(
                 selected = selectedCategoryId == null,
                 onClick = { onCategorySelect(null) },
-                label = { Text("All Categories (${displayedItems.size})") },
+                label = { Text("All (${totalThisTypeCount})") },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = customColors.accentTint,
                     selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                )
+                ),
+                modifier = Modifier.testTag("cat_chip_all")
             )
 
-            filteredCategories.forEach { cat ->
-                val isSelected = selectedCategoryId == cat.id
+            allowedCategories.forEach { catName ->
+                val count = categoryCounts[catName] ?: 0
+                val catDocId = categories.find { it.name.equals(catName, ignoreCase = true) }?.id ?: catName
+                val isSelected = selectedCategoryId == catDocId || selectedCategoryId == catName
                 FilterChip(
                     selected = isSelected,
-                    onClick = { onCategorySelect(cat.id) },
-                    label = { Text(cat.name) },
+                    onClick = { onCategorySelect(catDocId) },
+                    label = { Text("$catName ($count)") },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = customColors.accentTint,
                         selectedLabelColor = MaterialTheme.colorScheme.onSurface
                     ),
-                    modifier = Modifier.testTag("cat_chip_${cat.id}")
+                    modifier = Modifier.testTag("cat_chip_${catName.lowercase().replace(" ", "_")}")
+                )
+            }
+
+            if (uncategorizedItems.isNotEmpty()) {
+                val isSelected = selectedCategoryId == "UNCATEGORIZED"
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onCategorySelect("UNCATEGORIZED") },
+                    label = { Text("⚠️ Uncategorized (${uncategorizedItems.size})") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.errorContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    modifier = Modifier.testTag("cat_chip_uncategorized")
                 )
             }
         }
@@ -316,22 +418,80 @@ fun MenuScreen(
                 contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
             ) {
                 items(displayedItems, key = { it.id }) { item ->
+                    val isUncat = !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
                     MenuItemRow(
                         item = item,
                         businessType = businessType,
+                        isUncategorized = isUncat,
                         isMultiSelectMode = isMultiSelectMode,
                         isSelected = selectedItemIds.contains(item.id),
                         onSelectToggle = { onToggleItemSelection(item.id) },
                         onToggleStock = { onToggleItemAvailability(item) },
                         onEdit = { onEditItem(item) },
-                        onDuplicate = { onDuplicateItem(item.id) }
+                        onDuplicate = { onDuplicateItem(item.id) },
+                        onQuickAssign = { quickAssignTargetItem = item }
                     )
                 }
             }
         }
     }
 
-    // Manage Categories Modal Dialog
+    // Quick Assign Category Dialog
+    if (quickAssignTargetItem != null) {
+        val target = quickAssignTargetItem!!
+        AlertDialog(
+            onDismissRequest = { quickAssignTargetItem = null },
+            title = { Text("Assign Category", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Choose an official category for \"${target.name}\":",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    allowedCategories.forEach { catName ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onQuickAssignCategory(target, catName)
+                                    quickAssignTargetItem = null
+                                }
+                                .testTag("quick_assign_option_${catName.lowercase().replace(" ", "_")}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = catName,
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = customColors.accent
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { quickAssignTargetItem = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     // Bulk Price Adjustment Dialog
     if (showBulkPriceDialog) {
         AlertDialog(
@@ -374,12 +534,14 @@ fun MenuScreen(
 fun MenuItemRow(
     item: MenuItem,
     businessType: BusinessType,
+    isUncategorized: Boolean = false,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
     onSelectToggle: () -> Unit,
     onToggleStock: () -> Unit,
     onEdit: () -> Unit,
-    onDuplicate: () -> Unit
+    onDuplicate: () -> Unit,
+    onQuickAssign: () -> Unit = {}
 ) {
     val customColors = LocalDelivioColors.current
     val isSoldOut = !item.inStock
@@ -489,6 +651,22 @@ fun MenuItemRow(
                     }
                 }
 
+                // Convenience SKU & Barcode specs
+                if (businessType == BusinessType.CONVENIENCE) {
+                    val codeInfo = listOfNotNull(
+                        item.sku.takeIf { it.isNotBlank() }?.let { "SKU: $it" },
+                        item.barcode.takeIf { it.isNotBlank() }?.let { "Barcode: $it" }
+                    ).joinToString(" • ")
+                    if (codeInfo.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = codeInfo,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 // Tags preview (Food)
                 if (businessType == BusinessType.FOOD && item.tags.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -506,6 +684,28 @@ fun MenuItemRow(
                             )
                         }
                     }
+                }
+
+                // Uncategorized Quick Assign Warning & Action
+                if (isUncategorized) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    AssistChip(
+                        onClick = onQuickAssign,
+                        label = {
+                            Text(
+                                text = "Assign Category",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        leadingIcon = { Text("⚠️", fontSize = 11.sp) },
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier.testTag("quick_assign_chip_${item.id}")
+                    )
                 }
             }
 

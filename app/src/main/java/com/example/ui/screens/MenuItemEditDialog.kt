@@ -31,6 +31,8 @@ import com.example.data.model.MenuItem
 import com.example.util.CurrencyConstants
 import com.example.data.model.MenuItemModifier
 import com.example.ui.theme.LocalDelivioColors
+import com.example.util.FOOD_CATEGORIES
+import com.example.util.CONVENIENCE_CATEGORIES
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,11 +46,41 @@ fun MenuItemEditDialog(
     onDismiss: () -> Unit
 ) {
     val customColors = LocalDelivioColors.current
+    val allowedCategories = remember(businessType) {
+        if (businessType == BusinessType.FOOD) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+    }
+
+    val initialCatName = remember(item, categories, allowedCategories) {
+        val directName = item.categoryName
+        if (directName.isNotBlank() && allowedCategories.any { it.equals(directName, ignoreCase = true) }) {
+            allowedCategories.first { it.equals(directName, ignoreCase = true) }
+        } else {
+            val fromId = categories.find { it.id == item.categoryId }?.name ?: ""
+            if (fromId.isNotBlank() && allowedCategories.any { it.equals(fromId, ignoreCase = true) }) {
+                allowedCategories.first { it.equals(fromId, ignoreCase = true) }
+            } else if (isNew) {
+                allowedCategories.firstOrNull() ?: ""
+            } else {
+                "" // Needs explicit assignment for legacy items
+            }
+        }
+    }
 
     var name by remember { mutableStateOf(item.name) }
     var description by remember { mutableStateOf(item.description) }
     var priceText by remember { mutableStateOf(item.price.toString()) }
-    var selectedCategoryId by remember { mutableStateOf(item.categoryId.ifEmpty { categories.firstOrNull()?.id ?: "" }) }
+    var selectedCategoryName by remember { mutableStateOf(initialCatName) }
+    var selectedCategoryId by remember {
+        mutableStateOf(
+            if (initialCatName.isNotBlank()) {
+                categories.find { it.name.equals(initialCatName, ignoreCase = true) }?.id
+                    ?: initialCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+            } else {
+                ""
+            }
+        )
+    }
+    val isCatMissing = selectedCategoryName.isBlank() || !allowedCategories.any { it.equals(selectedCategoryName, ignoreCase = true) }
     var imageUrl by remember { mutableStateOf(item.imageUrl) }
     var iconEmoji by remember { mutableStateOf(item.iconEmoji) }
 
@@ -134,9 +166,8 @@ fun MenuItemEditDialog(
                                 .testTag("menu_item_price_input")
                         )
 
-                        // Category Selector
+                        // Category Selector (Required, lists only this merchant's allowed categories)
                         var catExpanded by remember { mutableStateOf(false) }
-                        val currentCategoryName = categories.find { it.id == selectedCategoryId }?.name ?: "Select"
 
                         ExposedDropdownMenuBox(
                             expanded = catExpanded,
@@ -144,23 +175,31 @@ fun MenuItemEditDialog(
                             modifier = Modifier.weight(1.3f)
                         ) {
                             OutlinedTextField(
-                                value = currentCategoryName,
+                                value = if (selectedCategoryName.isNotBlank()) selectedCategoryName else "Select Category *",
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Category") },
+                                label = { Text("Category *") },
+                                isError = isCatMissing,
+                                supportingText = if (isCatMissing) {
+                                    { Text("Required", color = MaterialTheme.colorScheme.error) }
+                                } else null,
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catExpanded) },
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.menuAnchor()
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .testTag("menu_item_category_dropdown")
                             )
                             ExposedDropdownMenu(
                                 expanded = catExpanded,
                                 onDismissRequest = { catExpanded = false }
                             ) {
-                                categories.filter { it.businessType == businessType }.forEach { cat ->
+                                allowedCategories.forEach { catName ->
                                     DropdownMenuItem(
-                                        text = { Text(cat.name) },
+                                        text = { Text(catName, fontWeight = if (selectedCategoryName.equals(catName, ignoreCase = true)) FontWeight.Bold else FontWeight.Normal) },
                                         onClick = {
-                                            selectedCategoryId = cat.id
+                                            selectedCategoryName = catName
+                                            val matchedDoc = categories.find { it.name.equals(catName, ignoreCase = true) }
+                                            selectedCategoryId = matchedDoc?.id ?: catName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
                                             catExpanded = false
                                         }
                                     )
@@ -376,24 +415,32 @@ fun MenuItemEditDialog(
                             val parsedStock = stockCountText.toIntOrNull() ?: item.stockCount
                             val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAlertThreshold
 
+                            val finalCatName = selectedCategoryName
+                            val finalCatId = selectedCategoryId.ifBlank {
+                                categories.find { it.name.equals(finalCatName, ignoreCase = true) }?.id
+                                    ?: finalCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+                            }
+
                             val updated = item.copy(
-                                name = name.ifBlank { "Untitled Item" },
-                                description = description,
+                                name = name.trim().ifBlank { "Untitled Item" },
+                                description = description.trim(),
                                 price = parsedPrice,
-                                categoryId = selectedCategoryId,
+                                categoryId = finalCatId,
+                                categoryName = finalCatName,
                                 imageUrl = imageUrl.trim(),
-                                iconEmoji = iconEmoji.ifBlank { "📦" },
-                                prepTimeMinutes = parsedPrep,
-                                tags = selectedTags.toList(),
-                                sku = sku,
-                                barcode = barcode,
-                                unit = unit,
-                                stockCount = parsedStock,
-                                lowStockAlertThreshold = parsedThreshold,
+                                iconEmoji = iconEmoji.ifBlank { if (businessType == BusinessType.FOOD) "🍔" else "🛍️" },
+                                prepTimeMinutes = if (businessType == BusinessType.FOOD) parsedPrep else 0,
+                                tags = if (businessType == BusinessType.FOOD) selectedTags.toList() else emptyList(),
+                                sku = if (businessType == BusinessType.CONVENIENCE) sku.trim() else "",
+                                barcode = if (businessType == BusinessType.CONVENIENCE) barcode.trim() else "",
+                                unit = if (businessType == BusinessType.CONVENIENCE) unit.trim().ifBlank { "1 pc" } else "1 pc",
+                                stockCount = if (businessType == BusinessType.CONVENIENCE) parsedStock else 50,
+                                lowStockAlertThreshold = if (businessType == BusinessType.CONVENIENCE) parsedThreshold else 5,
                                 businessType = businessType
                             )
                             onSave(updated)
                         },
+                        enabled = name.isNotBlank() && !isCatMissing,
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = customColors.accent,

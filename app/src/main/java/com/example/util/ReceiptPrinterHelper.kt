@@ -39,7 +39,6 @@ object ReceiptPrinterHelper {
         }
         sb.appendLine("----------------------------------------")
         sb.appendLine("Items Subtotal  : ${FormatUtils.formatCurrency(order.subtotal)}")
-        sb.appendLine("Delivery Fee    : ${FormatUtils.formatCurrency(order.deliveryFee)}")
         if (order.tip > 0.0) {
             sb.appendLine("Rider Tip       : ${FormatUtils.formatCurrency(order.tip)}")
         }
@@ -49,9 +48,8 @@ object ReceiptPrinterHelper {
         if (order.discount > 0.0) {
             sb.appendLine("Discount        : -${FormatUtils.formatCurrency(order.discount)}")
         }
-        sb.appendLine("TOTAL           : ${FormatUtils.formatCurrency(order.total)}")
+        sb.appendLine("TOTAL           : ${FormatUtils.formatCurrency(order.receiptTotal)}")
         sb.appendLine("Payment Method  : ${order.formattedPaymentMethod}")
-        sb.appendLine("Note: Delivery fee goes to the rider.")
         sb.appendLine("Status          : ${order.status.displayTitle}")
         sb.appendLine("========================================")
         sb.appendLine("      THANK YOU FOR YOUR BUSINESS!")
@@ -137,17 +135,15 @@ object ReceiptPrinterHelper {
                 <div class="dashed"></div>
                 <table>
                     <tr><td>Items Subtotal</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.subtotal)}</td></tr>
-                    <tr><td>Delivery Fee</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.deliveryFee)}</td></tr>
                     $tipRow
                     $serviceFeeRow
                     $discountRow
                     <tr class="total-row" style="border-top:1px solid #111;">
                         <td style="padding-top:6px;">TOTAL</td>
-                        <td style="text-align:right; padding-top:6px;">${FormatUtils.formatCurrency(order.total)}</td>
+                        <td style="text-align:right; padding-top:6px;">${FormatUtils.formatCurrency(order.receiptTotal)}</td>
                     </tr>
                 </table>
                 <div style="margin-top:8px;"><strong>Payment:</strong> ${order.formattedPaymentMethod}</div>
-                <div style="margin-top:4px; font-size:11px; font-style:italic; color:#555;">Delivery fee goes to the rider.</div>
                 <div class="dashed"></div>
                 <div class="center" style="font-size:11px; margin-top:12px;">
                     Thank you for choosing Delivio!<br/>

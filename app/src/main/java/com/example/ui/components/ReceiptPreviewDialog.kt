@@ -221,10 +221,6 @@ fun ReceiptPreviewDialog(
                             Text("ITEMS SUBTOTAL:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
                             Text(FormatUtils.formatCurrency(order.subtotal), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
                         }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("DELIVERY FEE:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
-                            Text(FormatUtils.formatCurrency(order.deliveryFee), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
-                        }
                         if (order.tip > 0.0) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("RIDER TIP:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF4A4A4A))
@@ -253,7 +249,7 @@ fun ReceiptPreviewDialog(
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("TOTAL:", fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1A1A1A))
-                            Text(FormatUtils.formatCurrency(order.total), fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1A1A1A))
+                            Text(FormatUtils.formatCurrency(order.receiptTotal), fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1A1A1A))
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
@@ -261,14 +257,6 @@ fun ReceiptPreviewDialog(
                             Text("PAYMENT METHOD:", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1A1A))
                             Text(order.formattedPaymentMethod, fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1A1A))
                         }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "* Delivery fee goes to the rider. *",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = Color(0xFF666666)
-                        )
 
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
