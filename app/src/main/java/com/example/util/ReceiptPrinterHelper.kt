@@ -8,90 +8,132 @@ import android.print.PrintManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.example.data.model.Order
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 object ReceiptPrinterHelper {
 
-    fun generateFormattedReceiptText(order: Order, storeName: String, storeAddress: String): String {
+    fun getColumnWidth(paperSize: String): Int {
+        return if (paperSize.contains("58", ignoreCase = true)) 32 else 42
+    }
+
+    private fun formatTwoColumns(left: String, right: String, totalCols: Int): String {
+        val spacesNeeded = totalCols - left.length - right.length
+        return if (spacesNeeded > 0) {
+            left + " ".repeat(spacesNeeded) + right
+        } else if (spacesNeeded == 0) {
+            left + right
+        } else {
+            val maxLeft = (totalCols - right.length - 1).coerceAtLeast(1)
+            val truncatedLeft = if (left.length > maxLeft) left.take(maxLeft - 1) + "." else left
+            val remainingSpaces = (totalCols - truncatedLeft.length - right.length).coerceAtLeast(1)
+            truncatedLeft + " ".repeat(remainingSpaces) + right
+        }
+    }
+
+    fun generateFormattedReceiptText(order: Order, storeName: String, paperSize: String = "80mm"): String {
+        val cols = getColumnWidth(paperSize)
+        val hyphenSep = "-".repeat(cols)
+        val underscoreSep = "_".repeat(cols)
+
+        val timeZone = TimeZone.getTimeZone("Asia/Manila")
+        val timeFmt = SimpleDateFormat("h:mm a", Locale.US).apply { this.timeZone = timeZone }
+        val dateFmt = SimpleDateFormat("MMM d, yyyy", Locale.US).apply { this.timeZone = timeZone }
+        val timeStr = timeFmt.format(Date(order.placedAtTimestamp))
+        val dateStr = dateFmt.format(Date(order.placedAtTimestamp))
+        val orderedAtLine = "Ordered at $timeStr   $dateStr"
+        val totalQty = order.items.sumOf { it.quantity }
+        val itemsForLine = "$totalQty Items for ${order.customerName}"
+
+        val effectiveNote = order.effectiveMerchantNote
+        var calculatedSubtotal = 0.0
+
         val sb = StringBuilder()
-        sb.appendLine("========================================")
-        sb.appendLine("            $storeName")
-        sb.appendLine("      $storeAddress")
-        sb.appendLine("========================================")
-        sb.appendLine("Order Number : ${order.orderNumber}")
-        sb.appendLine("Date & Time  : ${FormatUtils.formatDateTime(order.placedAtTimestamp)}")
-        sb.appendLine("Customer     : ${order.customerName}")
-        sb.appendLine("Phone        : ${order.customerPhone}")
-        sb.appendLine("Address      : ${order.deliveryAddress.formatted}")
-        sb.appendLine("----------------------------------------")
-        sb.appendLine("ITEMS ORDERED:")
+
+        // --- 1. MERCHANT'S COPY ---
+        sb.appendLine("MERCHANT'S COPY")
+        sb.appendLine(storeName)
+        sb.appendLine("Delivio")
+        sb.appendLine(order.orderNumber)
+        sb.appendLine(orderedAtLine)
+        sb.appendLine(itemsForLine)
+        sb.appendLine(hyphenSep)
+
         order.items.forEach { item ->
-            val sizeStr = if (item.selectedSize != null) " (${item.selectedSize})" else ""
-            sb.appendLine("${item.quantity}x ${item.name}$sizeStr")
-            sb.appendLine("    Line Total   : ${FormatUtils.formatCurrency(item.lineTotal)}")
-            if (item.modifiers.isNotEmpty()) {
-                item.modifiers.forEach { mod ->
-                    sb.appendLine("    + ${mod.name} (${FormatUtils.formatCurrency(mod.price)})")
+            val baseLineTotal = item.quantity * item.basePrice
+            calculatedSubtotal += baseLineTotal
+            val itemLine = "${item.quantity} ${item.name}"
+            val itemPriceStr = FormatUtils.formatCurrency(baseLineTotal)
+            sb.appendLine(formatTwoColumns(itemLine, itemPriceStr, cols))
+
+            item.selections.forEach { sel ->
+                val choiceLine = "   + ${sel.choiceName}"
+                if (sel.price > 0.0) {
+                    val choiceTotal = item.quantity * sel.price
+                    calculatedSubtotal += choiceTotal
+                    val choicePriceStr = FormatUtils.formatCurrency(choiceTotal)
+                    sb.appendLine(formatTwoColumns(choiceLine, choicePriceStr, cols))
+                } else {
+                    sb.appendLine(choiceLine)
                 }
             }
-            if (!item.notes.isNullOrBlank()) {
-                sb.appendLine("    Note: ${item.notes}")
+        }
+
+        sb.appendLine(hyphenSep)
+        if (effectiveNote.isNotBlank()) {
+            sb.appendLine("Note: $effectiveNote")
+            sb.appendLine(hyphenSep)
+        }
+
+        val subtotalToDisplay = if (calculatedSubtotal > 0.0) calculatedSubtotal else order.subtotal
+        val subtotalStr = FormatUtils.formatCurrency(subtotalToDisplay)
+        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
+        sb.appendLine(formatTwoColumns("Total", subtotalStr, cols))
+
+        sb.appendLine(underscoreSep)
+
+        // --- 2. CUSTOMER'S COPY ---
+        sb.appendLine("CUSTOMER'S COPY")
+        sb.appendLine(storeName)
+        sb.appendLine("Delivio")
+        sb.appendLine(order.orderNumber)
+        sb.appendLine(orderedAtLine)
+        sb.appendLine(itemsForLine)
+        sb.appendLine(hyphenSep)
+
+        order.items.forEach { item ->
+            sb.appendLine("${item.quantity} ${item.name}")
+            item.selections.forEach { sel ->
+                sb.appendLine("   + ${sel.choiceName}")
             }
         }
-        sb.appendLine("----------------------------------------")
-        sb.appendLine("Items Subtotal  : ${FormatUtils.formatCurrency(order.subtotal)}")
-        if (order.tip > 0.0) {
-            sb.appendLine("Rider Tip       : ${FormatUtils.formatCurrency(order.tip)}")
+
+        sb.appendLine(hyphenSep)
+        if (effectiveNote.isNotBlank()) {
+            sb.appendLine("Note: $effectiveNote")
+            sb.appendLine(hyphenSep)
         }
-        if (order.serviceFee > 0.0) {
-            sb.appendLine("Service Fee     : ${FormatUtils.formatCurrency(order.serviceFee)}")
-        }
-        if (order.discount > 0.0) {
-            sb.appendLine("Discount        : -${FormatUtils.formatCurrency(order.discount)}")
-        }
-        sb.appendLine("TOTAL           : ${FormatUtils.formatCurrency(order.receiptTotal)}")
-        sb.appendLine("Payment Method  : ${order.formattedPaymentMethod}")
-        sb.appendLine("Status          : ${order.status.displayTitle}")
-        sb.appendLine("========================================")
-        sb.appendLine("      THANK YOU FOR YOUR BUSINESS!")
-        sb.appendLine("      DELIVIO MERCHANT PLATFORM")
-        sb.appendLine("========================================")
+
+        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
+        sb.appendLine(formatTwoColumns("Total", subtotalStr, cols))
+
+        // Cut line after customer's copy
+        val cutLine = if (cols == 32) "- - - - - - [CUT] - - - - - -" else "- - - - - - - - - [CUT HERE] - - - - - - - - -"
+        sb.appendLine(cutLine)
+
         return sb.toString()
     }
 
-    fun generateReceiptHtml(order: Order, storeName: String, storeAddress: String): String {
-        val itemsHtml = StringBuilder()
-        order.items.forEach { item ->
-            val sizeStr = if (item.selectedSize != null) "<small>(${item.selectedSize})</small>" else ""
-            val modsStr = if (item.modifiers.isNotEmpty()) {
-                "<br/><small style='color:#666;'>" + item.modifiers.joinToString("<br/>") { "+ ${it.name} (${FormatUtils.formatCurrency(it.price)})" } + "</small>"
-            } else ""
-            val noteStr = if (!item.notes.isNullOrBlank()) {
-                "<br/><small style='color:#d32f2f;'>Note: ${item.notes}</small>"
-            } else ""
+    fun generateReceiptHtml(order: Order, storeName: String, paperSize: String = "80mm"): String {
+        val receiptText = generateFormattedReceiptText(order, storeName, paperSize)
+        val escaped = receiptText
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
 
-            itemsHtml.append("""
-                <tr>
-                    <td style="padding:6px 0; border-bottom:1px dashed #ddd;">
-                        <strong>${item.quantity}x ${item.name}</strong> $sizeStr $modsStr $noteStr
-                    </td>
-                    <td style="padding:6px 0; text-align:right; border-bottom:1px dashed #ddd; vertical-align:top;">
-                        <strong>${FormatUtils.formatCurrency(item.lineTotal)}</strong>
-                    </td>
-                </tr>
-            """.trimIndent())
-        }
-
-        val tipRow = if (order.tip > 0.0) {
-            "<tr><td>Rider tip</td><td style='text-align:right;'>${FormatUtils.formatCurrency(order.tip)}</td></tr>"
-        } else ""
-
-        val serviceFeeRow = if (order.serviceFee > 0.0) {
-            "<tr><td>Service Fee</td><td style='text-align:right;'>${FormatUtils.formatCurrency(order.serviceFee)}</td></tr>"
-        } else ""
-
-        val discountRow = if (order.discount > 0.0) {
-            "<tr style='color:#d32f2f;'><td>Discount</td><td style='text-align:right;'>-${FormatUtils.formatCurrency(order.discount)}</td></tr>"
-        } else ""
+        val maxWidthPx = if (paperSize.contains("58", ignoreCase = true)) "280px" else "380px"
 
         return """
             <!DOCTYPE html>
@@ -99,86 +141,68 @@ object ReceiptPrinterHelper {
             <head>
                 <meta charset="utf-8">
                 <style>
-                    body {
-                        font-family: 'Courier New', monospace;
-                        font-size: 13px;
-                        color: #111;
-                        padding: 16px;
-                        max-width: 360px;
-                        margin: 0 auto;
-                        line-height: 1.4;
+                    @page {
+                        margin: 0;
+                        size: auto;
                     }
-                    .center { text-align: center; }
-                    .dashed { border-top: 1px dashed #555; margin: 12px 0; }
-                    table { width: 100%; border-collapse: collapse; }
-                    .bold { font-weight: bold; }
-                    .header-title { font-size: 18px; font-weight: bold; }
-                    .total-row { font-size: 16px; font-weight: bold; }
+                    body {
+                        font-family: 'Courier New', Courier, monospace;
+                        font-size: 13px;
+                        color: #000;
+                        background: #fff;
+                        margin: 0;
+                        padding: 10px;
+                        line-height: 1.35;
+                    }
+                    pre {
+                        font-family: 'Courier New', Courier, monospace;
+                        font-size: 13px;
+                        color: #000;
+                        margin: 0;
+                        padding: 0;
+                        white-space: pre-wrap;
+                        word-break: break-all;
+                        max-width: $maxWidthPx;
+                    }
                 </style>
             </head>
             <body>
-                <div class="center">
-                    <div class="header-title">$storeName</div>
-                    <div>$storeAddress</div>
-                    <div style="margin-top:4px; font-size:11px; color:#555;">DELIVIO PARTNER RECEIPT</div>
-                </div>
-                <div class="dashed"></div>
-                <div><strong>Order:</strong> ${order.orderNumber}</div>
-                <div><strong>Date:</strong> ${FormatUtils.formatDateTime(order.placedAtTimestamp)}</div>
-                <div><strong>Customer:</strong> ${order.customerName}</div>
-                <div><strong>Phone:</strong> ${order.customerPhone}</div>
-                <div><strong>Delivery:</strong> ${order.deliveryAddress.formatted}</div>
-                <div class="dashed"></div>
-                <table>
-                    $itemsHtml
-                </table>
-                <div class="dashed"></div>
-                <table>
-                    <tr><td>Items Subtotal</td><td style="text-align:right;">${FormatUtils.formatCurrency(order.subtotal)}</td></tr>
-                    $tipRow
-                    $serviceFeeRow
-                    $discountRow
-                    <tr class="total-row" style="border-top:1px solid #111;">
-                        <td style="padding-top:6px;">TOTAL</td>
-                        <td style="text-align:right; padding-top:6px;">${FormatUtils.formatCurrency(order.receiptTotal)}</td>
-                    </tr>
-                </table>
-                <div style="margin-top:8px;"><strong>Payment:</strong> ${order.formattedPaymentMethod}</div>
-                <div class="dashed"></div>
-                <div class="center" style="font-size:11px; margin-top:12px;">
-                    Thank you for choosing Delivio!<br/>
-                    Powered by Delivio Merchant OS
-                </div>
+                <pre>$escaped</pre>
             </body>
             </html>
         """.trimIndent()
     }
 
-    fun printOrderReceipt(activity: Activity, order: Order, storeName: String, storeAddress: String) {
+    fun printOrderReceipt(activity: Activity, order: Order, storeName: String, paperSize: String = "80mm") {
         try {
             val webView = WebView(activity)
-            val html = generateReceiptHtml(order, storeName, storeAddress)
+            val html = generateReceiptHtml(order, storeName, paperSize)
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     val printManager = activity.getSystemService(Context.PRINT_SERVICE) as? PrintManager
                     val printAdapter = webView.createPrintDocumentAdapter("Delivio_Receipt_${order.orderNumber}")
                     val jobName = "Receipt ${order.orderNumber}"
+                    val mediaSize = if (paperSize.contains("58", ignoreCase = true)) {
+                        PrintAttributes.MediaSize.ISO_A7
+                    } else {
+                        PrintAttributes.MediaSize.ISO_A6
+                    }
                     val printAttributes = PrintAttributes.Builder()
-                        .setMediaSize(PrintAttributes.MediaSize.ISO_A6)
+                        .setMediaSize(mediaSize)
                         .setResolution(PrintAttributes.Resolution("thermal", "Thermal Printer", 203, 203))
                         .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
                         .build()
                     printManager?.print(jobName, printAdapter, printAttributes)
                 }
             }
-            webView.loadDataWithBaseURL(null, html, "text/HTML", "UTF-8", null)
+            webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
         } catch (e: Exception) {
-            shareReceiptAsText(activity, order, storeName, storeAddress)
+            shareReceiptAsText(activity, order, storeName, paperSize)
         }
     }
 
-    fun shareReceiptAsText(context: Context, order: Order, storeName: String, storeAddress: String) {
-        val receiptText = generateFormattedReceiptText(order, storeName, storeAddress)
+    fun shareReceiptAsText(context: Context, order: Order, storeName: String, paperSize: String = "80mm") {
+        val receiptText = generateFormattedReceiptText(order, storeName, paperSize)
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND
             putExtra(Intent.EXTRA_TEXT, receiptText)

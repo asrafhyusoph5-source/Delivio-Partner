@@ -28,10 +28,12 @@ fun DelivioTopBar(
     settings: MerchantSettings,
     onToggleOpen: () -> Unit,
     currentTime: Long = System.currentTimeMillis(),
+    isServiceLocked: Boolean = false,
+    serviceLockMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime)
+    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -89,7 +91,10 @@ fun DelivioTopBar(
                                     if (effectiveOpen) StatusOpenGreen.copy(alpha = 0.15f)
                                     else StatusClosedRed.copy(alpha = 0.15f)
                                 )
-                                .clickable { onToggleOpen() }
+                                .then(
+                                    if (!isServiceLocked) Modifier.clickable { onToggleOpen() }
+                                    else Modifier
+                                )
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                                 .testTag("topbar_status_chip")
                         ) {

@@ -699,23 +699,35 @@ fun OrderCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     order.items.forEach { item ->
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(vertical = 2.dp)
                         ) {
-                            Text(
-                                text = "${item.quantity}x ${item.name}${if (item.selectedSize != null) " (${item.selectedSize})" else ""}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = FormatUtils.formatCurrency(item.lineTotal),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "${item.quantity}x ${item.name}${if (item.selectedSize != null) " (${item.selectedSize})" else ""}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = FormatUtils.formatCurrency(item.lineTotal),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            item.selections.forEach { sel ->
+                                val selPriceStr = if (sel.price > 0.0) " (+₱${FormatUtils.formatCurrency(sel.price)})" else ""
+                                Text(
+                                    text = "   + ${sel.choiceName}$selPriceStr",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
 

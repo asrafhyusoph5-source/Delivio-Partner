@@ -220,6 +220,17 @@ fun OrderEditDialog(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        if (item.selections.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            item.selections.forEach { sel ->
+                                                val priceStr = if (sel.price > 0.0) " (+₱${FormatUtils.formatCurrency(sel.price)})" else ""
+                                                Text(
+                                                    text = "   + ${sel.choiceName}$priceStr",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Line total
@@ -530,7 +541,7 @@ fun OrderEditDialog(
     swapTargetItem?.let { target ->
         val candidateItems = remember(availableShopItems, target) {
             availableShopItems.filter {
-                it.inStock && it.price <= target.effectivePrice && it.id != target.menuItemId
+                it.inStock && !it.hasSets && it.price <= target.effectivePrice && it.id != target.menuItemId
             }
         }
 
@@ -540,7 +551,7 @@ fun OrderEditDialog(
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Select an available shop item of equal or lower price (max ₱${FormatUtils.formatCurrency(target.effectivePrice)}):",
+                        text = "Select an available set-less shop item of equal or lower price (max ₱${FormatUtils.formatCurrency(target.effectivePrice)}):",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -548,7 +559,7 @@ fun OrderEditDialog(
 
                     if (candidateItems.isEmpty()) {
                         Text(
-                            text = "No available items with unit price ≤ ₱${FormatUtils.formatCurrency(target.effectivePrice)} found in shop inventory.",
+                            text = "No available items without sets with unit price ≤ ₱${FormatUtils.formatCurrency(target.effectivePrice)} found in shop inventory.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                             fontWeight = FontWeight.Medium
@@ -573,7 +584,9 @@ fun OrderEditDialog(
                                                     menuItemId = shopItem.id,
                                                     name = shopItem.name,
                                                     price = shopItem.price,
-                                                    unitPrice = shopItem.price
+                                                    basePrice = shopItem.price,
+                                                    unitPrice = shopItem.price,
+                                                    selections = emptyList()
                                                 )
                                                 val updatedList = currentItems.toMutableList()
                                                 updatedList[idx] = swapped

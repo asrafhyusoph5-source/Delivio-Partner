@@ -33,6 +33,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val orders = repository.orders
     val newOrderAlert = repository.newOrderAlert
     val categories = repository.categories
+    val subcategories = repository.subcategories
     val menuItems = repository.menuItems
     val payouts = repository.payouts
     val promos = repository.promos
@@ -40,6 +41,11 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val changeRequests = repository.changeRequests
     val walletTransactions = repository.walletTransactions
     val sharedWalletBalance = repository.sharedWalletBalance
+    val isServiceLocked = repository.isServiceLocked
+    val serviceLockMessage = repository.serviceLockMessage
+    val reviews = repository.reviews
+    val averageRating = repository.averageRating
+    val reviewsCount = repository.reviewsCount
 
     // Periodic time ticker for checking scheduled orders (every 30 seconds)
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
@@ -99,7 +105,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
         if (newlyDue.isNotEmpty()) {
             newlyDue.forEach { alertedScheduledDueOrderIds.add(it.id) }
-            SoundVibrationHelper.playNewOrderAlert(getApplication())
+            if (!isServiceLocked.value) {
+                SoundVibrationHelper.playNewOrderAlert(getApplication())
+            }
         }
     }
 
@@ -136,6 +144,13 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     private val _selectedCategoryId = MutableStateFlow<String?>(null)
     val selectedCategoryId: StateFlow<String?> = _selectedCategoryId.asStateFlow()
+
+    private val _selectedSubcategoryId = MutableStateFlow<String?>(null)
+    val selectedSubcategoryId: StateFlow<String?> = _selectedSubcategoryId.asStateFlow()
+
+    fun setMenuSubcategoryFilter(subId: String?) {
+        _selectedSubcategoryId.value = subId
+    }
 
     private val _isMultiSelectMode = MutableStateFlow(false)
     val isMultiSelectMode: StateFlow<Boolean> = _isMultiSelectMode.asStateFlow()
@@ -182,6 +197,56 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val editingMenuItem: StateFlow<MenuItem?> = _editingMenuItem.asStateFlow()
     private val _isNewMenuItem = MutableStateFlow(false)
     val isNewMenuItem: StateFlow<Boolean> = _isNewMenuItem.asStateFlow()
+
+    // Inbox state
+    val inboxMessages: StateFlow<List<InboxMessage>> = repository.inboxMessages
+    val unreadInboxCount: StateFlow<Int> = repository.unreadInboxCount
+    val inboxBannerMessage: StateFlow<String?> = repository.inboxBannerMessage
+
+    private val _showInboxScreen = MutableStateFlow(false)
+    val showInboxScreen: StateFlow<Boolean> = _showInboxScreen.asStateFlow()
+
+    fun openInbox() {
+        _showInboxScreen.value = true
+    }
+
+    fun closeInbox() {
+        _showInboxScreen.value = false
+    }
+
+    fun markInboxMessageAsRead(messageId: String) {
+        repository.markInboxMessageAsRead(messageId)
+    }
+
+    fun markAllInboxMessagesAsRead() {
+        repository.markAllInboxMessagesAsRead()
+    }
+
+    fun dismissInboxBanner() {
+        repository.dismissInboxBanner()
+    }
+
+    private val _showStoreProfileScreen = MutableStateFlow(false)
+    val showStoreProfileScreen: StateFlow<Boolean> = _showStoreProfileScreen.asStateFlow()
+
+    fun openStoreProfile() {
+        _showStoreProfileScreen.value = true
+    }
+
+    fun closeStoreProfile() {
+        _showStoreProfileScreen.value = false
+    }
+
+    private val _showReviewsScreen = MutableStateFlow(false)
+    val showReviewsScreen: StateFlow<Boolean> = _showReviewsScreen.asStateFlow()
+
+    fun openReviews() {
+        _showReviewsScreen.value = true
+    }
+
+    fun closeReviews() {
+        _showReviewsScreen.value = false
+    }
 
     private val _showMapLocationScreen = MutableStateFlow(false)
     val showMapLocationScreen: StateFlow<Boolean> = _showMapLocationScreen.asStateFlow()
@@ -338,7 +403,12 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleStoreOpen() {
-        val currentEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings.value)
+        if (isServiceLocked.value) {
+            val msg = serviceLockMessage.value ?: "Service is disabled by admin in this city. Your store is closed automatically."
+            showSnackbar(msg)
+            return
+        }
+        val currentEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings.value, isServiceLocked = false)
         if (currentEffectiveOpen) {
             val activeOrders = orders.value.filter {
                 it.status == OrderStatus.PREPARING || it.status == OrderStatus.READY || it.status == OrderStatus.PLACED_ORDER
@@ -401,21 +471,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateMerchantProfile(
+        changedFields: Map<String, Any>,
+        onDone: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        _isActionLoading.value = true
+        repository.updateMerchantProfile(changedFields) { success, error ->
+            _isActionLoading.value = false
+            onDone(success, error)
+        }
+    }
+
+    fun updateMerchantProfile(
         ownerName: String,
         phone: String,
         logoUrl: String,
         onDone: (Boolean, String?) -> Unit = { _, _ -> }
     ) {
-        _isActionLoading.value = true
-        repository.updateMerchantProfile(ownerName, phone, logoUrl) { success, error ->
-            _isActionLoading.value = false
-            if (success) {
-                showSnackbar("Profile updated successfully")
-            } else {
-                showSnackbar(error ?: "Failed to update profile")
-            }
-            onDone(success, error)
-        }
+        val fields = mutableMapOf<String, Any>()
+        if (ownerName.trim() != settings.value.ownerName.trim()) fields["ownerName"] = ownerName.trim()
+        if (phone.trim() != settings.value.phone.trim()) fields["phone"] = phone.trim()
+        if (logoUrl.trim() != settings.value.logoUrl.trim()) fields["logoUrl"] = logoUrl.trim()
+        updateMerchantProfile(fields, onDone)
     }
 
     fun updateStoreSettings(
@@ -841,10 +917,15 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _editingMenuItem.value = null
     }
 
-    fun saveMenuItem(item: MenuItem) {
-        repository.saveMenuItem(item)
-        _editingMenuItem.value = null
-        SoundVibrationHelper.playClickHaptic(getApplication())
+    fun saveMenuItem(item: MenuItem, onResult: ((Boolean, String?) -> Unit)? = null) {
+        repository.saveMenuItem(item) { success, errorMsg ->
+            if (success) {
+                _editingMenuItem.value = null
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Product saved successfully")
+            }
+            onResult?.invoke(success, errorMsg)
+        }
     }
 
     fun deleteMenuItem(itemId: String) {
@@ -854,8 +935,20 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun duplicateMenuItem(itemId: String) {
         val item = menuItems.value.find { it.id == itemId } ?: return
-        val duplicate = item.copy(id = "", name = "${item.name} (Copy)")
-        repository.saveMenuItem(duplicate)
+        val copiedSets = item.sets.map { s ->
+            s.copy(
+                id = java.util.UUID.randomUUID().toString(),
+                choices = s.choices.map { c -> c.copy(id = java.util.UUID.randomUUID().toString()) }
+            )
+        }
+        val duplicate = item.copy(id = "", name = "${item.name} (Copy)", sets = copiedSets)
+        repository.saveMenuItem(duplicate) { success, errorMsg ->
+            if (success) {
+                showSnackbar("Product duplicated")
+            } else {
+                showSnackbar("Error duplicating product: ${errorMsg ?: "Unknown error"}")
+            }
+        }
     }
 
     fun quickAssignCategory(item: MenuItem, newCategoryName: String) {
@@ -879,6 +972,41 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleCategoryVisibility(catId: String) {
         // Disabled per business type category rules
+    }
+
+    // --- Subcategories (Category Class) Management ---
+
+    fun createSubcategory(name: String, onResult: (Boolean, Subcategory?, String?) -> Unit) {
+        repository.createSubcategory(name) { success, created, err ->
+            if (success) {
+                showSnackbar("Your Category has been added")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+            onResult(success, created, err)
+        }
+    }
+
+    fun renameSubcategory(subId: String, newName: String, onResult: (Boolean, String?) -> Unit) {
+        repository.renameSubcategory(subId, newName) { success, err ->
+            if (success) {
+                showSnackbar("Category renamed successfully")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun deleteSubcategory(subId: String, onResult: (Boolean, String?) -> Unit) {
+        repository.deleteSubcategory(subId) { success, err ->
+            if (success) {
+                showSnackbar("Category deleted")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
     }
 
     // --- Earnings & Finance ---

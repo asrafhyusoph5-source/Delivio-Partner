@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +37,7 @@ fun ProfileScreen(
     staff: List<StaffMember>,
     changeRequests: List<ChangeRequest> = emptyList(),
     onRequestAdminChange: (kind: String, requestedValue: String, reason: String) -> Unit = { _, _, _ -> },
+    onOpenStoreProfile: () -> Unit = {},
     onUpdateMerchantProfile: (ownerName: String, phone: String, logoUrl: String) -> Unit = { _, _, _ -> },
     onRequestRiderManual: () -> Unit,
     onOpenColorPicker: () -> Unit,
@@ -45,6 +47,13 @@ fun ProfileScreen(
     onOpenStaffDialog: () -> Unit,
     onLogout: () -> Unit,
     isOwner: Boolean = true,
+    canAccessInbox: Boolean = true,
+    unreadInboxCount: Int = 0,
+    onOpenInbox: () -> Unit = {},
+    canAccessReviews: Boolean = true,
+    reviewsCount: Int = 0,
+    averageRating: Double = 5.0,
+    onOpenReviews: () -> Unit = {},
     walletBalance: Double = 0.0,
     isSharedWallet: Boolean = false,
     onOpenWallet: () -> Unit = {},
@@ -62,9 +71,6 @@ fun ProfileScreen(
 ) {
     val customColors = LocalDelivioColors.current
 
-    var ownerNameInput by remember(settings.ownerName) { mutableStateOf(settings.ownerName) }
-    var phoneInput by remember(settings.phone) { mutableStateOf(settings.phone) }
-    var logoUrlInput by remember(settings.logoUrl) { mutableStateOf(settings.logoUrl) }
     var showTypeChangeDialog by remember { mutableStateOf(false) }
 
     var soundEnabled by remember(settings.soundEnabled) { mutableStateOf(settings.soundEnabled) }
@@ -85,25 +91,50 @@ fun ProfileScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Merchant Profile Header Card (Live from merchants/{merchantId})
+        // 1. Merchant Profile Header Card (Tappable: opens Store Profile Details screen)
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onOpenStoreProfile() }
+                .testTag("profile_header_card")
         ) {
             Column(modifier = Modifier.padding(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MerchantLogoView(
-                        storeName = settings.storeName,
-                        logoUrl = settings.logoUrl,
-                        bannerUrl = settings.bannerUrl,
-                        imageUrl = settings.imageUrl,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clip(CircleShape),
-                        letterSize = 28.sp
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Logo with small pencil badge
+                    Box(modifier = Modifier.size(72.dp)) {
+                        MerchantLogoView(
+                            storeName = settings.storeName,
+                            logoUrl = settings.logoUrl,
+                            bannerUrl = settings.bannerUrl,
+                            imageUrl = settings.imageUrl,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            letterSize = 28.sp
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .align(Alignment.BottomEnd)
+                                .clip(CircleShape)
+                                .background(customColors.accent)
+                                .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit store profile",
+                                tint = customColors.onAccent,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.width(16.dp))
 
@@ -153,6 +184,15 @@ fun ProfileScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Chevron on the right to indicate tappable
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "Edit Store Profile",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 HorizontalDivider(
@@ -253,6 +293,165 @@ fun ProfileScreen(
             }
         }
 
+        // INBOX ROW (Owner and Manager only)
+        if (canAccessInbox) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenInbox() }
+                    .testTag("profile_inbox_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(customColors.accentTint),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Inbox,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Inbox",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = "Platform updates, order notices, and promotions",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (unreadInboxCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.error
+                            ) {
+                                Text(
+                                    text = "$unreadInboxCount",
+                                    color = MaterialTheme.colorScheme.onError,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Inbox",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // REVIEWS ROW (Owner and Manager only)
+        if (canAccessReviews) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenReviews() }
+                    .testTag("profile_reviews_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFEF3C7)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Reviews",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = if (reviewsCount > 0) "Customer ratings & feedback" else "No reviews yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (reviewsCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFFEF3C7)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "%.1f (%d)".format(averageRating, reviewsCount),
+                                        color = Color(0xFF92400E),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Reviews",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         // 2. BUSINESS TYPE IS LOCKED (Read-only chip with lock + Request a change)
         Card(
             shape = RoundedCornerShape(18.dp),
@@ -342,122 +541,7 @@ fun ProfileScreen(
             }
         }
 
-        // 3. EDIT PROFILE DETAILS (Owner name, Phone, Logo URL with live preview; Shop Name & Email locked)
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Store Profile Details",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = "Owner name, phone, and logo URL save directly to your store profile.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
 
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Shop Name (Read-only)
-                OutlinedTextField(
-                    value = settings.storeName,
-                    onValueChange = {},
-                    readOnly = true,
-                    enabled = false,
-                    label = { Text("Shop Name") },
-                    leadingIcon = { Icon(Icons.Default.Storefront, contentDescription = null) },
-                    trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
-                    supportingText = { Text("Shop name cannot be edited directly", fontSize = 11.sp) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_shop_name_readonly")
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Email (Read-only)
-                OutlinedTextField(
-                    value = settings.email,
-                    onValueChange = {},
-                    readOnly = true,
-                    enabled = false,
-                    label = { Text("Login Email") },
-                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
-                    trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
-                    supportingText = { Text("Account login email is permanently fixed", fontSize = 11.sp) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_email_readonly")
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Owner Name (Editable)
-                OutlinedTextField(
-                    value = ownerNameInput,
-                    onValueChange = { ownerNameInput = it },
-                    label = { Text("Owner Name") },
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_owner_name_input")
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Phone (Editable)
-                OutlinedTextField(
-                    value = phoneInput,
-                    onValueChange = { phoneInput = it },
-                    label = { Text("Phone Number") },
-                    leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_phone_input")
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Logo URL Field with live preview & status
-                ImageUrlFieldWithLivePreview(
-                    label = "Store Logo URL",
-                    url = logoUrlInput,
-                    onUrlChange = { logoUrlInput = it },
-                    placeholder = "https://example.com/logo.png",
-                    testTag = "profile_logo_url_input"
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Button(
-                    onClick = {
-                        onUpdateMerchantProfile(ownerNameInput, phoneInput, logoUrlInput)
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = customColors.accent,
-                        contentColor = customColors.onAccent
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("save_profile_details_btn")
-                ) {
-                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Save Profile Changes", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                }
-            }
-        }
 
         // 4. REQUEST A RIDER BUTTON (Kept as requested!)
         Card(

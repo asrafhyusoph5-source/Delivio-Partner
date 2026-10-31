@@ -64,8 +64,12 @@ object BusinessHoursHelper {
      */
     fun isEffectiveOpen(
         settings: MerchantSettings,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        isServiceLocked: Boolean = false
     ): Boolean {
+        if (isServiceLocked) {
+            return false
+        }
         if (!settings.status.equals("active", ignoreCase = true)) {
             return false
         }

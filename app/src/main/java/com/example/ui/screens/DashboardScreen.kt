@@ -45,10 +45,12 @@ fun DashboardScreen(
     soldOutItemsCount: Int,
     lowStockCount: Int,
     currentTime: Long = System.currentTimeMillis(),
+    isServiceLocked: Boolean = false,
+    serviceLockMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime)
+    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
 
     val activeOrders = orders.filter {
         it.status == OrderStatus.PLACED_ORDER ||
@@ -105,7 +107,9 @@ fun DashboardScreen(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = if (settings.autoSchedule) {
+                                    text = if (isServiceLocked) {
+                                        "Closed"
+                                    } else if (settings.autoSchedule) {
                                         if (effectiveOpen) "Open" else "Closed"
                                     } else {
                                         if (effectiveOpen) "Open - Accepting Orders" else "Closed - Not Accepting Orders"
@@ -114,7 +118,7 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     color = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
                                 )
-                                if (settings.autoSchedule) {
+                                if (settings.autoSchedule && !isServiceLocked) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Surface(
                                         shape = RoundedCornerShape(6.dp),
@@ -130,11 +134,13 @@ fun DashboardScreen(
                                     }
                                 }
                             }
-                            val nextDesc = if (settings.autoSchedule) {
+                            val nextDesc = if (!isServiceLocked && settings.autoSchedule) {
                                 com.example.util.BusinessHoursHelper.getNextScheduleChangeDescription(settings, currentTime)
                             } else ""
                             Text(
-                                text = if (nextDesc.isNotBlank()) {
+                                text = if (isServiceLocked) {
+                                    serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
+                                } else if (nextDesc.isNotBlank()) {
                                     nextDesc
                                 } else if (effectiveOpen) {
                                     "Store is currently visible to customers"
@@ -142,32 +148,39 @@ fun DashboardScreen(
                                     "Store is hidden from customer marketplace"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isServiceLocked) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
                     Switch(
                         checked = effectiveOpen,
-                        onCheckedChange = { onToggleOpen() },
+                        onCheckedChange = { if (!isServiceLocked) onToggleOpen() },
+                        enabled = !isServiceLocked,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = StatusOpenGreen,
                             checkedTrackColor = StatusOpenGreen.copy(alpha = 0.3f),
                             uncheckedThumbColor = StatusClosedRed,
-                            uncheckedTrackColor = StatusClosedRed.copy(alpha = 0.3f)
+                            uncheckedTrackColor = StatusClosedRed.copy(alpha = 0.3f),
+                            disabledUncheckedThumbColor = StatusClosedRed.copy(alpha = 0.7f),
+                            disabledUncheckedTrackColor = StatusClosedRed.copy(alpha = 0.2f)
                         ),
                         modifier = Modifier.testTag("dashboard_open_close_switch")
                     )
                 }
 
-                // After closing, show red banner: "Closed - not receiving new orders until <time> or until you reopen"
+                // After closing or when locked, show red banner
                 if (!effectiveOpen) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    val closedUntilTimeStr = com.example.util.BusinessHoursHelper.formatClosedUntilTime(settings, currentTime)
-                    val bannerText = if (closedUntilTimeStr != null) {
-                        "Closed - not receiving new orders until $closedUntilTimeStr or until you reopen"
+                    val bannerText = if (isServiceLocked) {
+                        serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
                     } else {
-                        "Closed - not receiving new orders until you reopen"
+                        val closedUntilTimeStr = com.example.util.BusinessHoursHelper.formatClosedUntilTime(settings, currentTime)
+                        if (closedUntilTimeStr != null) {
+                            "Closed - not receiving new orders until $closedUntilTimeStr or until you reopen"
+                        } else {
+                            "Closed - not receiving new orders until you reopen"
+                        }
                     }
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -179,7 +192,7 @@ fun DashboardScreen(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("🚫", fontSize = 14.sp)
+                            Text(if (isServiceLocked) "🔒" else "🚫", fontSize = 14.sp)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = bannerText,

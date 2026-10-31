@@ -82,15 +82,25 @@ data class OrderModifier(
     val price: Double = 0.0
 )
 
+data class OrderItemSelection(
+    val setId: String = "",
+    val setName: String = "",
+    val choiceId: String = "",
+    val choiceName: String = "",
+    val price: Double = 0.0
+)
+
 data class OrderItem(
     val id: String = "",
     val menuItemId: String = "",
     val name: String = "",
     val quantity: Int = 1,
     val price: Double = 0.0,
+    val basePrice: Double = price,
     val unitPrice: Double = price,
     val selectedSize: String? = null,
     val modifiers: List<OrderModifier> = emptyList(),
+    val selections: List<OrderItemSelection> = emptyList(),
     val notes: String? = null
 ) {
     val effectivePrice: Double
@@ -226,9 +236,21 @@ data class Order(
     val cashToCollect: Double? = null,
     val walletAdjustDue: Double? = null,
     val riderVehicle: String = "",
+    val note: String = "",
     val feesRaw: Map<String, Any?> = emptyMap(),
     val rawJson: String = ""
 ) {
+    val effectiveMerchantNote: String
+        get() {
+            if (note.isNotBlank()) return note.trim()
+            val fNote = (feesRaw["notes"] as? String)
+                ?: (feesRaw["specialInstructions"] as? String)
+                ?: (feesRaw["merchantNote"] as? String)
+                ?: (feesRaw["note"] as? String)
+                ?: ""
+            return fNote.trim()
+        }
+
     val totalItemCount: Int
         get() = items.sumOf { it.quantity }
 
@@ -407,11 +429,39 @@ data class ChangeRequest(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+data class Subcategory(
+    val id: String = "",
+    val name: String = "",
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+data class ProductSetChoice(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String = "",
+    val price: Double = 0.0,
+    val available: Boolean = true
+)
+
+data class ProductSet(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String = "",
+    val subcategoryId: String? = null,
+    val required: Boolean = true,
+    val minSelect: Int = 1,
+    val maxSelect: Int = 1,
+    val sortOrder: Int = 0,
+    val choices: List<ProductSetChoice> = emptyList()
+)
+
 data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
     val categoryId: String = "",
     val categoryName: String = "",
+    val subcategoryId: String? = null,
+    val subcategoryName: String? = null,
     val name: String = "",
     val description: String = "",
     val price: Double = 0.0,
@@ -421,6 +471,8 @@ data class MenuItem(
     val businessType: BusinessType = BusinessType.FOOD,
     val iconEmoji: String = "🍔",
     val imageUrl: String = "",
+    val hasSets: Boolean = false,
+    val sets: List<ProductSet> = emptyList(),
     // Food specific
     val prepTimeMinutes: Int = 15,
     val tags: List<String> = emptyList(),
@@ -584,6 +636,7 @@ data class MerchantSettings(
     val logoUrl: String = "",
     val bannerUrl: String = "",
     val imageUrl: String = "",
+    val description: String = "",
     val bankName: String = "",
     val accountHolder: String = "",
     val accountNumber: String = "",
@@ -596,4 +649,28 @@ data class MerchantSettings(
     val closedUntil: Long? = null,
     val openUntil: Long? = null,
     val closedAt: Long? = null
+)
+
+data class InboxMessage(
+    val id: String = "",
+    val merchantId: String = "",
+    val audience: String = "",
+    val title: String = "",
+    val body: String = "",
+    val category: String = "update", // "update" | "order" | "wallet" | "promo" | "system" | "admin"
+    val imageUrl: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val isRead: Boolean = false
+)
+
+data class CustomerReview(
+    val id: String = "",
+    val merchantId: String = "",
+    val orderId: String = "",
+    val orderNumber: String = "",
+    val ratingMerchant: Double = 5.0,
+    val comment: String = "",
+    val customerName: String = "Customer",
+    val itemsSummary: String = "",
+    val createdAt: Long = System.currentTimeMillis()
 )

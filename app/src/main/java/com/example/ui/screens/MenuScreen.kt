@@ -30,6 +30,7 @@ import com.example.data.model.BusinessType
 import com.example.data.model.MenuCategory
 import com.example.data.model.MenuItem
 import com.example.data.model.PromoDeal
+import com.example.data.model.Subcategory
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
@@ -41,6 +42,7 @@ import com.example.util.CONVENIENCE_CATEGORIES
 @Composable
 fun MenuScreen(
     categories: List<MenuCategory>,
+    subcategories: List<Subcategory> = emptyList(),
     menuItems: List<MenuItem>,
     promos: List<PromoDeal>,
     businessType: BusinessType,
@@ -50,6 +52,8 @@ fun MenuScreen(
     onStockFilterChange: (String) -> Unit,
     selectedCategoryId: String?,
     onCategorySelect: (String?) -> Unit,
+    selectedSubcategoryId: String? = null,
+    onSubcategorySelect: (String?) -> Unit = {},
     isMultiSelectMode: Boolean,
     selectedItemIds: Set<String>,
     onToggleMultiSelect: () -> Unit,
@@ -105,8 +109,23 @@ fun MenuScreen(
         menuItems.count { it.businessType == businessType }
     }
 
-    // Filter items by category, business type, stock, and search query
-    val displayedItems = remember(menuItems, businessType, selectedCategoryId, stockFilter, searchQuery, allowedCategories, categories) {
+    // Subcategory counts for chips
+    val subcategoryCounts = remember(menuItems, subcategories, businessType) {
+        subcategories.associate { sub ->
+            sub.id to menuItems.count {
+                it.businessType == businessType && (it.subcategoryId == sub.id || (it.subcategoryId == null && it.subcategoryName.equals(sub.name, ignoreCase = true)))
+            }
+        }
+    }
+
+    val otherSubcategoryCount = remember(menuItems, businessType) {
+        menuItems.count {
+            it.businessType == businessType && it.subcategoryId.isNullOrBlank() && it.subcategoryName.isNullOrBlank()
+        }
+    }
+
+    // Filter items by category, subcategory, business type, stock, and search query
+    val displayedItems = remember(menuItems, businessType, selectedCategoryId, selectedSubcategoryId, stockFilter, searchQuery, allowedCategories, categories, subcategories) {
         menuItems.filter { item ->
             val matchType = item.businessType == businessType
             val itemCat = resolveCategoryName(item)
@@ -118,6 +137,12 @@ fun MenuScreen(
                     itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
                 }
             }
+            val matchSubcategory = when (selectedSubcategoryId) {
+                null -> true
+                "OTHER" -> item.subcategoryId.isNullOrBlank() && item.subcategoryName.isNullOrBlank()
+                else -> item.subcategoryId == selectedSubcategoryId || item.subcategoryName.equals(selectedSubcategoryId, ignoreCase = true) ||
+                        subcategories.find { it.id == selectedSubcategoryId }?.name?.let { item.subcategoryName.equals(it, ignoreCase = true) } == true
+            }
             val matchStock = when (stockFilter) {
                 "In stock" -> item.inStock
                 "Sold out" -> !item.inStock
@@ -127,7 +152,7 @@ fun MenuScreen(
                     item.name.contains(searchQuery, ignoreCase = true) ||
                     item.description.contains(searchQuery, ignoreCase = true) ||
                     item.sku.contains(searchQuery, ignoreCase = true)
-            matchType && matchCategory && matchStock && matchQuery
+            matchType && matchCategory && matchSubcategory && matchStock && matchQuery
         }
     }
 
@@ -327,6 +352,58 @@ fun MenuScreen(
             }
         }
 
+        // Subcategory ("Category Class") Filter Chips
+        if (subcategories.isNotEmpty() || otherSubcategoryCount > 0) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = selectedSubcategoryId == null,
+                    onClick = { onSubcategorySelect(null) },
+                    label = { Text("All Classes (${totalThisTypeCount})", fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = customColors.accentTint,
+                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    modifier = Modifier.testTag("subcat_chip_all")
+                )
+
+                subcategories.forEach { sub ->
+                    val count = subcategoryCounts[sub.id] ?: 0
+                    val isSelected = selectedSubcategoryId == sub.id
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSubcategorySelect(if (isSelected) null else sub.id) },
+                        label = { Text("${sub.name} ($count)", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = customColors.accentTint,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier.testTag("subcat_chip_${sub.id}")
+                    )
+                }
+
+                if (otherSubcategoryCount > 0) {
+                    val isSelected = selectedSubcategoryId == "OTHER"
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSubcategorySelect(if (isSelected) null else "OTHER") },
+                        label = { Text("Other ($otherSubcategoryCount)", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = customColors.accentTint,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier.testTag("subcat_chip_other")
+                    )
+                }
+            }
+        }
+
         // Quick Stock Availability Filter Chips
         Row(
             modifier = Modifier
@@ -410,6 +487,35 @@ fun MenuScreen(
                 }
             }
         } else {
+            val groupedItems = remember(displayedItems, subcategories) {
+                val result = linkedMapOf<String, MutableList<MenuItem>>()
+                displayedItems.forEach { item ->
+                    val groupName = if (!item.subcategoryId.isNullOrBlank()) {
+                        subcategories.find { it.id == item.subcategoryId }?.name ?: (item.subcategoryName ?: "Other")
+                    } else if (!item.subcategoryName.isNullOrBlank()) {
+                        item.subcategoryName!!
+                    } else {
+                        "Other"
+                    }
+                    result.getOrPut(groupName) { mutableListOf() }.add(item)
+                }
+
+                val sortedKeys = result.keys.sortedWith(Comparator { a, b ->
+                    if (a == "Other" && b != "Other") 1
+                    else if (b == "Other" && a != "Other") -1
+                    else {
+                        val aIndex = subcategories.indexOfFirst { it.name.equals(a, ignoreCase = true) }
+                        val bIndex = subcategories.indexOfFirst { it.name.equals(b, ignoreCase = true) }
+                        if (aIndex != -1 && bIndex != -1) aIndex.compareTo(bIndex)
+                        else if (aIndex != -1) -1
+                        else if (bIndex != -1) 1
+                        else a.compareTo(b, ignoreCase = true)
+                    }
+                })
+
+                sortedKeys.map { key -> key to (result[key] ?: emptyList()) }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -417,20 +523,55 @@ fun MenuScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
             ) {
-                items(displayedItems, key = { it.id }) { item ->
-                    val isUncat = !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
-                    MenuItemRow(
-                        item = item,
-                        businessType = businessType,
-                        isUncategorized = isUncat,
-                        isMultiSelectMode = isMultiSelectMode,
-                        isSelected = selectedItemIds.contains(item.id),
-                        onSelectToggle = { onToggleItemSelection(item.id) },
-                        onToggleStock = { onToggleItemAvailability(item) },
-                        onEdit = { onEditItem(item) },
-                        onDuplicate = { onDuplicateItem(item.id) },
-                        onQuickAssign = { quickAssignTargetItem = item }
-                    )
+                groupedItems.forEach { (categoryClassName, itemsInGroup) ->
+                    item(key = "header_$categoryClassName") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = customColors.accent.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.padding(end = 8.dp)
+                            ) {
+                                Text(
+                                    text = categoryClassName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = customColors.accent,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Text(
+                                text = "• ${itemsInGroup.size} ${if (itemsInGroup.size == 1) "item" else "items"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
+
+                    items(itemsInGroup, key = { it.id }) { item ->
+                        val isUncat = !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
+                        MenuItemRow(
+                            item = item,
+                            businessType = businessType,
+                            isUncategorized = isUncat,
+                            isMultiSelectMode = isMultiSelectMode,
+                            isSelected = selectedItemIds.contains(item.id),
+                            onSelectToggle = { onToggleItemSelection(item.id) },
+                            onToggleStock = { onToggleItemAvailability(item) },
+                            onEdit = { onEditItem(item) },
+                            onDuplicate = { onDuplicateItem(item.id) },
+                            onQuickAssign = { quickAssignTargetItem = item }
+                        )
+                    }
                 }
             }
         }
@@ -609,8 +750,24 @@ fun MenuItemRow(
                             fontWeight = FontWeight.Bold,
                             color = if (isSoldOut) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                         ),
-                        maxLines = 1
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
+                    if (item.hasSets && item.sets.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${item.sets.size} ${if (item.sets.size == 1) "set" else "sets"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
 
                 if (isSoldOut) {

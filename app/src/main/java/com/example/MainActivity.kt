@@ -6,10 +6,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.*
 import com.example.ui.screens.*
@@ -83,7 +88,25 @@ class MainActivity : ComponentActivity() {
             val isActionLoading by viewModel.isActionLoading.collectAsStateWithLifecycle()
             val currentTime by viewModel.currentTime.collectAsStateWithLifecycle()
 
+            val inboxMessages by viewModel.inboxMessages.collectAsStateWithLifecycle()
+            val unreadInboxCount by viewModel.unreadInboxCount.collectAsStateWithLifecycle()
+            val inboxBannerMessage by viewModel.inboxBannerMessage.collectAsStateWithLifecycle()
+            val showInboxScreen by viewModel.showInboxScreen.collectAsStateWithLifecycle()
+            val showStoreProfileScreen by viewModel.showStoreProfileScreen.collectAsStateWithLifecycle()
+
+            val isServiceLocked by viewModel.isServiceLocked.collectAsStateWithLifecycle()
+            val serviceLockMessage by viewModel.serviceLockMessage.collectAsStateWithLifecycle()
+            val reviews by viewModel.reviews.collectAsStateWithLifecycle()
+            val averageRating by viewModel.averageRating.collectAsStateWithLifecycle()
+            val reviewsCount by viewModel.reviewsCount.collectAsStateWithLifecycle()
+            val showReviewsScreen by viewModel.showReviewsScreen.collectAsStateWithLifecycle()
+            val subcategories by viewModel.subcategories.collectAsStateWithLifecycle()
+            val selectedSubcategoryId by viewModel.selectedSubcategoryId.collectAsStateWithLifecycle()
+
             val isOwner = currentUser?.role != "staff"
+            val userRole = currentUser?.role?.lowercase() ?: "merchant"
+            val canAccessInbox = userRole in listOf("merchant", "owner", "partner", "manager")
+            val canAccessReviews = userRole in listOf("merchant", "owner", "partner", "manager")
 
             var isRegistering by remember { mutableStateOf(false) }
 
@@ -152,6 +175,60 @@ class MainActivity : ComponentActivity() {
                         onCashOutClick = { viewModel.openCashOutComingSoon() },
                         onBack = { viewModel.closeWalletScreen() }
                     )
+                } else if (showInboxScreen) {
+                    // Full-screen Merchant Inbox
+                    InboxScreen(
+                        messages = inboxMessages,
+                        unreadCount = unreadInboxCount,
+                        onMarkAsRead = { viewModel.markInboxMessageAsRead(it) },
+                        onMarkAllAsRead = { viewModel.markAllInboxMessagesAsRead() },
+                        onDismiss = { viewModel.closeInbox() }
+                    )
+                } else if (showStoreProfileScreen) {
+                    // Full-screen Store Profile Details route
+                    StoreProfileScreen(
+                        settings = settings,
+                        onSave = { changedFields, onResult ->
+                            viewModel.updateMerchantProfile(changedFields, onResult)
+                        },
+                        onBack = { viewModel.closeStoreProfile() }
+                    )
+                } else if (showReviewsScreen) {
+                    // Full-screen Customer Reviews route
+                    ReviewsScreen(
+                        reviews = reviews,
+                        averageRating = averageRating,
+                        reviewsCount = reviewsCount,
+                        onBack = { viewModel.closeReviews() }
+                    )
+                } else if (editingMenuItem != null) {
+                    // Full-screen Add / Edit Product route
+                    ProductEditScreen(
+                        item = editingMenuItem!!,
+                        isNew = isNewMenuItem,
+                        categories = categories,
+                        subcategories = subcategories,
+                        menuItems = menuItems,
+                        businessType = settings.businessType,
+                        onSave = { updatedItem, onComplete ->
+                            viewModel.saveMenuItem(updatedItem, onComplete)
+                        },
+                        onDelete = { itemId ->
+                            viewModel.deleteMenuItem(itemId)
+                        },
+                        onDismiss = {
+                            viewModel.closeEditMenuItem()
+                        },
+                        onCreateSubcategory = { name, onComplete ->
+                            viewModel.createSubcategory(name, onComplete)
+                        },
+                        onRenameSubcategory = { id, newName, onComplete ->
+                            viewModel.renameSubcategory(id, newName, onComplete)
+                        },
+                        onDeleteSubcategory = { id, onComplete ->
+                            viewModel.deleteSubcategory(id, onComplete)
+                        }
+                    )
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -180,7 +257,9 @@ class MainActivity : ComponentActivity() {
                             DelivioTopBar(
                                 settings = settings,
                                 onToggleOpen = { viewModel.toggleStoreOpen() },
-                                currentTime = currentTime
+                                currentTime = currentTime,
+                                isServiceLocked = isServiceLocked,
+                                serviceLockMessage = serviceLockMessage
                             )
                         },
                         bottomBar = {
@@ -225,6 +304,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     MenuScreen(
                                         categories = categories,
+                                        subcategories = subcategories,
                                         menuItems = menuItems,
                                         promos = promos,
                                         businessType = settings.businessType,
@@ -234,6 +314,8 @@ class MainActivity : ComponentActivity() {
                                         onStockFilterChange = { viewModel.setMenuStockFilter(it) },
                                         selectedCategoryId = selectedCategoryId,
                                         onCategorySelect = { viewModel.selectMenuCategory(it) },
+                                        selectedSubcategoryId = selectedSubcategoryId,
+                                        onSubcategorySelect = { viewModel.setMenuSubcategoryFilter(it) },
                                         isMultiSelectMode = isMultiSelectMode,
                                         selectedItemIds = selectedItemIds,
                                         onToggleMultiSelect = { viewModel.toggleMultiSelectMode() },
@@ -269,7 +351,9 @@ class MainActivity : ComponentActivity() {
                                         onViewAllOrders = { viewModel.selectTab(MerchantTab.ORDERS) },
                                         soldOutItemsCount = soldOutCount,
                                         lowStockCount = lowStockCount,
-                                        currentTime = currentTime
+                                        currentTime = currentTime,
+                                        isServiceLocked = isServiceLocked,
+                                        serviceLockMessage = serviceLockMessage
                                     )
                                 }
 
@@ -299,6 +383,7 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             }
                                         },
+                                        onOpenStoreProfile = { viewModel.openStoreProfile() },
                                         onUpdateMerchantProfile = { ownerName, phone, logoUrl ->
                                             viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
                                         },
@@ -312,6 +397,13 @@ class MainActivity : ComponentActivity() {
                                         onOpenStaffDialog = { viewModel.openStaffDialog() },
                                         onLogout = { viewModel.logout() },
                                         isOwner = isOwner,
+                                        canAccessInbox = canAccessInbox,
+                                        unreadInboxCount = unreadInboxCount,
+                                        onOpenInbox = { viewModel.openInbox() },
+                                        canAccessReviews = canAccessReviews,
+                                        reviewsCount = reviewsCount,
+                                        averageRating = averageRating,
+                                        onOpenReviews = { viewModel.openReviews() },
                                         walletBalance = if (!settings.linkedCustomerUid.isNullOrBlank() && sharedWalletBalance != null) sharedWalletBalance!! else settings.walletBalance,
                                         isSharedWallet = !settings.linkedCustomerUid.isNullOrBlank(),
                                         onOpenWallet = { viewModel.openWalletScreen() },
@@ -330,20 +422,22 @@ class MainActivity : ComponentActivity() {
 
                 // Global Modals & Dialogs
 
-                // 1. New Order Alert with sound/vibration
-                newOrderAlert?.let { alertOrder ->
-                    NewOrderAlertDialog(
-                        order = alertOrder,
-                        onAccept = { prepMinutes ->
-                            viewModel.confirmAcceptOrder(alertOrder.id, prepMinutes)
-                        },
-                        onReject = {
-                            viewModel.openRejectDialog(alertOrder)
-                        },
-                        onDismiss = {
-                            viewModel.dismissNewOrderAlert()
-                        }
-                    )
+                // 1. New Order Alert with sound/vibration (suppressed when service is locked)
+                if (!isServiceLocked) {
+                    newOrderAlert?.let { alertOrder ->
+                        NewOrderAlertDialog(
+                            order = alertOrder,
+                            onAccept = { prepMinutes ->
+                                viewModel.confirmAcceptOrder(alertOrder.id, prepMinutes)
+                            },
+                            onReject = {
+                                viewModel.openRejectDialog(alertOrder)
+                            },
+                            onDismiss = {
+                                viewModel.dismissNewOrderAlert()
+                            }
+                        )
+                    }
                 }
 
                 // 2. Reject Order Dialog
@@ -451,24 +545,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                // 9. Edit / Add Menu Item Dialog
-                editingMenuItem?.let { item ->
-                    MenuItemEditDialog(
-                        item = item,
-                        isNew = isNewMenuItem,
-                        categories = categories,
-                        businessType = settings.businessType,
-                        onSave = { updatedItem ->
-                            viewModel.saveMenuItem(updatedItem)
-                        },
-                        onDelete = { itemId ->
-                            viewModel.deleteMenuItem(itemId)
-                        },
-                        onDismiss = {
-                            viewModel.closeEditMenuItem()
-                        }
-                    )
-                }
 
                 // 10. Sold Out Duration Dialog
                 showSoldOutDurationTarget?.let { item ->
@@ -619,6 +695,68 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     )
+                }
+
+                // 19. In-app Inbox Banner
+                inboxBannerMessage?.let { bannerText ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 44.dp, start = 16.dp, end = 16.dp),
+                        contentAlignment = androidx.compose.ui.Alignment.TopCenter
+                    ) {
+                        Surface(
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shadowElevation = 8.dp,
+                            tonalElevation = 6.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.dismissInboxBanner()
+                                    viewModel.openInbox()
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = androidx.compose.material.icons.Icons.Default.Notifications,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = bannerText,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 2
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { viewModel.dismissInboxBanner() },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                                        contentDescription = "Dismiss",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -712,6 +712,16 @@ fun OrderDetailScreen(
                                 if (item.selectedSize != null) {
                                     Text("Size: ${item.selectedSize}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                                if (item.selections.isNotEmpty()) {
+                                    item.selections.forEach { sel ->
+                                        val pStr = if (sel.price > 0.0) " (+₱${FormatUtils.formatCurrency(sel.price)})" else ""
+                                        Text(
+                                            text = "   + ${sel.choiceName}$pStr",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                                 item.modifiers.forEach { mod ->
                                     Text("+ ${mod.name} (${FormatUtils.formatCurrency(mod.price)})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
