@@ -46,6 +46,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val reviews = repository.reviews
     val averageRating = repository.averageRating
     val reviewsCount = repository.reviewsCount
+    val riderReviews = repository.riderReviews
+    val riderAverageRating = repository.riderAverageRating
+    val riderReviewsCount = repository.riderReviewsCount
 
     // Periodic time ticker for checking scheduled orders (every 30 seconds)
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
@@ -237,14 +240,34 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _showStoreProfileScreen.value = false
     }
 
+    private val _showSettingsScreen = MutableStateFlow(false)
+    val showSettingsScreen: StateFlow<Boolean> = _showSettingsScreen.asStateFlow()
+
+    fun openSettings() {
+        _showSettingsScreen.value = true
+    }
+
+    fun closeSettings() {
+        _showSettingsScreen.value = false
+    }
+
     private val _showReviewsScreen = MutableStateFlow(false)
     val showReviewsScreen: StateFlow<Boolean> = _showReviewsScreen.asStateFlow()
+    val showRatingsScreen: StateFlow<Boolean> get() = showReviewsScreen
 
     fun openReviews() {
         _showReviewsScreen.value = true
     }
 
     fun closeReviews() {
+        _showReviewsScreen.value = false
+    }
+
+    fun openRatings() {
+        _showReviewsScreen.value = true
+    }
+
+    fun closeRatings() {
         _showReviewsScreen.value = false
     }
 

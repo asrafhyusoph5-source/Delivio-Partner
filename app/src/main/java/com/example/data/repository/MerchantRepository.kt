@@ -163,6 +163,7 @@ class MerchantRepository private constructor(context: Context) {
     private var platformSettingsListener: ListenerRegistration? = null
     private var cityListener: ListenerRegistration? = null
     private var reviewsListener: ListenerRegistration? = null
+    private var riderReviewsListener: ListenerRegistration? = null
 
     // Service Lock & City State
     private val _isServiceLocked = MutableStateFlow(false)
@@ -186,6 +187,16 @@ class MerchantRepository private constructor(context: Context) {
 
     private val _reviewsCount = MutableStateFlow(0)
     val reviewsCount: StateFlow<Int> = _reviewsCount.asStateFlow()
+
+    // Rider Reviews State
+    private val _riderReviews = MutableStateFlow<List<AnonymousRating>>(emptyList())
+    val riderReviews: StateFlow<List<AnonymousRating>> = _riderReviews.asStateFlow()
+
+    private val _riderAverageRating = MutableStateFlow(5.0)
+    val riderAverageRating: StateFlow<Double> = _riderAverageRating.asStateFlow()
+
+    private val _riderReviewsCount = MutableStateFlow(0)
+    val riderReviewsCount: StateFlow<Int> = _riderReviewsCount.asStateFlow()
 
     // Inbox state
     private val _inboxMessages = MutableStateFlow<List<InboxMessage>>(emptyList())
@@ -1006,6 +1017,7 @@ class MerchantRepository private constructor(context: Context) {
                                 id = (sMap["id"] as? String) ?: java.util.UUID.randomUUID().toString(),
                                 name = (sMap["name"] as? String) ?: "",
                                 subcategoryId = sMap["subcategoryId"] as? String,
+                                customName = (sMap["customName"] as? Boolean) ?: (sMap["subcategoryId"] == null && (sMap["name"] as? String)?.isNotBlank() == true),
                                 required = (sMap["required"] as? Boolean) ?: true,
                                 minSelect = FormatUtils.parseInt(sMap["minSelect"]) ?: if ((sMap["required"] as? Boolean) == false) 0 else 1,
                                 maxSelect = FormatUtils.parseInt(sMap["maxSelect"]) ?: 1,
@@ -1250,6 +1262,28 @@ class MerchantRepository private constructor(context: Context) {
                     }
                 }
             }
+
+        // 12. Rider Reviews listener: riderReviews where merchantId == mId (latest 200, sorted in code)
+        riderReviewsListener = db.collection("riderReviews")
+            .whereEqualTo("merchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Rider reviews query error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.map { parseRiderReview(it) }
+                        .sortedByDescending { it.createdAt }
+                        .take(200)
+                    _riderReviews.value = list
+                    _riderReviewsCount.value = list.size
+                    _riderAverageRating.value = if (list.isNotEmpty()) {
+                        list.map { it.rating }.average()
+                    } else {
+                        5.0
+                    }
+                }
+            }
     }
 
     fun ensureCategoriesConfigured(customMid: String? = null) {
@@ -1365,6 +1399,8 @@ class MerchantRepository private constructor(context: Context) {
         cityListener = null
         reviewsListener?.remove()
         reviewsListener = null
+        riderReviewsListener?.remove()
+        riderReviewsListener = null
     }
 
     private fun parseInboxMessage(doc: DocumentSnapshot): InboxMessage? {
@@ -1526,6 +1562,27 @@ class MerchantRepository private constructor(context: Context) {
             comment = doc.getString("comment") ?: doc.getString("merchantComment") ?: doc.getString("review") ?: "",
             customerName = doc.getString("customerName") ?: doc.getString("userName") ?: doc.getString("author") ?: "Customer",
             itemsSummary = summary,
+            createdAt = createdTime
+        )
+    }
+
+    private fun parseRiderReview(doc: DocumentSnapshot): AnonymousRating {
+        val ratingVal = when (val r = doc.get("ratingMerchant") ?: doc.get("merchantRating") ?: doc.get("rating") ?: doc.get("stars")) {
+            is Number -> r.toDouble()
+            is String -> r.toDoubleOrNull() ?: 5.0
+            else -> 5.0
+        }
+        val createdTime = when (val t = doc.get("createdAt") ?: doc.get("timestamp") ?: doc.get("date")) {
+            is Timestamp -> t.toDate().time
+            is Number -> t.toLong()
+            else -> System.currentTimeMillis()
+        }
+        val comment = doc.getString("comment") ?: doc.getString("merchantComment") ?: doc.getString("review") ?: doc.getString("feedback") ?: ""
+        return AnonymousRating(
+            id = doc.id,
+            merchantId = doc.getString("merchantId") ?: "",
+            rating = ratingVal.coerceIn(1.0, 5.0),
+            comment = comment,
             createdAt = createdTime
         )
     }
@@ -2801,6 +2858,7 @@ class MerchantRepository private constructor(context: Context) {
                 "id" to s.id.ifBlank { UUID.randomUUID().toString() },
                 "name" to s.name.trim(),
                 "subcategoryId" to s.subcategoryId,
+                "customName" to s.customName,
                 "required" to s.required,
                 "minSelect" to if (s.required) s.minSelect.coerceIn(1, s.maxSelect) else 0,
                 "maxSelect" to s.maxSelect,

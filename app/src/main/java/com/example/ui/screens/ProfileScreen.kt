@@ -24,28 +24,26 @@ import com.example.data.model.BusinessType
 import com.example.data.model.ChangeRequest
 import com.example.data.model.MerchantSettings
 import com.example.data.model.StaffMember
-import com.example.ui.components.ImageUrlFieldWithLivePreview
 import com.example.ui.components.MerchantLogoView
-import com.example.ui.theme.DelivioYellow
 import com.example.ui.theme.LocalDelivioColors
-import com.example.ui.theme.parseHexColor
 import com.example.util.FormatUtils
 
 @Composable
 fun ProfileScreen(
     settings: MerchantSettings,
-    staff: List<StaffMember>,
+    staff: List<StaffMember> = emptyList(),
     changeRequests: List<ChangeRequest> = emptyList(),
     onRequestAdminChange: (kind: String, requestedValue: String, reason: String) -> Unit = { _, _, _ -> },
     onOpenStoreProfile: () -> Unit = {},
     onUpdateMerchantProfile: (ownerName: String, phone: String, logoUrl: String) -> Unit = { _, _, _ -> },
-    onRequestRiderManual: () -> Unit,
-    onOpenColorPicker: () -> Unit,
-    onToggleDarkMode: (Boolean) -> Unit,
-    onOpenMapLocation: () -> Unit,
-    onOpenBusinessHours: () -> Unit,
-    onOpenStaffDialog: () -> Unit,
-    onLogout: () -> Unit,
+    onRequestRiderManual: () -> Unit = {},
+    onOpenColorPicker: () -> Unit = {},
+    onToggleDarkMode: (Boolean) -> Unit = {},
+    onOpenMapLocation: () -> Unit = {},
+    onOpenBusinessHours: () -> Unit = {},
+    onOpenStaffDialog: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onLogout: () -> Unit = {},
     isOwner: Boolean = true,
     canAccessInbox: Boolean = true,
     unreadInboxCount: Int = 0,
@@ -66,20 +64,12 @@ fun ProfileScreen(
         vibration: Boolean,
         paperSize: String,
         autoPrint: Boolean
-    ) -> Unit,
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
 
     var showTypeChangeDialog by remember { mutableStateOf(false) }
-
-    var soundEnabled by remember(settings.soundEnabled) { mutableStateOf(settings.soundEnabled) }
-    var vibrationEnabled by remember(settings.vibrationEnabled) { mutableStateOf(settings.vibrationEnabled) }
-    var pushEnabled by remember(settings.pushNotificationsEnabled) { mutableStateOf(settings.pushNotificationsEnabled) }
-    var paperSize by remember(settings.printerPaperSize) { mutableStateOf(settings.printerPaperSize) }
-    var autoPrint by remember(settings.autoPrintOrders) { mutableStateOf(settings.autoPrintOrders) }
-    var defaultPrepTime by remember(settings.defaultPrepTime) { mutableIntStateOf(settings.defaultPrepTime) }
-
     var showHelpDialog by remember { mutableStateOf(false) }
     var showTermsDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
@@ -227,7 +217,7 @@ fun ProfileScreen(
             }
         }
 
-        // WALLET ROW (Owner only; hidden from staff)
+        // 2. WALLET ROW (Owner only; hidden from staff)
         if (isOwner) {
             Card(
                 shape = RoundedCornerShape(18.dp),
@@ -293,166 +283,7 @@ fun ProfileScreen(
             }
         }
 
-        // INBOX ROW (Owner and Manager only)
-        if (canAccessInbox) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenInbox() }
-                    .testTag("profile_inbox_card")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(customColors.accentTint),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Inbox,
-                                contentDescription = null,
-                                tint = customColors.accent,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "Inbox",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = "Platform updates, order notices, and promotions",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (unreadInboxCount > 0) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.error
-                            ) {
-                                Text(
-                                    text = "$unreadInboxCount",
-                                    color = MaterialTheme.colorScheme.onError,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = "View Inbox",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        // REVIEWS ROW (Owner and Manager only)
-        if (canAccessReviews) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenReviews() }
-                    .testTag("profile_reviews_card")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFEF3C7)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = null,
-                                tint = Color(0xFFD97706),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "Reviews",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = if (reviewsCount > 0) "Customer ratings & feedback" else "No reviews yet",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (reviewsCount > 0) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFFEF3C7)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Star,
-                                        contentDescription = null,
-                                        tint = Color(0xFFD97706),
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "%.1f (%d)".format(averageRating, reviewsCount),
-                                        color = Color(0xFF92400E),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = "View Reviews",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. BUSINESS TYPE IS LOCKED (Read-only chip with lock + Request a change)
+        // 3. BUSINESS TYPE IS LOCKED (Read-only chip with lock + Request a change)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -541,9 +372,166 @@ fun ProfileScreen(
             }
         }
 
+        // 4. INBOX ROW (Owner and Manager only)
+        if (canAccessInbox) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenInbox() }
+                    .testTag("profile_inbox_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(customColors.accentTint),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Inbox,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Inbox",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = "Platform updates, order notices, and promotions",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
 
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (unreadInboxCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.error
+                            ) {
+                                Text(
+                                    text = "$unreadInboxCount",
+                                    color = MaterialTheme.colorScheme.onError,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Inbox",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
 
-        // 4. REQUEST A RIDER BUTTON (Kept as requested!)
+        // 5. RATINGS TILE (Owner and Manager only; replaces Reviews)
+        if (canAccessReviews) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenReviews() }
+                    .testTag("profile_ratings_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFEF3C7)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Ratings",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = if (reviewsCount > 0) "Customer ratings & feedback" else "No ratings yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (reviewsCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFFEF3C7)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "%.1f (%d)".format(averageRating, reviewsCount),
+                                        color = Color(0xFF92400E),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Ratings",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // 6. REQUEST A RIDER BUTTON (Manual Rider Dispatch)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -604,323 +592,23 @@ fun ProfileScreen(
             }
         }
 
-        // 5. STORE MAP LOCATION (PICKUP POINT)
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.PinDrop, contentDescription = null, tint = customColors.accent)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Store Map Location (Pickup Point)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = settings.storeLocation.formatted.ifBlank { "No address set" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = if (settings.storeLocation.latitude != 0.0 || settings.storeLocation.longitude != 0.0)
-                        "Lat: %.5f • Lng: %.5f".format(settings.storeLocation.latitude, settings.storeLocation.longitude)
-                    else "GPS Coordinates not set",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OutlinedButton(
-                    onClick = onOpenMapLocation,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("set_map_location_btn")
-                ) {
-                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Set Location on OpenStreetMap", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // THEME COLOR & APPEARANCE (LIGHT / DARK MODE)
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Brand & Theme Appearance", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Theme Accent Color Button
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .clickable { onOpenColorPicker() }
-                        .padding(14.dp)
-                        .testTag("choose_merchant_theme_color_btn"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(parseHexColor(settings.themeAccentHex, DelivioYellow))
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Merchant Accent Color", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                            Text(settings.themeAccentHex.uppercase(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    Text("Change", fontWeight = FontWeight.Bold, color = customColors.accent, fontSize = 13.sp)
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Light / Dark Mode Toggle
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (settings.isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
-                            contentDescription = null,
-                            tint = customColors.accent
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Dark Mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                            Text("High-contrast #121212 merchant palette", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-
-                    Switch(
-                        checked = settings.isDarkMode,
-                        onCheckedChange = { onToggleDarkMode(it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = customColors.accent,
-                            checkedTrackColor = customColors.accentTint
-                        ),
-                        modifier = Modifier.testTag("dark_mode_switch")
-                    )
-                }
-            }
-        }
-
-        // STORE OPERATIONS SETTINGS (Delivery Radius Slider Removed as requested!)
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Operational Settings", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Business Hours Schedule
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                        .clickable { onOpenBusinessHours() }
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Business Hours Schedule", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                        Text("Mon-Sun operating hours & auto open/close", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Icon(Icons.Default.ChevronRight, contentDescription = null)
-                }
-
-                // Kitchen Default Prep Time
-                if (settings.businessType == BusinessType.FOOD) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Default Prep Time: $defaultPrepTime mins",
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(10, 15, 20, 30).forEach { mins ->
-                            FilterChip(
-                                selected = defaultPrepTime == mins,
-                                onClick = {
-                                    defaultPrepTime = mins
-                                    onUpdateStoreSettings(
-                                        settings.storeName, settings.phone, settings.minimumOrder,
-                                        mins, soundEnabled, vibrationEnabled, paperSize, autoPrint
-                                    )
-                                },
-                                label = { Text("${mins}m") },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = customColors.accentTint,
-                                    selectedLabelColor = customColors.accent
-                                ),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Notifications (Sound, Vibration)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("New Order Sound", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = soundEnabled,
-                        onCheckedChange = {
-                            soundEnabled = it
-                            onUpdateStoreSettings(
-                                settings.storeName, settings.phone, settings.minimumOrder,
-                                defaultPrepTime, it, vibrationEnabled, paperSize, autoPrint
-                            )
-                        }
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Haptic Vibration Alert", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = vibrationEnabled,
-                        onCheckedChange = {
-                            vibrationEnabled = it
-                            onUpdateStoreSettings(
-                                settings.storeName, settings.phone, settings.minimumOrder,
-                                defaultPrepTime, soundEnabled, it, paperSize, autoPrint
-                            )
-                        }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Thermal Printer Paper Size
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Receipt Printer Format", style = MaterialTheme.typography.bodyMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = paperSize == "58mm",
-                            onClick = {
-                                paperSize = "58mm"
-                                onUpdateStoreSettings(
-                                    settings.storeName, settings.phone, settings.minimumOrder,
-                                    defaultPrepTime, soundEnabled, vibrationEnabled, "58mm", autoPrint
-                                )
-                            },
-                            label = { Text("58mm") }
-                        )
-                        FilterChip(
-                            selected = paperSize == "80mm",
-                            onClick = {
-                                paperSize = "80mm"
-                                onUpdateStoreSettings(
-                                    settings.storeName, settings.phone, settings.minimumOrder,
-                                    defaultPrepTime, soundEnabled, vibrationEnabled, "80mm", autoPrint
-                                )
-                            },
-                            label = { Text("80mm") }
-                        )
-                    }
-                }
-            }
-        }
-
-        // STAFF ACCOUNTS
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Staff & Roles (${staff.size})", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                    TextButton(onClick = onOpenStaffDialog) {
-                        Text("+ Add Staff", fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                staff.forEach { member ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(member.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                            Text(member.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text(
-                            text = member.role,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = customColors.accent,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(customColors.accentTint)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        // HELP, TERMS & LANGUAGE
+        // 7, 8, 9, 10: SETTINGS, APP LANGUAGE, HELP & SUPPORT, TERMS
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
+                ListItem(
+                    headlineContent = { Text("Settings", fontWeight = FontWeight.SemiBold) },
+                    supportingContent = { Text("Store pickup point & staff accounts") },
+                    leadingContent = { Icon(Icons.Default.Settings, contentDescription = null, tint = customColors.accent) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier
+                        .clickable { onOpenSettings() }
+                        .testTag("profile_settings_row")
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 ListItem(
                     headlineContent = { Text("App Language") },
                     supportingContent = { Text("English (Default)") },
@@ -945,7 +633,7 @@ fun ProfileScreen(
             }
         }
 
-        // LOG OUT BUTTON ("Create Test Order" button above it was removed as requested!)
+        // 11. LOG OUT BUTTON
         OutlinedButton(
             onClick = onLogout,
             shape = RoundedCornerShape(14.dp),

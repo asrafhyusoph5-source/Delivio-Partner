@@ -7,7 +7,8 @@ val FOOD_CATEGORIES: List<String> = listOf(
     "Burgers",
     "Pizza",
     "Chicken",
-    "Drinks"
+    "Drinks",
+    "Others"
 )
 
 val CONVENIENCE_CATEGORIES: List<String> = listOf(

@@ -448,6 +448,7 @@ data class ProductSet(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
     val subcategoryId: String? = null,
+    val customName: Boolean = false,
     val required: Boolean = true,
     val minSelect: Int = 1,
     val maxSelect: Int = 1,
@@ -672,5 +673,13 @@ data class CustomerReview(
     val comment: String = "",
     val customerName: String = "Customer",
     val itemsSummary: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class AnonymousRating(
+    val id: String = "",
+    val merchantId: String = "",
+    val rating: Double = 5.0,
+    val comment: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

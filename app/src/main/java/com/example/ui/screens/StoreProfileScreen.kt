@@ -42,6 +42,14 @@ import com.example.data.model.MerchantSettings
 import com.example.ui.theme.LocalDelivioColors
 import kotlinx.coroutines.delay
 
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
+import com.example.data.model.BusinessType
+import com.example.ui.theme.DelivioYellow
+import com.example.ui.theme.parseHexColor
+
 private enum class LogoImageStatus {
     IDLE,
     LOADING,
@@ -56,6 +64,19 @@ fun StoreProfileScreen(
     settings: MerchantSettings,
     onSave: (Map<String, Any>, onResult: (Boolean, String?) -> Unit) -> Unit,
     onBack: () -> Unit,
+    onOpenColorPicker: () -> Unit = {},
+    onToggleDarkMode: (Boolean) -> Unit = {},
+    onOpenBusinessHours: () -> Unit = {},
+    onUpdateStoreSettings: (
+        storeName: String,
+        phone: String,
+        minOrder: Double,
+        defaultPrep: Int,
+        sound: Boolean,
+        vibration: Boolean,
+        paperSize: String,
+        autoPrint: Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -66,6 +87,12 @@ fun StoreProfileScreen(
     var logoUrlInput by remember(settings.logoUrl) { mutableStateOf(settings.logoUrl) }
     var bannerUrlInput by remember(settings.bannerUrl) { mutableStateOf(settings.bannerUrl) }
     var descriptionInput by remember(settings.description) { mutableStateOf(settings.description) }
+
+    var soundEnabled by remember(settings.soundEnabled) { mutableStateOf(settings.soundEnabled) }
+    var vibrationEnabled by remember(settings.vibrationEnabled) { mutableStateOf(settings.vibrationEnabled) }
+    var paperSize by remember(settings.printerPaperSize) { mutableStateOf(settings.printerPaperSize) }
+    var autoPrint by remember(settings.autoPrintOrders) { mutableStateOf(settings.autoPrintOrders) }
+    var defaultPrepTime by remember(settings.defaultPrepTime) { mutableIntStateOf(settings.defaultPrepTime) }
 
     var isSaving by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -500,6 +527,222 @@ fun StoreProfileScreen(
                     .fillMaxWidth()
                     .testTag("store_profile_description_input")
             )
+
+            // 8. BRAND & THEME APPEARANCE
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Brand & Theme Appearance", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Theme Accent Color Button
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .clickable { onOpenColorPicker() }
+                            .padding(14.dp)
+                            .testTag("choose_merchant_theme_color_btn"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(parseHexColor(settings.themeAccentHex, DelivioYellow))
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text("Merchant Accent Color", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text(settings.themeAccentHex.uppercase(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Text("Change", fontWeight = FontWeight.Bold, color = customColors.accent, fontSize = 13.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Light / Dark Mode Toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (settings.isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
+                                contentDescription = null,
+                                tint = customColors.accent
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text("Dark Mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text("High-contrast #121212 merchant palette", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+
+                        Switch(
+                            checked = settings.isDarkMode,
+                            onCheckedChange = { onToggleDarkMode(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = customColors.accent,
+                                checkedTrackColor = customColors.accentTint
+                            ),
+                            modifier = Modifier.testTag("dark_mode_switch")
+                        )
+                    }
+                }
+            }
+
+            // 9. OPERATIONAL SETTINGS
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Operational Settings", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Business Hours Schedule
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .clickable { onOpenBusinessHours() }
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Business Hours Schedule", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                            Text("Mon-Sun operating hours & auto open/close", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    }
+
+                    // Kitchen Default Prep Time
+                    if (settings.businessType == BusinessType.FOOD) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "Default Prep Time: $defaultPrepTime mins",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(10, 15, 20, 30).forEach { mins ->
+                                FilterChip(
+                                    selected = defaultPrepTime == mins,
+                                    onClick = {
+                                        defaultPrepTime = mins
+                                        onUpdateStoreSettings(
+                                            settings.storeName, settings.phone, settings.minimumOrder,
+                                            mins, soundEnabled, vibrationEnabled, paperSize, autoPrint
+                                        )
+                                    },
+                                    label = { Text("${mins}m") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = customColors.accentTint,
+                                        selectedLabelColor = customColors.accent
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Notifications (Sound, Vibration)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("New Order Sound", style = MaterialTheme.typography.bodyMedium)
+                        Switch(
+                            checked = soundEnabled,
+                            onCheckedChange = {
+                                soundEnabled = it
+                                onUpdateStoreSettings(
+                                    settings.storeName, settings.phone, settings.minimumOrder,
+                                    defaultPrepTime, it, vibrationEnabled, paperSize, autoPrint
+                                )
+                            }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Haptic Vibration Alert", style = MaterialTheme.typography.bodyMedium)
+                        Switch(
+                            checked = vibrationEnabled,
+                            onCheckedChange = {
+                                vibrationEnabled = it
+                                onUpdateStoreSettings(
+                                    settings.storeName, settings.phone, settings.minimumOrder,
+                                    defaultPrepTime, soundEnabled, it, paperSize, autoPrint
+                                )
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Thermal Printer Paper Size
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Receipt Printer Format", style = MaterialTheme.typography.bodyMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = paperSize == "58mm",
+                                onClick = {
+                                    paperSize = "58mm"
+                                    onUpdateStoreSettings(
+                                        settings.storeName, settings.phone, settings.minimumOrder,
+                                        defaultPrepTime, soundEnabled, vibrationEnabled, "58mm", autoPrint
+                                    )
+                                },
+                                label = { Text("58mm") }
+                            )
+                            FilterChip(
+                                selected = paperSize == "80mm",
+                                onClick = {
+                                    paperSize = "80mm"
+                                    onUpdateStoreSettings(
+                                        settings.storeName, settings.phone, settings.minimumOrder,
+                                        defaultPrepTime, soundEnabled, vibrationEnabled, "80mm", autoPrint
+                                    )
+                                },
+                                label = { Text("80mm") }
+                            )
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }

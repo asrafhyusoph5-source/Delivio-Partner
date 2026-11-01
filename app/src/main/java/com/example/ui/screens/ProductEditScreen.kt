@@ -66,6 +66,7 @@ private class EditableSet(
     val id: String = UUID.randomUUID().toString(),
     initialName: String = "",
     initialSubcategoryId: String? = null,
+    initialCustomName: Boolean = false,
     initialRequired: Boolean = true,
     initialMinSelect: Int = 1,
     initialMaxSelect: Int = 1,
@@ -73,6 +74,7 @@ private class EditableSet(
 ) {
     var name by mutableStateOf(initialName)
     var subcategoryId by mutableStateOf<String?>(initialSubcategoryId)
+    var isCustomName by mutableStateOf(initialCustomName)
     var required by mutableStateOf(initialRequired)
     var minSelect by mutableIntStateOf(initialMinSelect)
     var maxSelect by mutableIntStateOf(initialMaxSelect)
@@ -181,6 +183,7 @@ fun ProductEditScreen(
                         id = s.id.ifBlank { UUID.randomUUID().toString() },
                         initialName = s.name,
                         initialSubcategoryId = s.subcategoryId,
+                        initialCustomName = s.customName || (s.subcategoryId == null && s.name.isNotBlank()),
                         initialRequired = s.required,
                         initialMinSelect = if (s.required) s.minSelect.coerceIn(1, s.maxSelect.coerceIn(1, 10)) else 1,
                         initialMaxSelect = s.maxSelect.coerceIn(1, 10),
@@ -340,7 +343,8 @@ fun ProductEditScreen(
                                     ProductSet(
                                         id = s.id,
                                         name = s.name.trim(),
-                                        subcategoryId = s.subcategoryId,
+                                        subcategoryId = if (s.isCustomName) null else s.subcategoryId,
+                                        customName = s.isCustomName,
                                         required = s.required,
                                         minSelect = if (s.required) s.minSelect.coerceIn(1, s.maxSelect) else 0,
                                         maxSelect = s.maxSelect.coerceIn(1, 10),
@@ -673,7 +677,7 @@ fun ProductEditScreen(
                                         modifier = Modifier.weight(1f)
                                     ) {
                                         OutlinedTextField(
-                                            value = if (pSet.name.isNotBlank()) pSet.name else "Select Set Name *",
+                                            value = if (pSet.name.isNotBlank()) pSet.name else if (pSet.isCustomName) "Others" else "Select Set Name *",
                                             onValueChange = {},
                                             readOnly = true,
                                             label = { Text("Set Name *") },
@@ -710,7 +714,7 @@ fun ProductEditScreen(
                                                         ) {
                                                             Text(
                                                                 sub.name,
-                                                                fontWeight = if (pSet.name.equals(sub.name, ignoreCase = true)) FontWeight.Bold else FontWeight.Normal,
+                                                                fontWeight = if (pSet.name.equals(sub.name, ignoreCase = true) && !pSet.isCustomName) FontWeight.Bold else FontWeight.Normal,
                                                                 color = if (alreadyUsedByOther) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else MaterialTheme.colorScheme.onSurface
                                                             )
                                                             if (alreadyUsedByOther) {
@@ -726,6 +730,7 @@ fun ProductEditScreen(
                                                     onClick = {
                                                         pSet.name = sub.name
                                                         pSet.subcategoryId = sub.id
+                                                        pSet.isCustomName = false
                                                         setNameExpanded = false
                                                     }
                                                 )
@@ -745,6 +750,20 @@ fun ProductEditScreen(
                                                     showTypeCategoryDialog = true
                                                 }
                                             )
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Icon(Icons.Default.Edit, contentDescription = null, tint = customColors.accent, modifier = Modifier.size(18.dp))
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("Others", fontWeight = if (pSet.isCustomName) FontWeight.Bold else FontWeight.Normal)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    pSet.isCustomName = true
+                                                    pSet.subcategoryId = null
+                                                    setNameExpanded = false
+                                                }
+                                            )
                                         }
                                     }
 
@@ -758,6 +777,31 @@ fun ProductEditScreen(
                                             tint = MaterialTheme.colorScheme.primary
                                         )
                                     }
+                                }
+
+                                if (pSet.isCustomName) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedTextField(
+                                        value = pSet.name,
+                                        onValueChange = { pSet.name = it },
+                                        label = { Text("Type the set name *") },
+                                        placeholder = { Text("e.g. Spicy level, Cutlery") },
+                                        singleLine = true,
+                                        isError = isSetNameBlank || isDuplicateName,
+                                        supportingText = {
+                                            if (isSetNameBlank) {
+                                                Text("Set name is required", color = MaterialTheme.colorScheme.error)
+                                            } else if (isDuplicateName) {
+                                                Text("Set name must be unique within product", color = MaterialTheme.colorScheme.error)
+                                            } else {
+                                                Text("Custom set name (not saved to subcategories list)")
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("custom_set_name_input_$setIndex")
+                                    )
                                 }
 
                                 // Clear Set Rules: Required switch + Steppers + Live summary
@@ -1372,6 +1416,7 @@ fun ProductEditScreen(
                                     if (targetIdx in setsList.indices) {
                                         setsList[targetIdx].name = assignedName
                                         setsList[targetIdx].subcategoryId = assignedId
+                                        setsList[targetIdx].isCustomName = false
                                     }
                                 }
                                 coroutineScope.launch {

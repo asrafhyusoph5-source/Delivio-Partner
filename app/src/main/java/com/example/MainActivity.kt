@@ -93,12 +93,16 @@ class MainActivity : ComponentActivity() {
             val inboxBannerMessage by viewModel.inboxBannerMessage.collectAsStateWithLifecycle()
             val showInboxScreen by viewModel.showInboxScreen.collectAsStateWithLifecycle()
             val showStoreProfileScreen by viewModel.showStoreProfileScreen.collectAsStateWithLifecycle()
+            val showSettingsScreen by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
 
             val isServiceLocked by viewModel.isServiceLocked.collectAsStateWithLifecycle()
             val serviceLockMessage by viewModel.serviceLockMessage.collectAsStateWithLifecycle()
             val reviews by viewModel.reviews.collectAsStateWithLifecycle()
             val averageRating by viewModel.averageRating.collectAsStateWithLifecycle()
             val reviewsCount by viewModel.reviewsCount.collectAsStateWithLifecycle()
+            val riderReviews by viewModel.riderReviews.collectAsStateWithLifecycle()
+            val riderAverageRating by viewModel.riderAverageRating.collectAsStateWithLifecycle()
+            val riderReviewsCount by viewModel.riderReviewsCount.collectAsStateWithLifecycle()
             val showReviewsScreen by viewModel.showReviewsScreen.collectAsStateWithLifecycle()
             val subcategories by viewModel.subcategories.collectAsStateWithLifecycle()
             val selectedSubcategoryId by viewModel.selectedSubcategoryId.collectAsStateWithLifecycle()
@@ -184,6 +188,15 @@ class MainActivity : ComponentActivity() {
                         onMarkAllAsRead = { viewModel.markAllInboxMessagesAsRead() },
                         onDismiss = { viewModel.closeInbox() }
                     )
+                } else if (showSettingsScreen) {
+                    // Full-screen Settings route
+                    SettingsScreen(
+                        settings = settings,
+                        staff = staff,
+                        onOpenMapLocation = { viewModel.openMapLocation() },
+                        onOpenStaffDialog = { viewModel.openStaffDialog() },
+                        onBack = { viewModel.closeSettings() }
+                    )
                 } else if (showStoreProfileScreen) {
                     // Full-screen Store Profile Details route
                     StoreProfileScreen(
@@ -191,14 +204,26 @@ class MainActivity : ComponentActivity() {
                         onSave = { changedFields, onResult ->
                             viewModel.updateMerchantProfile(changedFields, onResult)
                         },
-                        onBack = { viewModel.closeStoreProfile() }
+                        onBack = { viewModel.closeStoreProfile() },
+                        onOpenColorPicker = { viewModel.openColorPicker() },
+                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
+                        onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
+                        onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
+                            viewModel.updateStoreSettings(
+                                storeName, phone, minOrder, prep,
+                                sound, vibration, paper, autoPrint
+                            )
+                        }
                     )
                 } else if (showReviewsScreen) {
-                    // Full-screen Customer Reviews route
+                    // Full-screen Ratings & Comments route (Customers & Riders)
                     ReviewsScreen(
                         reviews = reviews,
                         averageRating = averageRating,
                         reviewsCount = reviewsCount,
+                        riderReviews = riderReviews,
+                        riderAverageRating = riderAverageRating,
+                        riderReviewsCount = riderReviewsCount,
                         onBack = { viewModel.closeReviews() }
                     )
                 } else if (editingMenuItem != null) {
@@ -395,6 +420,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenMapLocation = { viewModel.openMapLocation() },
                                         onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
                                         onOpenStaffDialog = { viewModel.openStaffDialog() },
+                                        onOpenSettings = { viewModel.openSettings() },
                                         onLogout = { viewModel.logout() },
                                         isOwner = isOwner,
                                         canAccessInbox = canAccessInbox,
