@@ -163,7 +163,7 @@ fun OrderEditDialog(
                 ) {
                     Column {
                         Text(
-                            text = "Edit Order ${order.orderNumber}",
+                            text = "Edit Order ${order.formattedOrderNumber}",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold)
                         )
                         Text(
@@ -448,16 +448,16 @@ fun OrderEditDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Original Total:", style = MaterialTheme.typography.bodySmall)
-                                Text("₱${FormatUtils.formatCurrency(order.total)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                Text("Original Subtotal:", style = MaterialTheme.typography.bodySmall)
+                                Text(FormatUtils.formatCurrency(order.subtotal), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                             }
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("New Total:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                Text("₱${FormatUtils.formatCurrency(newTotal)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.ExtraBold, color = customColors.accent)
+                                Text("New Subtotal:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                Text(FormatUtils.formatCurrency(newSubtotal), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.ExtraBold, color = customColors.accent)
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
@@ -469,18 +469,18 @@ fun OrderEditDialog(
                                     Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = StatusOpenGreen, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "₱${FormatUtils.formatCurrency(refundAmount)} will be refunded to the customer's wallet",
+                                        text = "${FormatUtils.formatCurrency(refundAmount)} will be refunded to the customer's wallet",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp,
                                         color = StatusOpenGreen
                                     )
                                 }
-                            } else if (isCash) {
+                            } else if (order.isPickUp && isCash) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Payments, contentDescription = null, tint = customColors.accent, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Cash to collect becomes ₱${FormatUtils.formatCurrency(newTotal)}",
+                                        text = "Pay at pickup - collect ${FormatUtils.formatCurrency(newSubtotal)}",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp,
                                         color = customColors.accent
@@ -488,7 +488,7 @@ fun OrderEditDialog(
                                 }
                             } else {
                                 Text(
-                                    text = "Payment: ${order.formattedPaymentMethod}",
+                                    text = "Payment: ${order.effectivePaymentLabel}",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold
                                 )

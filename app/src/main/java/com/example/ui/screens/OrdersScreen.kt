@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -91,6 +92,49 @@ fun FulfillmentChip(
 }
 
 @Composable
+fun DeliveryOptionChip(
+    deliveryOption: String,
+    modifier: Modifier = Modifier
+) {
+    val norm = when {
+        deliveryOption.contains("saver", ignoreCase = true) -> "Saver"
+        deliveryOption.contains("standard", ignoreCase = true) -> "Standard"
+        else -> "Priority" // missing or default is Priority
+    }
+
+    val (bgColor, textColor, icon) = when (norm) {
+        "Saver" -> Triple(Color(0xFFDCFCE7), Color(0xFF15803D), Icons.Default.Savings)
+        "Standard" -> Triple(Color(0xFFE0F2FE), Color(0xFF0369A1), Icons.AutoMirrored.Filled.DirectionsBike)
+        else -> Triple(Color(0xFFFEF3C7), Color(0xFFB45309), Icons.Default.Bolt)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = bgColor,
+        modifier = modifier.testTag("delivery_option_chip_${norm.lowercase()}")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = textColor,
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = norm,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = textColor
+            )
+        }
+    }
+}
+
+@Composable
 fun OrdersScreen(
     orders: List<Order>,
     activeFilter: String,
@@ -120,9 +164,14 @@ fun OrdersScreen(
     var orderToPickUp by remember { mutableStateOf<Order?>(null) }
     var orderToCancel by remember { mutableStateOf<Order?>(null) }
 
+    // Never list orders with isSplitChild
+    val activeOrders = remember(orders) {
+        orders.filter { !it.isSplitChild }
+    }
+
     // Placed orders partitioning for New tab
-    val allPlacedOrders = remember(orders) {
-        orders.filter { it.status == OrderStatus.PLACED_ORDER }
+    val allPlacedOrders = remember(activeOrders) {
+        activeOrders.filter { it.status == OrderStatus.PLACED_ORDER }
     }
     val upcomingScheduledOrders = remember(allPlacedOrders, currentTime) {
         allPlacedOrders.filter { it.isScheduled && !it.isScheduledDue(currentTime) }
@@ -133,12 +182,12 @@ fun OrdersScreen(
     }
 
     // Filter orders based on active status tab
-    val statusFilteredOrders = remember(orders, activeFilter, currentTime) {
-        orders.filter { order ->
+    val statusFilteredOrders = remember(activeOrders, activeFilter, currentTime) {
+        activeOrders.filter { order ->
             when (activeFilter) {
                 "New" -> order.status == OrderStatus.PLACED_ORDER && (!order.isScheduled || order.isScheduledDue(currentTime))
                 "Preparing" -> order.status == OrderStatus.PREPARING
-                "Ready" -> order.status == OrderStatus.READY || order.status == OrderStatus.RIDER_ON_THE_WAY
+                "Ready" -> order.status == OrderStatus.READY || order.status == OrderStatus.RIDER_ON_THE_WAY || order.status == OrderStatus.ON_ANOTHER_DELIVERY
                 "Completed" -> order.status == OrderStatus.DELIVERED || order.status == OrderStatus.COMPLETED
                 "Cancelled" -> order.status == OrderStatus.CANCELLED || order.status == OrderStatus.REJECTED
                 else -> true
@@ -173,7 +222,7 @@ fun OrdersScreen(
             onDismissRequest = { orderToPickUp = null },
             title = { Text("Mark Order as Picked Up?") },
             text = {
-                Text("Confirm that customer \"${orderToPickUp?.customerName}\" has picked up order ${orderToPickUp?.orderNumber}. This will complete the order.")
+                Text("Confirm that customer \"${orderToPickUp?.customerName}\" has picked up order ${orderToPickUp?.formattedOrderNumber}. This will complete the order.")
             },
             confirmButton = {
                 Button(
@@ -200,7 +249,7 @@ fun OrdersScreen(
             onDismissRequest = { orderToCancel = null },
             title = { Text("Cancel Scheduled Order?") },
             text = {
-                Text("Are you sure you want to cancel scheduled order ${orderToCancel?.orderNumber}?")
+                Text("Are you sure you want to cancel scheduled order ${orderToCancel?.formattedOrderNumber}?")
             },
             confirmButton = {
                 Button(
@@ -234,10 +283,10 @@ fun OrdersScreen(
             filterTabs.forEach { tabName ->
                 val count = when (tabName) {
                     "New" -> normalNewOrders.size + upcomingScheduledOrders.size
-                    "Preparing" -> orders.count { it.status == OrderStatus.PREPARING }
-                    "Ready" -> orders.count { it.status == OrderStatus.READY || it.status == OrderStatus.RIDER_ON_THE_WAY }
-                    "Completed" -> orders.count { it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED }
-                    "Cancelled" -> orders.count { it.status == OrderStatus.CANCELLED || it.status == OrderStatus.REJECTED }
+                    "Preparing" -> activeOrders.count { it.status == OrderStatus.PREPARING }
+                    "Ready" -> activeOrders.count { it.status == OrderStatus.READY || it.status == OrderStatus.RIDER_ON_THE_WAY || it.status == OrderStatus.ON_ANOTHER_DELIVERY }
+                    "Completed" -> activeOrders.count { it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED }
+                    "Cancelled" -> activeOrders.count { it.status == OrderStatus.CANCELLED || it.status == OrderStatus.REJECTED }
                     else -> 0
                 }
                 val isSelected = activeFilter == tabName
@@ -555,12 +604,18 @@ fun OrderCard(
                         modifier = Modifier.weight(1f, fill = false)
                     ) {
                         Text(
-                            text = order.orderNumber,
+                            text = order.formattedOrderNumber,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         FulfillmentChip(order = order)
+
+                        // Delivery option chip on each Delivery order card
+                        if (!order.isPickUp) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            DeliveryOptionChip(deliveryOption = order.deliveryOption)
+                        }
 
                         if (order.isEdited) {
                             Spacer(modifier = Modifier.width(6.dp))
@@ -628,6 +683,66 @@ fun OrderCard(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         OrderStatusBadge(status = order.status, isPickUp = order.isPickUp)
+                    }
+                }
+
+                // Parent order split notice
+                if (order.splitOut) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFEFF6FF),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                        modifier = Modifier.fillMaxWidth().testTag("card_split_parent_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.AltRoute,
+                                contentDescription = null,
+                                tint = Color(0xFF1D4ED8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Part of this order is handed to a second rider",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1D4ED8)
+                            )
+                        }
+                    }
+                }
+
+                // Batch hold notice for Standard and Saver delivery orders
+                if (!order.isPickUp && order.isRiderBatchHoldActive(currentTime)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFF0FDF4),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                        modifier = Modifier.fillMaxWidth().testTag("card_rider_batch_hold_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (order.deliveryOptionDisplay == "Saver") Icons.Default.Timer else Icons.Default.Info,
+                                contentDescription = null,
+                                tint = Color(0xFF15803D),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = order.riderBatchHoldMessage(currentTime),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF15803D)
+                            )
+                        }
                     }
                 }
 
@@ -812,114 +927,16 @@ fun OrderCard(
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Items subtotal",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = FormatUtils.formatCurrency(order.subtotal),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    // STRICT RULE: Pick Up cards NEVER show delivery fee, tip, or rider message
-                    if (!order.isPickUp) {
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Delivery fee",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = FormatUtils.formatCurrency(order.deliveryFee),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-
-                        if (order.tip > 0.0) {
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Rider tip",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = FormatUtils.formatCurrency(order.tip),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    if (order.serviceFee > 0.0) {
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Service fee",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = FormatUtils.formatCurrency(order.serviceFee),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    if (order.discount > 0.0) {
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Discount",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                text = "- ${FormatUtils.formatCurrency(order.discount)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Total",
+                            text = "Subtotal",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = FormatUtils.formatCurrency(order.total),
+                            text = FormatUtils.formatCurrency(order.subtotal),
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             color = customColors.accent
@@ -927,23 +944,12 @@ fun OrderCard(
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
-                    // Accurate payment label
                     Text(
                         text = order.effectivePaymentLabel,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-
-                    if (!order.isPickUp) {
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = "Delivery fee goes to the rider.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                        )
-                    }
                 }
 
                 // Prep Countdown Timer if Preparing
@@ -994,20 +1000,18 @@ fun OrderCard(
                         if (!hasRiderAccepted) {
                             // Preparing tab shows "Searching for rider..." while riderId is null
                             val requestedAt = order.riderRequest?.requestedAt
-                            val elapsedMs = if (requestedAt != null) currentTime - requestedAt else 0L
-                            val elapsedMinutes = elapsedMs / 60000L
-                            val isOver5MinNoRider = elapsedMinutes >= 5
+                            val isNoRiderYet = order.isNoRiderYet(currentTime)
 
                             Spacer(modifier = Modifier.height(10.dp))
                             Card(
                                 shape = RoundedCornerShape(12.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isOver5MinNoRider) StatusWarningAmber.copy(alpha = 0.15f)
+                                    containerColor = if (isNoRiderYet) StatusWarningAmber.copy(alpha = 0.15f)
                                     else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                                 ),
                                 border = androidx.compose.foundation.BorderStroke(
                                     1.dp,
-                                    if (isOver5MinNoRider) StatusWarningAmber else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                    if (isNoRiderYet) StatusWarningAmber else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                                 ),
                                 modifier = Modifier.fillMaxWidth().testTag("searching_for_rider_card")
                             ) {
@@ -1018,7 +1022,7 @@ fun OrderCard(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            if (isOver5MinNoRider) {
+                                            if (isNoRiderYet) {
                                                 Icon(
                                                     imageVector = Icons.Default.Warning,
                                                     contentDescription = null,
@@ -1027,7 +1031,7 @@ fun OrderCard(
                                                 )
                                                 Spacer(modifier = Modifier.width(8.dp))
                                                 Text(
-                                                    text = "No rider yet (5m+)",
+                                                    text = "No rider yet",
                                                     fontWeight = FontWeight.ExtraBold,
                                                     fontSize = 13.sp,
                                                     color = StatusWarningAmber
@@ -1056,6 +1060,16 @@ fun OrderCard(
                                         }
                                     }
 
+                                    if (order.isRiderBatchHoldActive(currentTime)) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = order.riderBatchHoldMessage(currentTime),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+
                                     if (order.canRequestRiderAgain(currentTime)) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Button(
@@ -1077,7 +1091,14 @@ fun OrderCard(
                         } else {
                             // Rider has accepted: show rider details, vehicle & plate, call icon, live status
                             val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
-                            val currentRiderStatus = order.riderRequest?.status ?: if (order.status == OrderStatus.RIDER_ON_THE_WAY) "On the way" else "Rider assigned"
+                            val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+                                order.riderRequest?.status?.equals("On another delivery", ignoreCase = true) == true ||
+                                order.riderRequest?.status?.equals("on_another_delivery", ignoreCase = true) == true
+                            val currentRiderStatus = order.riderRequest?.status ?: when {
+                                isOnAnotherDelivery -> "On another delivery"
+                                order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
+                                else -> "Rider assigned"
+                            }
                             val vehicleAndPlate = order.riderVehicle?.ifBlank { null }
                                 ?: rider?.vehiclePlate?.ifBlank { null }
                                 ?: "Motorcycle"
@@ -1125,6 +1146,15 @@ fun OrderCard(
                                                     fontWeight = FontWeight.Bold,
                                                     color = customColors.accent
                                                 )
+                                                if (isOnAnotherDelivery) {
+                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                    Text(
+                                                        text = "Rider is delivering another order first",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
                                             }
                                         }
 
@@ -1392,6 +1422,7 @@ fun OrderStatusBadge(status: OrderStatus, isPickUp: Boolean = false) {
         OrderStatus.PREPARING -> Triple("Preparing", Color(0xFFFEF3C7), Color(0xFF92400E))
         OrderStatus.READY -> if (isPickUp) Triple("Ready for Pick Up", Color(0xFFD1FAE5), Color(0xFF065F46)) else Triple("Waiting for rider", Color(0xFFD1FAE5), Color(0xFF065F46))
         OrderStatus.RIDER_ON_THE_WAY -> Triple("Rider is on the way", Color(0xFFDBEAFE), Color(0xFF1E40AF))
+        OrderStatus.ON_ANOTHER_DELIVERY -> Triple("On another delivery", Color(0xFFE0E7FF), Color(0xFF3730A3))
         OrderStatus.DELIVERED -> Triple("Delivered", Color(0xFFD1FAE5), Color(0xFF047857))
         OrderStatus.COMPLETED -> Triple("Completed", Color(0xFFD1FAE5), Color(0xFF047857))
         OrderStatus.REJECTED -> Triple("Rejected", Color(0xFFFEE2E2), Color(0xFF991B1B))

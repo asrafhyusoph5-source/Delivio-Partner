@@ -8,6 +8,8 @@ import android.print.PrintManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.example.data.model.Order
+import com.example.data.model.ReceiptCopyConfig
+import com.example.data.model.ReceiptDesign
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,10 +35,120 @@ object ReceiptPrinterHelper {
         }
     }
 
-    fun generateFormattedReceiptText(order: Order, storeName: String, paperSize: String = "80mm"): String {
+    private fun alignLine(text: String, align: String, cols: Int): String {
+        if (!align.equals("center", ignoreCase = true)) return text
+        if (text.length >= cols) return text
+        val padding = (cols - text.length) / 2
+        return " ".repeat(padding) + text
+    }
+
+    private fun resolveSeparator(type: String, cols: Int): String {
+        return when (type.lowercase().trim()) {
+            "solid" -> "─".repeat(cols)
+            "double" -> "=".repeat(cols)
+            else -> "-".repeat(cols)
+        }
+    }
+
+    private fun renderCopy(
+        sb: StringBuilder,
+        copyConfig: ReceiptCopyConfig,
+        order: Order,
+        storeName: String,
+        cols: Int,
+        sep: String,
+        design: ReceiptDesign,
+        orderedAtLine: String,
+        itemsForLine: String,
+        effectiveNote: String
+    ) {
+        val align = design.align
+        val brand = design.brandLine.ifBlank { "Delivio" }
+
+        if (copyConfig.title.isNotBlank()) {
+            sb.appendLine(alignLine(copyConfig.title, align, cols))
+        }
+        if (storeName.isNotBlank()) {
+            sb.appendLine(alignLine(storeName, align, cols))
+        }
+        sb.appendLine(alignLine(brand, align, cols))
+
+        // Extra header lines under the brand line
+        for (hLine in design.headerLines) {
+            if (hLine.isNotBlank()) {
+                sb.appendLine(alignLine(hLine, align, cols))
+            }
+        }
+
+        // Directly under "Delivio" (and extra header lines), add line "Order #<orderNumber>"
+        val orderNoDisplay = "Order ${order.formattedOrderNumber}"
+        sb.appendLine(alignLine(orderNoDisplay, align, cols))
+
+        if (design.showOrderedAt) {
+            sb.appendLine(alignLine(orderedAtLine, align, cols))
+        }
+        if (design.showCustomerName) {
+            sb.appendLine(alignLine(itemsForLine, align, cols))
+        } else {
+            val totalQty = order.items.sumOf { it.quantity }
+            sb.appendLine(alignLine("$totalQty Items", align, cols))
+        }
+        sb.appendLine(sep)
+
+        var calculatedSubtotal = 0.0
+
+        order.items.forEach { item ->
+            val baseLineTotal = item.quantity * item.basePrice
+            calculatedSubtotal += baseLineTotal
+            val itemLine = "${item.quantity} ${item.name}"
+            if (copyConfig.showItemPrices) {
+                val itemPriceStr = FormatUtils.formatCurrency(baseLineTotal)
+                sb.appendLine(formatTwoColumns(itemLine, itemPriceStr, cols))
+            } else {
+                sb.appendLine(itemLine)
+            }
+
+            if (design.showSetChoices) {
+                item.selections.forEach { sel ->
+                    val choiceLine = "   + ${sel.choiceName}"
+                    if (copyConfig.showItemPrices && sel.price > 0.0) {
+                        val choiceTotal = item.quantity * sel.price
+                        calculatedSubtotal += choiceTotal
+                        val choicePriceStr = FormatUtils.formatCurrency(choiceTotal)
+                        sb.appendLine(formatTwoColumns(choiceLine, choicePriceStr, cols))
+                    } else {
+                        sb.appendLine(choiceLine)
+                    }
+                }
+            }
+        }
+
+        sb.appendLine(sep)
+        if (design.showNote && effectiveNote.isNotBlank()) {
+            sb.appendLine("Note: $effectiveNote")
+            sb.appendLine(sep)
+        }
+
+        val subtotalToDisplay = if (calculatedSubtotal > 0.0) calculatedSubtotal else order.subtotal
+        val subtotalStr = FormatUtils.formatCurrency(subtotalToDisplay)
+        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
+        // REMOVED TOTAL LINE completely as instructed
+
+        if (design.footerText.isNotBlank()) {
+            sb.appendLine(sep)
+            sb.appendLine(alignLine(design.footerText, align, cols))
+        }
+    }
+
+    fun generateFormattedReceiptText(
+        order: Order,
+        storeName: String,
+        paperSize: String = "80mm",
+        design: ReceiptDesign = ReceiptDesign()
+    ): String {
         val cols = getColumnWidth(paperSize)
-        val hyphenSep = "-".repeat(cols)
-        val underscoreSep = "_".repeat(cols)
+        val sep = resolveSeparator(design.separator, cols)
+        val dividerSep = "_".repeat(cols)
 
         val timeZone = TimeZone.getTimeZone("Asia/Manila")
         val timeFmt = SimpleDateFormat("h:mm a", Locale.US).apply { this.timeZone = timeZone }
@@ -46,94 +158,76 @@ object ReceiptPrinterHelper {
         val orderedAtLine = "Ordered at $timeStr   $dateStr"
         val totalQty = order.items.sumOf { it.quantity }
         val itemsForLine = "$totalQty Items for ${order.customerName}"
-
         val effectiveNote = order.effectiveMerchantNote
-        var calculatedSubtotal = 0.0
 
         val sb = StringBuilder()
+        val hasMerchant = design.merchantCopy.enabled
+        val hasCustomer = design.customerCopy.enabled
 
-        // --- 1. MERCHANT'S COPY ---
-        sb.appendLine("MERCHANT'S COPY")
-        sb.appendLine(storeName)
-        sb.appendLine("Delivio")
-        sb.appendLine(order.orderNumber)
-        sb.appendLine(orderedAtLine)
-        sb.appendLine(itemsForLine)
-        sb.appendLine(hyphenSep)
-
-        order.items.forEach { item ->
-            val baseLineTotal = item.quantity * item.basePrice
-            calculatedSubtotal += baseLineTotal
-            val itemLine = "${item.quantity} ${item.name}"
-            val itemPriceStr = FormatUtils.formatCurrency(baseLineTotal)
-            sb.appendLine(formatTwoColumns(itemLine, itemPriceStr, cols))
-
-            item.selections.forEach { sel ->
-                val choiceLine = "   + ${sel.choiceName}"
-                if (sel.price > 0.0) {
-                    val choiceTotal = item.quantity * sel.price
-                    calculatedSubtotal += choiceTotal
-                    val choicePriceStr = FormatUtils.formatCurrency(choiceTotal)
-                    sb.appendLine(formatTwoColumns(choiceLine, choicePriceStr, cols))
-                } else {
-                    sb.appendLine(choiceLine)
-                }
-            }
+        if (hasMerchant) {
+            renderCopy(
+                sb = sb,
+                copyConfig = design.merchantCopy.copy(
+                    title = design.merchantCopy.title.ifBlank { "MERCHANT'S COPY" }
+                ),
+                order = order,
+                storeName = storeName,
+                cols = cols,
+                sep = sep,
+                design = design,
+                orderedAtLine = orderedAtLine,
+                itemsForLine = itemsForLine,
+                effectiveNote = effectiveNote
+            )
         }
 
-        sb.appendLine(hyphenSep)
-        if (effectiveNote.isNotBlank()) {
-            sb.appendLine("Note: $effectiveNote")
-            sb.appendLine(hyphenSep)
+        if (hasMerchant && hasCustomer) {
+            sb.appendLine(dividerSep)
         }
 
-        val subtotalToDisplay = if (calculatedSubtotal > 0.0) calculatedSubtotal else order.subtotal
-        val subtotalStr = FormatUtils.formatCurrency(subtotalToDisplay)
-        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
-        sb.appendLine(formatTwoColumns("Total", subtotalStr, cols))
-
-        sb.appendLine(underscoreSep)
-
-        // --- 2. CUSTOMER'S COPY ---
-        sb.appendLine("CUSTOMER'S COPY")
-        sb.appendLine(storeName)
-        sb.appendLine("Delivio")
-        sb.appendLine(order.orderNumber)
-        sb.appendLine(orderedAtLine)
-        sb.appendLine(itemsForLine)
-        sb.appendLine(hyphenSep)
-
-        order.items.forEach { item ->
-            sb.appendLine("${item.quantity} ${item.name}")
-            item.selections.forEach { sel ->
-                sb.appendLine("   + ${sel.choiceName}")
-            }
+        if (hasCustomer) {
+            renderCopy(
+                sb = sb,
+                copyConfig = design.customerCopy.copy(
+                    title = design.customerCopy.title.ifBlank { "CUSTOMER'S COPY" }
+                ),
+                order = order,
+                storeName = storeName,
+                cols = cols,
+                sep = sep,
+                design = design,
+                orderedAtLine = orderedAtLine,
+                itemsForLine = itemsForLine,
+                effectiveNote = effectiveNote
+            )
         }
 
-        sb.appendLine(hyphenSep)
-        if (effectiveNote.isNotBlank()) {
-            sb.appendLine("Note: $effectiveNote")
-            sb.appendLine(hyphenSep)
-        }
-
-        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
-        sb.appendLine(formatTwoColumns("Total", subtotalStr, cols))
-
-        // Cut line after customer's copy
+        // Cut line after receipt
         val cutLine = if (cols == 32) "- - - - - - [CUT] - - - - - -" else "- - - - - - - - - [CUT HERE] - - - - - - - - -"
         sb.appendLine(cutLine)
 
         return sb.toString()
     }
 
-    fun generateReceiptHtml(order: Order, storeName: String, paperSize: String = "80mm"): String {
-        val receiptText = generateFormattedReceiptText(order, storeName, paperSize)
+    fun generateReceiptHtml(
+        order: Order,
+        storeName: String,
+        paperSize: String = "80mm",
+        design: ReceiptDesign = ReceiptDesign()
+    ): String {
+        val receiptText = generateFormattedReceiptText(order, storeName, paperSize, design)
         val escaped = receiptText
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
 
         val maxWidthPx = if (paperSize.contains("58", ignoreCase = true)) "280px" else "380px"
+        val fontSizePx = when (design.fontSize.lowercase().trim()) {
+            "small" -> "11px"
+            "large" -> "16px"
+            else -> "13px"
+        }
+        val textAlign = if (design.align.equals("center", ignoreCase = true)) "center" else "left"
 
         return """
             <!DOCTYPE html>
@@ -147,22 +241,24 @@ object ReceiptPrinterHelper {
                     }
                     body {
                         font-family: 'Courier New', Courier, monospace;
-                        font-size: 13px;
+                        font-size: $fontSizePx;
                         color: #000;
                         background: #fff;
                         margin: 0;
                         padding: 10px;
                         line-height: 1.35;
+                        text-align: $textAlign;
                     }
                     pre {
                         font-family: 'Courier New', Courier, monospace;
-                        font-size: 13px;
+                        font-size: $fontSizePx;
                         color: #000;
                         margin: 0;
                         padding: 0;
                         white-space: pre-wrap;
                         word-break: break-all;
                         max-width: $maxWidthPx;
+                        text-align: $textAlign;
                     }
                 </style>
             </head>
@@ -173,15 +269,21 @@ object ReceiptPrinterHelper {
         """.trimIndent()
     }
 
-    fun printOrderReceipt(activity: Activity, order: Order, storeName: String, paperSize: String = "80mm") {
+    fun printOrderReceipt(
+        activity: Activity,
+        order: Order,
+        storeName: String,
+        paperSize: String = "80mm",
+        design: ReceiptDesign = ReceiptDesign()
+    ) {
         try {
             val webView = WebView(activity)
-            val html = generateReceiptHtml(order, storeName, paperSize)
+            val html = generateReceiptHtml(order, storeName, paperSize, design)
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     val printManager = activity.getSystemService(Context.PRINT_SERVICE) as? PrintManager
-                    val printAdapter = webView.createPrintDocumentAdapter("Delivio_Receipt_${order.orderNumber}")
-                    val jobName = "Receipt ${order.orderNumber}"
+                    val printAdapter = webView.createPrintDocumentAdapter("Delivio_Receipt_${order.formattedOrderNumber}")
+                    val jobName = "Receipt ${order.formattedOrderNumber}"
                     val mediaSize = if (paperSize.contains("58", ignoreCase = true)) {
                         PrintAttributes.MediaSize.ISO_A7
                     } else {
@@ -197,16 +299,22 @@ object ReceiptPrinterHelper {
             }
             webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
         } catch (e: Exception) {
-            shareReceiptAsText(activity, order, storeName, paperSize)
+            shareReceiptAsText(activity, order, storeName, paperSize, design)
         }
     }
 
-    fun shareReceiptAsText(context: Context, order: Order, storeName: String, paperSize: String = "80mm") {
-        val receiptText = generateFormattedReceiptText(order, storeName, paperSize)
+    fun shareReceiptAsText(
+        context: Context,
+        order: Order,
+        storeName: String,
+        paperSize: String = "80mm",
+        design: ReceiptDesign = ReceiptDesign()
+    ) {
+        val receiptText = generateFormattedReceiptText(order, storeName, paperSize, design)
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND
             putExtra(Intent.EXTRA_TEXT, receiptText)
-            putExtra(Intent.EXTRA_SUBJECT, "Delivio Receipt - ${order.orderNumber}")
+            putExtra(Intent.EXTRA_SUBJECT, "Delivio Receipt - ${order.formattedOrderNumber}")
             type = "text/plain"
         }
         val shareIntent = Intent.createChooser(sendIntent, "Share Receipt")

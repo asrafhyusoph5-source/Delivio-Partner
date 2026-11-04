@@ -27,12 +27,14 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.MerchantSettings
 import com.example.data.model.Order
 import com.example.ui.theme.LocalDelivioColors
+import com.example.data.model.ReceiptDesign
 import com.example.util.ReceiptPrinterHelper
 
 @Composable
 fun ReceiptPreviewDialog(
     order: Order,
     settings: MerchantSettings,
+    receiptDesign: ReceiptDesign = ReceiptDesign(),
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -40,8 +42,8 @@ fun ReceiptPreviewDialog(
     val activity = context as? Activity
 
     val paperSize = settings.printerPaperSize.ifBlank { "80mm" }
-    val formattedText = remember(order, settings.storeName, paperSize) {
-        ReceiptPrinterHelper.generateFormattedReceiptText(order, settings.storeName, paperSize)
+    val formattedText = remember(order, settings.storeName, paperSize, receiptDesign) {
+        ReceiptPrinterHelper.generateFormattedReceiptText(order, settings.storeName, paperSize, receiptDesign)
     }
 
     Dialog(
@@ -129,7 +131,8 @@ fun ReceiptPreviewDialog(
                                 context,
                                 order,
                                 settings.storeName,
-                                paperSize
+                                paperSize,
+                                receiptDesign
                             )
                         },
                         shape = RoundedCornerShape(14.dp),
@@ -150,14 +153,16 @@ fun ReceiptPreviewDialog(
                                     activity,
                                     order,
                                     settings.storeName,
-                                    paperSize
+                                    paperSize,
+                                    receiptDesign
                                 )
                             } else {
                                 ReceiptPrinterHelper.shareReceiptAsText(
                                     context,
                                     order,
                                     settings.storeName,
-                                    paperSize
+                                    paperSize,
+                                    receiptDesign
                                 )
                             }
                         },

@@ -30,6 +30,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val authErrorMessage = repository.authErrorMessage
 
     val settings = repository.settings
+    val receiptDesign = repository.receiptDesign
     val orders = repository.orders
     val newOrderAlert = repository.newOrderAlert
     val categories = repository.categories
@@ -480,16 +481,32 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _showMapLocationScreen.value = false
     }
 
-    fun saveStoreLocation(location: AddressLocation) {
+    fun saveStoreLocation(
+        location: AddressLocation,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
         _isActionLoading.value = true
         repository.saveStoreLocation(location) { success, error ->
             _isActionLoading.value = false
             if (success) {
                 _showMapLocationScreen.value = false
-                showSnackbar("Store location saved to Firestore")
-            } else {
-                showSnackbar(error ?: "Failed to save location")
+                showSnackbar("Store location saved")
             }
+            onResult(success, error)
+        }
+    }
+
+    fun requestUrgentLocationChange(
+        address: String,
+        lat: Double,
+        lng: Double,
+        reason: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        _isActionLoading.value = true
+        repository.requestUrgentLocationChange(address, lat, lng, reason) { success, error ->
+            _isActionLoading.value = false
+            onResult(success, error)
         }
     }
 

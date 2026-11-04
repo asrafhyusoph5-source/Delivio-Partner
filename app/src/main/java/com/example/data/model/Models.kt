@@ -36,6 +36,7 @@ enum class OrderStatus(val displayTitle: String) {
     PREPARING("Preparing"),
     READY("Ready"),
     RIDER_ON_THE_WAY("Rider is on the way"),
+    ON_ANOTHER_DELIVERY("On another delivery"),
     DELIVERED("Delivered"),
     COMPLETED("Completed"),
     REJECTED("Rejected"),
@@ -44,8 +45,14 @@ enum class OrderStatus(val displayTitle: String) {
     companion object {
         fun fromString(str: String?): OrderStatus {
             if (str == null) return PLACED_ORDER
+            val clean = str.trim()
+            if (clean.equals("On another delivery", ignoreCase = true) ||
+                clean.equals("on_another_delivery", ignoreCase = true) ||
+                clean.equals("ON_ANOTHER_DELIVERY", ignoreCase = true)) {
+                return ON_ANOTHER_DELIVERY
+            }
             return entries.find {
-                it.displayTitle.equals(str, ignoreCase = true) || it.name.equals(str, ignoreCase = true)
+                it.displayTitle.equals(clean, ignoreCase = true) || it.name.equals(clean, ignoreCase = true)
             } ?: PLACED_ORDER
         }
     }
@@ -238,7 +245,13 @@ data class Order(
     val riderVehicle: String = "",
     val note: String = "",
     val feesRaw: Map<String, Any?> = emptyMap(),
-    val rawJson: String = ""
+    val rawJson: String = "",
+    val acceptedAt: Long? = null,
+    val readyAt: Long? = null,
+    val deliveryOption: String = "Priority",
+    val dispatchHoldMinutes: Int = 0,
+    val isSplitChild: Boolean = false,
+    val splitOut: Boolean = false
 ) {
     val effectiveMerchantNote: String
         get() {
@@ -311,6 +324,12 @@ data class Order(
             json.put("editedAt", editedAt)
             json.put("editedBy", editedBy)
             json.put("editNote", editNote)
+            json.put("acceptedAt", acceptedAt)
+            json.put("readyAt", readyAt)
+            json.put("deliveryOption", deliveryOptionDisplay)
+            json.put("dispatchHoldMinutes", dispatchHoldMinutes)
+            json.put("isSplitChild", isSplitChild)
+            json.put("splitOut", splitOut)
             val itemsArr = org.json.JSONArray()
             items.forEach { itm ->
                 val itmJson = org.json.JSONObject()
@@ -327,27 +346,28 @@ data class Order(
         }
     }
 
+    val formattedOrderNumber: String
+        get() {
+            val num = orderNumber.trim()
+            val clean = if (num.startsWith("#")) num.removePrefix("#").trim() else num
+            return if (clean.isNotBlank()) {
+                "#$clean"
+            } else {
+                val fallback = if (id.length >= 6) id.takeLast(6).uppercase() else id.uppercase().ifBlank { "000000" }
+                "#$fallback"
+            }
+        }
+
     val effectivePaymentLabel: String
         get() {
             val pm = paymentMethod.trim().lowercase()
-            val isCash = pm.contains("cod") || pm.contains("cash") || paymentMethod.equals("COD", ignoreCase = true)
-            val isWallet = pm.contains("wallet")
+            val isCash = (pm.contains("cod") || pm.contains("cash") || paymentMethod.equals("COD", ignoreCase = true)) && !pm.contains("gcash")
+            val overallTotal = if (total > 0.0) total else (if (cashToCollect != null && cashToCollect > 0.0) cashToCollect else subtotal)
             return when {
-                isPickUp && isCash -> {
-                    val collectAmount = if (cashToCollect != null && cashToCollect > 0.0) cashToCollect else total
-                    "Pay at pickup - collect ${com.example.util.FormatUtils.formatCurrency(collectAmount)}"
-                }
-                !isPickUp && isCash -> "Cash on Delivery (rider collects)"
-                isWallet -> "Paid with Delivio Wallet"
-                else -> {
-                    val provider = when {
-                        pm.contains("gcash") -> "GCash"
-                        pm.contains("maya") -> "Maya"
-                        pm.contains("card") -> "Card"
-                        else -> paymentMethod.ifBlank { "online" }
-                    }
-                    "Paid online ($provider)"
-                }
+                isPickUp && isCash -> "Pay at pickup - collect ${com.example.util.FormatUtils.formatCurrency(overallTotal)}"
+                isPickUp -> "Paid online - nothing to collect"
+                isCash -> "Cash on Delivery"
+                else -> "Paid online"
             }
         }
 
@@ -372,6 +392,93 @@ data class Order(
                 riderRequest?.status?.equals("Rider assigned", ignoreCase = true) == true ||
                 riderRequest?.status?.equals("Assigned", ignoreCase = true) == true
 
+    val deliveryOptionDisplay: String
+        get() = when {
+            deliveryOption.contains("saver", ignoreCase = true) -> "Saver"
+            deliveryOption.contains("standard", ignoreCase = true) -> "Standard"
+            else -> "Priority" // missing or anything else defaults to Priority
+        }
+
+    val effectiveHoldMinutes: Int
+        get() = if (deliveryOptionDisplay.equals("Standard", ignoreCase = true) || deliveryOptionDisplay.equals("Saver", ignoreCase = true)) {
+            dispatchHoldMinutes.coerceAtLeast(0)
+        } else {
+            0
+        }
+
+    fun riderHoldRemainingMs(now: Long = System.currentTimeMillis()): Long {
+        val start = acceptedAt ?: placedAtTimestamp
+        val holdMs = effectiveHoldMinutes * 60 * 1000L
+        val holdEnd = start + holdMs
+        return (holdEnd - now).coerceAtLeast(0L)
+    }
+
+    fun riderHoldRemainingFormatted(now: Long = System.currentTimeMillis()): String {
+        val totalSec = riderHoldRemainingMs(now) / 1000L
+        val minutes = totalSec / 60
+        val seconds = totalSec % 60
+        return "%02d:%02d".format(minutes, seconds)
+    }
+
+    fun isRiderBatchHoldActive(now: Long = System.currentTimeMillis()): Boolean {
+        if (isPickUp) return false
+        val opt = deliveryOptionDisplay
+        if (opt != "Standard" && opt != "Saver") return false
+        if (status == OrderStatus.RIDER_ON_THE_WAY || status == OrderStatus.DELIVERED ||
+            status == OrderStatus.COMPLETED || status == OrderStatus.CANCELLED || status == OrderStatus.REJECTED) {
+            return false
+        }
+        val start = acceptedAt ?: placedAtTimestamp
+        val holdMs = effectiveHoldMinutes * 60 * 1000L
+        if (holdMs <= 0) return false
+
+        return if (opt == "Standard") {
+            // Standard orders: show until earlier of acceptedAt + dispatch.holdMinutes or marked Ready
+            (now < start + holdMs) && status != OrderStatus.READY
+        } else {
+            // Saver orders: show until acceptedAt + dispatch.holdMinutes exactly, even if marked Ready earlier
+            now < start + holdMs
+        }
+    }
+
+    fun riderBatchHoldMessage(now: Long = System.currentTimeMillis()): String {
+        return if (deliveryOptionDisplay == "Saver") {
+            "Rider search starts in ${riderHoldRemainingFormatted(now)}"
+        } else {
+            "Rider may be matched with another order"
+        }
+    }
+
+    fun isNoRiderYet(now: Long = System.currentTimeMillis()): Boolean {
+        if (isPickUp) return false
+        val startBase = acceptedAt ?: riderRequest?.requestedAt ?: placedAtTimestamp
+        val holdMs = effectiveHoldMinutes * 60 * 1000L
+        val opt = deliveryOptionDisplay
+
+        val holdEndsAt = when (opt) {
+            "Standard" -> {
+                // earlier of acceptedAt + dispatch.holdMinutes or the moment the order is marked Ready
+                val nominalEnd = startBase + holdMs
+                val effectiveReadyAt = readyAt ?: if (status == OrderStatus.READY) now else null
+                if (effectiveReadyAt != null && effectiveReadyAt < nominalEnd) {
+                    effectiveReadyAt
+                } else {
+                    nominalEnd
+                }
+            }
+            "Saver" -> {
+                // exactly acceptedAt + dispatch.holdMinutes, even if marked Ready earlier
+                startBase + holdMs
+            }
+            else -> {
+                startBase
+            }
+        }
+
+        val threshold = holdEndsAt + (5 * 60 * 1000L)
+        return now >= threshold
+    }
+
     fun canRequestRiderAgain(now: Long = System.currentTimeMillis()): Boolean {
         if (isPickUp) return false
         if (status != OrderStatus.PREPARING && status != OrderStatus.READY) return false
@@ -380,8 +487,7 @@ data class Order(
         val reqStatus = req.status.lowercase()
         if (reqStatus in listOf("cancelled", "released", "rejected")) return true
         if (reqStatus == "searching") {
-            val reqAt = req.requestedAt ?: return false
-            return (now - reqAt) >= 5 * 60 * 1000L
+            return isNoRiderYet(now)
         }
         return false
     }
@@ -649,7 +755,8 @@ data class MerchantSettings(
     val timezone: String = "Asia/Manila",
     val closedUntil: Long? = null,
     val openUntil: Long? = null,
-    val closedAt: Long? = null
+    val closedAt: Long? = null,
+    val locationChangedAt: Long? = null
 )
 
 data class InboxMessage(
@@ -683,3 +790,34 @@ data class AnonymousRating(
     val comment: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
+
+data class ReceiptCopyConfig(
+    val enabled: Boolean = true,
+    val title: String = "",
+    val showItemPrices: Boolean = true
+)
+
+data class ReceiptDesign(
+    val brandLine: String = "Delivio",
+    val showOrderId: Boolean = true,
+    val showOrderedAt: Boolean = true,
+    val showCustomerName: Boolean = true,
+    val showNote: Boolean = true,
+    val showSetChoices: Boolean = true,
+    val fontSize: String = "medium", // "small" | "medium" | "large"
+    val align: String = "left",      // "center" | "left"
+    val separator: String = "dashes", // "dashes" | "solid" | "double"
+    val headerLines: List<String> = emptyList(),
+    val footerText: String = "",
+    val merchantCopy: ReceiptCopyConfig = ReceiptCopyConfig(
+        enabled = true,
+        title = "MERCHANT'S COPY",
+        showItemPrices = true
+    ),
+    val customerCopy: ReceiptCopyConfig = ReceiptCopyConfig(
+        enabled = true,
+        title = "CUSTOMER'S COPY",
+        showItemPrices = false
+    )
+)
+

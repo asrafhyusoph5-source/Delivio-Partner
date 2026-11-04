@@ -126,7 +126,7 @@ fun RiderTrackingModal(
         }
     }
     val elapsedMinutes = elapsedSeconds / 60
-    val showNoRiderYet = riderRequest?.isSearching == true && elapsedMinutes >= 5
+    val showNoRiderYet = riderRequest?.isSearching == true && order.isNoRiderYet(System.currentTimeMillis())
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -157,7 +157,7 @@ fun RiderTrackingModal(
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold)
                         )
                         Text(
-                            text = "Order ${order.orderNumber} • ${order.serviceType.replaceFirstChar { it.uppercase() }}",
+                            text = "Order ${order.formattedOrderNumber} • ${order.serviceType.replaceFirstChar { it.uppercase() }}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -561,7 +561,7 @@ fun RiderTrackingModal(
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Order ${order.orderNumber}",
+                            text = "Order ${order.formattedOrderNumber}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -647,7 +647,37 @@ fun RiderTrackingModal(
                                     Spacer(modifier = Modifier.width(14.dp))
                                     Column {
                                         Text("No rider yet", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = StatusWarningAmber)
-                                        Text("Over 5 minutes passed with no rider assigned.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        val waitMin = order.effectiveHoldMinutes + 5
+                                        Text("Over $waitMin minutes passed with no rider assigned.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+
+                            if (order.isRiderBatchHoldActive(System.currentTimeMillis())) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFF0FDF4),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                                    modifier = Modifier.fillMaxWidth().testTag("modal_rider_batch_hold_banner")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (order.deliveryOptionDisplay == "Saver") Icons.Default.Timer else Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = Color(0xFF15803D),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = order.riderBatchHoldMessage(System.currentTimeMillis()),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF15803D)
+                                        )
                                     }
                                 }
                             }

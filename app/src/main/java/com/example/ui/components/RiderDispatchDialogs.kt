@@ -113,7 +113,7 @@ fun ChooseOrderForDispatchDialog(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = order.orderNumber,
+                                            text = order.formattedOrderNumber,
                                             fontWeight = FontWeight.ExtraBold,
                                             style = MaterialTheme.typography.titleSmall
                                         )
@@ -150,7 +150,7 @@ fun ChooseOrderForDispatchDialog(
 
                                 Column(horizontalAlignment = Alignment.End) {
                                     Text(
-                                        text = FormatUtils.formatCurrency(order.total),
+                                        text = FormatUtils.formatCurrency(order.subtotal),
                                         fontWeight = FontWeight.ExtraBold,
                                         style = MaterialTheme.typography.titleSmall,
                                         color = customColors.accent

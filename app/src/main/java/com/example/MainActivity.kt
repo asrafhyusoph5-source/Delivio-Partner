@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
             val authErrorMessage by viewModel.authErrorMessage.collectAsStateWithLifecycle()
 
             val settings by viewModel.settings.collectAsStateWithLifecycle()
+            val receiptDesign by viewModel.receiptDesign.collectAsStateWithLifecycle()
             val orders by viewModel.orders.collectAsStateWithLifecycle()
             val newOrderAlert by viewModel.newOrderAlert.collectAsStateWithLifecycle()
             val categories by viewModel.categories.collectAsStateWithLifecycle()
@@ -167,7 +168,11 @@ class MainActivity : ComponentActivity() {
                     // Full-screen Map Location Pin setter
                     MapLocationScreen(
                         currentLocation = settings.storeLocation,
-                        onSaveLocation = { viewModel.saveStoreLocation(it) },
+                        locationChangedAt = settings.locationChangedAt,
+                        onSaveLocation = { loc, cb -> viewModel.saveStoreLocation(loc, cb) },
+                        onRequestUrgentChange = { addr, lat, lng, reason, cb ->
+                            viewModel.requestUrgentLocationChange(addr, lat, lng, reason, cb)
+                        },
                         onBack = { viewModel.closeMapLocation() }
                     )
                 } else if (showWalletScreen) {
@@ -522,6 +527,7 @@ class MainActivity : ComponentActivity() {
                     ReceiptPreviewDialog(
                         order = target,
                         settings = settings,
+                        receiptDesign = receiptDesign,
                         onDismiss = {
                             viewModel.closeReceiptPreview()
                         }

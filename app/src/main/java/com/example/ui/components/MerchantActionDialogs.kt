@@ -41,7 +41,7 @@ fun RejectOrderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Reject Order ${order.orderNumber}") },
+        title = { Text("Reject Order ${order.formattedOrderNumber}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Please specify why you are declining this order:", style = MaterialTheme.typography.bodySmall)
@@ -92,7 +92,7 @@ fun PrepTimePickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Set Prep Time for ${order.orderNumber}") },
+        title = { Text("Set Prep Time for ${order.formattedOrderNumber}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("How long will the kitchen take to prepare this order?", style = MaterialTheme.typography.bodyMedium)

@@ -256,7 +256,7 @@ fun EarningsScreen(
                     ) {
                         Column {
                             Text(
-                                text = "${order.orderNumber} • ${order.customerName}",
+                                text = "${order.formattedOrderNumber} • ${order.customerName}",
                                 fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -325,7 +325,7 @@ fun EarningsScreen(
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "${rOrder.orderNumber} • ${rOrder.customerName}",
+                                        text = "${rOrder.formattedOrderNumber} • ${rOrder.customerName}",
                                         fontWeight = FontWeight.SemiBold,
                                         style = MaterialTheme.typography.bodyMedium
                                     )

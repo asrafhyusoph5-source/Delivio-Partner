@@ -56,7 +56,8 @@ fun DashboardScreen(
         it.status == OrderStatus.PLACED_ORDER ||
                 it.status == OrderStatus.PREPARING ||
                 it.status == OrderStatus.READY ||
-                it.status == OrderStatus.RIDER_ON_THE_WAY
+                it.status == OrderStatus.RIDER_ON_THE_WAY ||
+                it.status == OrderStatus.ON_ANOTHER_DELIVERY
     }
 
     val deliveredOrders = orders.filter {
@@ -475,13 +476,13 @@ fun DashboardScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(order.orderNumber, fontWeight = FontWeight.Bold)
+                                    Text(order.formattedOrderNumber, fontWeight = FontWeight.Bold)
                                     Spacer(modifier = Modifier.width(6.dp))
                                     OrderStatusBadge(status = order.status)
                                 }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "${order.customerName} • ${order.totalItemCount} items (${FormatUtils.formatCurrency(order.total)})",
+                                    text = "${order.customerName} • ${order.totalItemCount} items (${FormatUtils.formatCurrency(order.subtotal)})",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

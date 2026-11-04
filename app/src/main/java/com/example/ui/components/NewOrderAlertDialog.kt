@@ -108,7 +108,7 @@ fun NewOrderAlertDialog(
                                 )
                             )
                             Text(
-                                text = order.orderNumber,
+                                text = order.formattedOrderNumber,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -172,7 +172,7 @@ fun NewOrderAlertDialog(
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                text = FormatUtils.formatCurrency(order.total),
+                                text = FormatUtils.formatCurrency(order.subtotal),
                                 fontWeight = FontWeight.ExtraBold,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = customColors.accent
@@ -180,7 +180,7 @@ fun NewOrderAlertDialog(
                         }
 
                         Text(
-                            text = order.formattedPaymentMethod,
+                            text = order.effectivePaymentLabel,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -215,19 +215,9 @@ fun NewOrderAlertDialog(
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Items subtotal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(FormatUtils.formatCurrency(order.subtotal), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                            Text("Subtotal", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            Text(FormatUtils.formatCurrency(order.subtotal), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                         }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Delivery fee", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(FormatUtils.formatCurrency(order.deliveryFee), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-                        }
-                        Text(
-                            text = "Delivery fee goes to the rider.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                        )
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
