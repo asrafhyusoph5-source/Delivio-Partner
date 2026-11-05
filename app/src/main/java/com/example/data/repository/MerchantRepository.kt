@@ -128,6 +128,9 @@ class MerchantRepository private constructor(context: Context) {
     private val _menuItems = MutableStateFlow<List<MenuItem>>(emptyList())
     val menuItems: StateFlow<List<MenuItem>> = _menuItems.asStateFlow()
 
+    private val _menus = MutableStateFlow<List<ShopMenu>>(emptyList())
+    val menus: StateFlow<List<ShopMenu>> = _menus.asStateFlow()
+
     // Payouts & Promos & Staff & Change Requests
     private val _payouts = MutableStateFlow<List<Payout>>(emptyList())
     val payouts: StateFlow<List<Payout>> = _payouts.asStateFlow()
@@ -154,6 +157,7 @@ class MerchantRepository private constructor(context: Context) {
     private var menuListener: ListenerRegistration? = null
     private var categoryListener: ListenerRegistration? = null
     private var subcategoryListener: ListenerRegistration? = null
+    private var menusListener: ListenerRegistration? = null
     private var payoutListener: ListenerRegistration? = null
     private var staffListener: ListenerRegistration? = null
     private var changeRequestsListener: ListenerRegistration? = null
@@ -1112,6 +1116,9 @@ class MerchantRepository private constructor(context: Context) {
                                 choices = choices
                             )
                         }
+                        val rawMenuIds = (doc.get("menuIds") as? List<*>)?.mapNotNull { it?.toString() }?.filter { it.isNotBlank() }
+                        val parsedMenuIds = if (!rawMenuIds.isNullOrEmpty()) rawMenuIds else listOf("main")
+
                         MenuItem(
                             id = doc.id,
                             merchantId = mId,
@@ -1119,6 +1126,7 @@ class MerchantRepository private constructor(context: Context) {
                             categoryName = doc.getString("categoryName") ?: "",
                             subcategoryId = doc.getString("subcategoryId"),
                             subcategoryName = doc.getString("subcategoryName"),
+                            menuIds = parsedMenuIds,
                             name = doc.getString("name") ?: "",
                             description = doc.getString("description") ?: "",
                             price = doc.getDouble("price") ?: 0.0,
@@ -1194,6 +1202,68 @@ class MerchantRepository private constructor(context: Context) {
                         )
                     }.sortedWith(compareBy({ it.sortOrder }, { it.name.lowercase() }))
                     _subcategories.value = subcats
+                }
+            }
+
+        // 4c. Menus listener: merchants/{merchantId}/menus
+        menusListener = db.collection("merchants").document(mId).collection("menus")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Menus listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val parsedMenus = snapshot.documents.mapNotNull { doc ->
+                        val menuName = doc.getString("name") ?: (if (doc.id == "main") "Main Menu" else return@mapNotNull null)
+                        val active = doc.getBoolean("active") ?: true
+                        val sortOrder = doc.getLong("sortOrder")?.toInt() ?: 0
+                        val schedMap = doc.get("schedule") as? Map<*, *>
+                        val parsedSchedule = if (schedMap != null) {
+                            val daysList = (schedMap["days"] as? List<*>)?.mapNotNull { it?.toString()?.lowercase() } ?: emptyList()
+                            val startStr = (schedMap["start"] as? String) ?: "00:00"
+                            val endStr = (schedMap["end"] as? String) ?: "23:59"
+                            MenuSchedule(days = daysList, start = startStr, end = endStr)
+                        } else null
+                        val createdAt = when (val c = doc.get("createdAt")) {
+                            is Timestamp -> c.toDate().time
+                            is Number -> c.toLong()
+                            else -> System.currentTimeMillis()
+                        }
+                        val updatedAt = when (val u = doc.get("updatedAt")) {
+                            is Timestamp -> u.toDate().time
+                            is Number -> u.toLong()
+                            else -> System.currentTimeMillis()
+                        }
+                        ShopMenu(
+                            id = doc.id,
+                            merchantId = mId,
+                            name = menuName,
+                            active = active,
+                            sortOrder = sortOrder,
+                            schedule = parsedSchedule,
+                            createdAt = createdAt,
+                            updatedAt = updatedAt
+                        )
+                    }.toMutableList()
+
+                    // Ensure Main Menu exists (id: "main")
+                    val hasMain = parsedMenus.any { it.id == "main" }
+                    if (!hasMain) {
+                        val mainDoc = ShopMenu(id = "main", merchantId = mId, name = "Main Menu", sortOrder = 0)
+                        parsedMenus.add(0, mainDoc)
+                        db.collection("merchants").document(mId).collection("menus").document("main").set(
+                            mapOf(
+                                "name" to "Main Menu",
+                                "active" to true,
+                                "sortOrder" to 0,
+                                "schedule" to null,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    }
+
+                    _menus.value = parsedMenus.sortedWith(compareBy({ if (it.id == "main") 0 else 1 }, { it.sortOrder }, { it.name.lowercase() }))
                 }
             }
 
@@ -1475,6 +1545,9 @@ class MerchantRepository private constructor(context: Context) {
         subcategoryListener?.remove()
         subcategoryListener = null
         _subcategories.value = emptyList()
+        menusListener?.remove()
+        menusListener = null
+        _menus.value = emptyList()
         payoutListener?.remove()
         payoutListener = null
         staffListener?.remove()
@@ -3254,6 +3327,7 @@ class MerchantRepository private constructor(context: Context) {
             "categoryName" to categoryName,
             "subcategoryId" to item.subcategoryId,
             "subcategoryName" to item.subcategoryName,
+            "menuIds" to item.getEffectiveMenuIds(),
             "available" to item.inStock,
             "inStock" to item.inStock,
             "soldOutReason" to (item.soldOutReason ?: ""),
@@ -3522,6 +3596,278 @@ class MerchantRepository private constructor(context: Context) {
         } else {
             onResult(true, null)
         }
+    }
+
+    fun reorderSubcategories(reorderedList: List<Subcategory>, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val mId = _merchantId.value ?: run {
+            onResult(false, "No active merchant session")
+            return
+        }
+        val db = firestore
+        val updated = reorderedList.mapIndexed { idx, sub -> sub.copy(sortOrder = idx, updatedAt = System.currentTimeMillis()) }
+        _subcategories.value = updated
+
+        if (db != null) {
+            val batch = db.batch()
+            updated.forEach { sub ->
+                val ref = db.collection("merchants").document(mId).collection("subcategories").document(sub.id)
+                batch.update(ref, mapOf("sortOrder" to sub.sortOrder, "updatedAt" to FieldValue.serverTimestamp()))
+            }
+            batch.commit()
+                .addOnSuccessListener { onResult(true, null) }
+                .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to reorder categories") }
+        } else {
+            onResult(true, null)
+        }
+    }
+
+    // --- Menus Management (merchants/{shopId}/menus/{menuId}) ---
+
+    fun saveMenu(
+        menu: ShopMenu,
+        assignedProductIds: Set<String>? = null,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val mId = _merchantId.value ?: run {
+            onResult(false, "No active merchant session")
+            return
+        }
+        val db = firestore ?: run {
+            onResult(false, "Firestore unavailable")
+            return
+        }
+        val trimmedName = menu.name.trim()
+        if (trimmedName.length < 2 || trimmedName.length > 40) {
+            onResult(false, "Menu name must be between 2 and 40 characters")
+            return
+        }
+        if (_menus.value.any { it.id != menu.id && it.name.trim().equals(trimmedName, ignoreCase = true) }) {
+            onResult(false, "A menu with the name \"$trimmedName\" already exists")
+            return
+        }
+
+        val menuId = if (menu.id.isNotBlank()) menu.id else UUID.randomUUID().toString()
+        val schedMap: Map<String, Any?>? = menu.schedule?.let { s ->
+            mapOf(
+                "days" to s.days,
+                "start" to s.start,
+                "end" to s.end
+            )
+        }
+
+        val data = hashMapOf<String, Any?>(
+            "name" to trimmedName,
+            "active" to menu.active,
+            "sortOrder" to menu.sortOrder,
+            "schedule" to schedMap,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (menu.id.isBlank()) {
+            data["createdAt"] = FieldValue.serverTimestamp()
+        }
+
+        db.collection("merchants").document(mId).collection("menus").document(menuId).set(data, com.google.firebase.firestore.SetOptions.merge())
+            .addOnSuccessListener {
+                if (assignedProductIds != null) {
+                    // Update menuIds on products: add menuId to assignedProductIds, remove from unassigned (for this menu)
+                    val allItems = _menuItems.value
+                    val batch = db.batch()
+                    var opCount = 0
+                    for (item in allItems) {
+                        val currIds = item.getEffectiveMenuIds().toMutableSet()
+                        val shouldHave = assignedProductIds.contains(item.id)
+                        var changed = false
+                        if (shouldHave && !currIds.contains(menuId)) {
+                            currIds.add(menuId)
+                            changed = true
+                        } else if (!shouldHave && currIds.contains(menuId)) {
+                            currIds.remove(menuId)
+                            if (currIds.isEmpty()) currIds.add("main")
+                            changed = true
+                        }
+                        if (changed) {
+                            val ref = db.collection("merchants").document(mId).collection("items").document(item.id)
+                            batch.update(ref, "menuIds", currIds.toList())
+                            opCount++
+                        }
+                    }
+                    if (opCount > 0) {
+                        batch.commit()
+                    }
+                }
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to save menu")
+            }
+    }
+
+    fun toggleMenuActive(menuId: String, active: Boolean) {
+        val mId = _merchantId.value ?: return
+        val db = firestore ?: return
+        db.collection("merchants").document(mId).collection("menus").document(menuId)
+            .update(mapOf("active" to active, "updatedAt" to FieldValue.serverTimestamp()))
+    }
+
+    fun duplicateMenu(menuId: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val target = _menus.value.find { it.id == menuId } ?: run {
+            onResult(false, "Menu not found")
+            return
+        }
+        var newName = "${target.name} (Copy)"
+        var counter = 2
+        while (_menus.value.any { it.name.trim().equals(newName, ignoreCase = true) }) {
+            newName = "${target.name} (Copy $counter)"
+            counter++
+        }
+        val newMenu = target.copy(
+            id = "",
+            name = newName,
+            sortOrder = (_menus.value.maxOfOrNull { it.sortOrder } ?: 0) + 1
+        )
+        // Products in original menu are also included in copy
+        val productIds = _menuItems.value.filter { it.getEffectiveMenuIds().contains(menuId) }.map { it.id }.toSet()
+        saveMenu(newMenu, assignedProductIds = productIds, onResult = onResult)
+    }
+
+    fun deleteMenu(menuId: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        if (menuId == "main") {
+            onResult(false, "Main Menu cannot be deleted")
+            return
+        }
+        val mId = _merchantId.value ?: run {
+            onResult(false, "No active merchant session")
+            return
+        }
+        val db = firestore ?: run {
+            onResult(false, "Firestore unavailable")
+            return
+        }
+
+        db.collection("merchants").document(mId).collection("menus").document(menuId).delete()
+            .addOnSuccessListener {
+                // Products in this menu move to Main Menu (menuIds without menuId; if empty, ["main"])
+                db.collection("merchants").document(mId).collection("items")
+                    .whereArrayContains("menuIds", menuId)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        val docs = snap.documents
+                        if (docs.isNotEmpty()) {
+                            val chunks = docs.chunked(400)
+                            for (chunk in chunks) {
+                                val batch = db.batch()
+                                for (d in chunk) {
+                                    val curr = (d.get("menuIds") as? List<*>)?.mapNotNull { it?.toString() }?.filter { it != menuId } ?: emptyList()
+                                    val updated = if (curr.isEmpty()) listOf("main") else curr
+                                    batch.update(d.reference, "menuIds", updated)
+                                }
+                                batch.commit()
+                            }
+                        }
+                        onResult(true, null)
+                    }
+                    .addOnFailureListener {
+                        onResult(true, null)
+                    }
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to delete menu")
+            }
+    }
+
+    // --- Bulk Edit Item Actions ---
+
+    fun bulkMarkItemsStock(itemIds: Set<String>, inStock: Boolean, onResult: (Boolean, Int, String?) -> Unit) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemIds.isEmpty()) return onResult(true, 0, null)
+
+        val batch = db.batch()
+        itemIds.forEach { id ->
+            val ref = db.collection("merchants").document(mId).collection("items").document(id)
+            batch.update(ref, mapOf("available" to inStock, "inStock" to inStock))
+        }
+        batch.commit()
+            .addOnSuccessListener {
+                syncCuisineTags(mId)
+                onResult(true, itemIds.size, null)
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, 0, ex.localizedMessage ?: "Bulk update failed")
+            }
+    }
+
+    fun bulkMoveItemsToMenu(itemIds: Set<String>, targetMenuId: String, onResult: (Boolean, Int, String?) -> Unit) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemIds.isEmpty()) return onResult(true, 0, null)
+
+        val batch = db.batch()
+        itemIds.forEach { id ->
+            val ref = db.collection("merchants").document(mId).collection("items").document(id)
+            batch.update(ref, "menuIds", listOf(targetMenuId))
+        }
+        batch.commit()
+            .addOnSuccessListener { onResult(true, itemIds.size, null) }
+            .addOnFailureListener { ex -> onResult(false, 0, ex.localizedMessage ?: "Failed to move products to menu") }
+    }
+
+    fun bulkSetCategoryClass(itemIds: Set<String>, subcategoryId: String?, subcategoryName: String?, onResult: (Boolean, Int, String?) -> Unit) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemIds.isEmpty()) return onResult(true, 0, null)
+
+        val batch = db.batch()
+        itemIds.forEach { id ->
+            val ref = db.collection("merchants").document(mId).collection("items").document(id)
+            batch.update(ref, mapOf(
+                "subcategoryId" to subcategoryId,
+                "subcategoryName" to subcategoryName
+            ))
+        }
+        batch.commit()
+            .addOnSuccessListener { onResult(true, itemIds.size, null) }
+            .addOnFailureListener { ex -> onResult(false, 0, ex.localizedMessage ?: "Failed to update category class") }
+    }
+
+    fun bulkAdjustPrices(itemIds: Set<String>, percentDelta: Double, fixedDelta: Double, onResult: (Boolean, Int, String?) -> Unit) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemIds.isEmpty()) return onResult(true, 0, null)
+
+        val targetItems = _menuItems.value.filter { it.id in itemIds }
+        val batch = db.batch()
+        targetItems.forEach { item ->
+            val oldPrice = item.price
+            val newPrice = if (percentDelta != 0.0) {
+                (oldPrice * (1.0 + (percentDelta / 100.0))).coerceAtLeast(0.0)
+            } else {
+                (oldPrice + fixedDelta).coerceAtLeast(0.0)
+            }
+            val ref = db.collection("merchants").document(mId).collection("items").document(item.id)
+            batch.update(ref, "price", (Math.round(newPrice * 100.0) / 100.0))
+        }
+        batch.commit()
+            .addOnSuccessListener { onResult(true, targetItems.size, null) }
+            .addOnFailureListener { ex -> onResult(false, 0, ex.localizedMessage ?: "Failed to adjust prices") }
+    }
+
+    fun bulkDeleteItems(itemIds: Set<String>, onResult: (Boolean, Int, String?) -> Unit) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemIds.isEmpty()) return onResult(true, 0, null)
+
+        val batch = db.batch()
+        itemIds.forEach { id ->
+            val ref = db.collection("merchants").document(mId).collection("items").document(id)
+            batch.delete(ref)
+        }
+        batch.commit()
+            .addOnSuccessListener {
+                syncCuisineTags(mId)
+                onResult(true, itemIds.size, null)
+            }
+            .addOnFailureListener { ex -> onResult(false, 0, ex.localizedMessage ?: "Failed to delete products") }
     }
 
     // --- Staff Management (Uses staffCreator FirebaseApp instance) ---

@@ -3,9 +3,9 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,11 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.data.model.BusinessType
-import com.example.data.model.MenuCategory
-import com.example.data.model.MenuItem
-import com.example.data.model.PromoDeal
-import com.example.data.model.Subcategory
+import com.example.data.model.*
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
@@ -39,13 +35,19 @@ import com.example.util.FormatUtils
 import com.example.util.FOOD_CATEGORIES
 import com.example.util.CONVENIENCE_CATEGORIES
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MenuScreen(
+    settings: MerchantSettings,
     categories: List<MenuCategory>,
     subcategories: List<Subcategory> = emptyList(),
+    menus: List<ShopMenu> = emptyList(),
     menuItems: List<MenuItem>,
     promos: List<PromoDeal>,
     businessType: BusinessType,
+    currentTime: Long,
+    isServiceLocked: Boolean = false,
+    serviceLockMessage: String? = null,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     stockFilter: String,
@@ -54,30 +56,33 @@ fun MenuScreen(
     onCategorySelect: (String?) -> Unit,
     selectedSubcategoryId: String? = null,
     onSubcategorySelect: (String?) -> Unit = {},
-    isMultiSelectMode: Boolean,
-    selectedItemIds: Set<String>,
-    onToggleMultiSelect: () -> Unit,
-    onToggleItemSelection: (String) -> Unit,
-    onBulkMarkInStock: () -> Unit,
-    onBulkMarkSoldOut: () -> Unit,
-    onBulkPriceAdjust: (percentDelta: Double, fixedDelta: Double) -> Unit,
+    selectedMenuIdFilter: String? = null,
+    onMenuFilterChange: (String?) -> Unit = {},
+    isMultiSelectMode: Boolean = false,
+    selectedItemIds: Set<String> = emptySet(),
+    onToggleMultiSelect: () -> Unit = {},
+    onToggleItemSelection: (String) -> Unit = {},
+    onBulkMarkInStock: () -> Unit = {},
+    onBulkMarkSoldOut: () -> Unit = {},
+    onBulkPriceAdjust: (percentDelta: Double, fixedDelta: Double) -> Unit = { _, _ -> },
     onToggleItemAvailability: (MenuItem) -> Unit,
     onAddItem: () -> Unit,
     onEditItem: (MenuItem) -> Unit,
     onDuplicateItem: (String) -> Unit,
-    onQuickAssignCategory: (MenuItem, String) -> Unit = { _, _ -> },
-    onAddCategory: (String) -> Unit = {},
-    onReorderCategory: (categoryId: String, moveUp: Boolean) -> Unit = { _, _ -> },
-    onToggleCategoryVisibility: (String) -> Unit = {},
-    onDeleteCategory: (String) -> Unit = {},
+    onMoveItemToMenu: (MenuItem, String) -> Unit = { _, _ -> },
+    onDeleteItem: (String) -> Unit = {},
+    onOpenMenuManagement: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    var showBulkPriceDialog by remember { mutableStateOf(false) }
-    var bulkPriceDeltaText by remember { mutableStateOf("10") } // 10%
-    var quickAssignTargetItem by remember { mutableStateOf<MenuItem?>(null) }
+    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
 
-    // Fixed allowed categories by business type (exact spelling and order)
+    var showFilterBottomSheet by remember { mutableStateOf(false) }
+    var showIntroCard by remember { mutableStateOf(true) }
+    var itemToDelete by remember { mutableStateOf<MenuItem?>(null) }
+    var itemToMoveMenu by remember { mutableStateOf<MenuItem?>(null) }
+
+    // Allowed Main Categories
     val allowedCategories = remember(businessType) {
         if (businessType == BusinessType.FOOD) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
     }
@@ -87,26 +92,78 @@ fun MenuScreen(
         return categories.find { it.id == item.categoryId }?.name ?: ""
     }
 
-    // Uncategorized items: items whose categoryName is not in the allowed list
-    val uncategorizedItems = remember(menuItems, allowedCategories, categories, businessType) {
-        menuItems.filter { item ->
-            item.businessType == businessType &&
-                    !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
-        }
-    }
-
-    // Counts for each allowed category
-    val categoryCounts = remember(menuItems, allowedCategories, categories, businessType) {
-        allowedCategories.associateWith { catName ->
-            menuItems.count { item ->
-                item.businessType == businessType &&
-                        resolveCategoryName(item).equals(catName, ignoreCase = true)
-            }
-        }
-    }
-
-    val totalThisTypeCount = remember(menuItems, businessType) {
+    // Products counts for this shop
+    val totalProducts = remember(menuItems, businessType) {
         menuItems.count { it.businessType == businessType }
+    }
+    val soldOutCount = remember(menuItems, businessType) {
+        menuItems.count { it.businessType == businessType && !it.inStock }
+    }
+    val notAvailableNowCount = remember(menuItems, menus, currentTime, settings.timezone, businessType) {
+        menuItems.count { it.businessType == businessType && !it.isAvailableNow(menus, currentTime, settings.timezone) }
+    }
+
+    // Active filters count for badge
+    val activeFilterCount = remember(selectedCategoryId, stockFilter, selectedMenuIdFilter) {
+        var count = 0
+        if (selectedCategoryId != null) count++
+        if (stockFilter != "All") count++
+        if (selectedMenuIdFilter != null) count++
+        count
+    }
+
+    // Filtered items
+    val displayedItems = remember(
+        menuItems,
+        businessType,
+        selectedSubcategoryId,
+        selectedCategoryId,
+        stockFilter,
+        selectedMenuIdFilter,
+        searchQuery,
+        menus,
+        currentTime,
+        settings.timezone
+    ) {
+        menuItems.filter { item ->
+            val matchType = item.businessType == businessType
+            val itemCat = resolveCategoryName(item)
+
+            val matchCategoryClass = when (selectedSubcategoryId) {
+                null -> true
+                "OTHER" -> item.subcategoryId.isNullOrBlank() && item.subcategoryName.isNullOrBlank()
+                else -> item.subcategoryId == selectedSubcategoryId ||
+                        item.subcategoryName.equals(selectedSubcategoryId, ignoreCase = true) ||
+                        subcategories.find { it.id == selectedSubcategoryId }?.name?.let { item.subcategoryName.equals(it, ignoreCase = true) } == true
+            }
+
+            val matchMainCategory = when (selectedCategoryId) {
+                null -> true
+                else -> {
+                    val targetName = categories.find { it.id == selectedCategoryId }?.name ?: selectedCategoryId
+                    itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
+                }
+            }
+
+            val matchStock = when (stockFilter) {
+                "In stock" -> item.inStock
+                "Sold out" -> !item.inStock
+                else -> true
+            }
+
+            val matchMenu = when (selectedMenuIdFilter) {
+                null -> true
+                else -> item.getEffectiveMenuIds().contains(selectedMenuIdFilter)
+            }
+
+            val matchQuery = searchQuery.isBlank() ||
+                    item.name.contains(searchQuery, ignoreCase = true) ||
+                    item.description.contains(searchQuery, ignoreCase = true) ||
+                    item.tags.any { it.contains(searchQuery, ignoreCase = true) } ||
+                    item.sku.contains(searchQuery, ignoreCase = true)
+
+            matchType && matchCategoryClass && matchMainCategory && matchStock && matchMenu && matchQuery
+        }
     }
 
     // Subcategory counts for chips
@@ -117,361 +174,268 @@ fun MenuScreen(
             }
         }
     }
-
     val otherSubcategoryCount = remember(menuItems, businessType) {
         menuItems.count {
             it.businessType == businessType && it.subcategoryId.isNullOrBlank() && it.subcategoryName.isNullOrBlank()
         }
     }
 
-    // Filter items by category, subcategory, business type, stock, and search query
-    val displayedItems = remember(menuItems, businessType, selectedCategoryId, selectedSubcategoryId, stockFilter, searchQuery, allowedCategories, categories, subcategories) {
-        menuItems.filter { item ->
-            val matchType = item.businessType == businessType
-            val itemCat = resolveCategoryName(item)
-            val matchCategory = when (selectedCategoryId) {
-                null -> true
-                "UNCATEGORIZED" -> !allowedCategories.any { it.equals(itemCat, ignoreCase = true) }
-                else -> {
-                    val targetName = categories.find { it.id == selectedCategoryId }?.name ?: selectedCategoryId
-                    itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
-                }
+    // Group items by Category Class (Subcategory Name), with "Other" last
+    val groupedItems = remember(displayedItems, subcategories) {
+        val result = mutableMapOf<String, MutableList<MenuItem>>()
+        for (item in displayedItems) {
+            val groupName = if (!item.subcategoryId.isNullOrBlank()) {
+                subcategories.find { it.id == item.subcategoryId }?.name ?: (item.subcategoryName ?: "Other")
+            } else if (!item.subcategoryName.isNullOrBlank()) {
+                item.subcategoryName!!
+            } else {
+                "Other"
             }
-            val matchSubcategory = when (selectedSubcategoryId) {
-                null -> true
-                "OTHER" -> item.subcategoryId.isNullOrBlank() && item.subcategoryName.isNullOrBlank()
-                else -> item.subcategoryId == selectedSubcategoryId || item.subcategoryName.equals(selectedSubcategoryId, ignoreCase = true) ||
-                        subcategories.find { it.id == selectedSubcategoryId }?.name?.let { item.subcategoryName.equals(it, ignoreCase = true) } == true
-            }
-            val matchStock = when (stockFilter) {
-                "In stock" -> item.inStock
-                "Sold out" -> !item.inStock
-                else -> true
-            }
-            val matchQuery = searchQuery.isBlank() ||
-                    item.name.contains(searchQuery, ignoreCase = true) ||
-                    item.description.contains(searchQuery, ignoreCase = true) ||
-                    item.sku.contains(searchQuery, ignoreCase = true)
-            matchType && matchCategory && matchSubcategory && matchStock && matchQuery
+            result.getOrPut(groupName) { mutableListOf() }.add(item)
         }
+
+        val sortedKeys = result.keys.sortedWith(Comparator { a, b ->
+            if (a == "Other" && b != "Other") 1
+            else if (b == "Other" && a != "Other") -1
+            else {
+                val aIndex = subcategories.indexOfFirst { it.name.equals(a, ignoreCase = true) }
+                val bIndex = subcategories.indexOfFirst { it.name.equals(b, ignoreCase = true) }
+                if (aIndex != -1 && bIndex != -1) aIndex.compareTo(bIndex)
+                else if (aIndex != -1) -1
+                else if (bIndex != -1) 1
+                else a.compareTo(b, ignoreCase = true)
+            }
+        })
+
+        sortedKeys.map { key -> key to (result[key] ?: emptyList()) }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // Top Search Bar & Multi-Select Action Trigger
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    Column(modifier = modifier.fillMaxSize().testTag("menu_screen")) {
+        // 1. TOP HEADER: Shop header with status chip
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchQueryChange,
-                placeholder = { Text("Search dishes, SKUs, tags...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { onSearchQueryChange("") }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("menu_search_input")
-            )
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            IconButton(
-                onClick = onToggleMultiSelect,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isMultiSelectMode) customColors.accentTint else MaterialTheme.colorScheme.surfaceVariant)
-                    .testTag("bulk_select_toggle_btn")
-            ) {
-                Icon(
-                    imageVector = if (isMultiSelectMode) Icons.Default.ChecklistRtl else Icons.Default.Checklist,
-                    contentDescription = "Bulk Actions",
-                    tint = if (isMultiSelectMode) customColors.accent else MaterialTheme.colorScheme.onSurface
-                )
-            }
-
-            IconButton(
-                onClick = onAddItem,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(customColors.accent)
-                    .testTag("add_menu_item_top_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add Item",
-                    tint = customColors.onAccent
-                )
-            }
-        }
-
-        // Active Promo Banner Preview
-        if (promos.isNotEmpty() && searchQuery.isBlank()) {
-            val activePromo = promos.first()
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = customColors.accentTint),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-            ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("🏷️", fontSize = 22.sp)
-                    Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = activePromo.title,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium
+                            text = settings.storeName.ifBlank { "My Store" },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
                         )
                         Text(
-                            text = "Code: ${activePromo.code} • ${activePromo.discountPercentage}% OFF (Min ${FormatUtils.formatCurrency(activePromo.minOrder)})",
+                            text = if (isServiceLocked) serviceLockMessage ?: "Service switched off in this city"
+                            else if (effectiveOpen) "Store is open and accepting orders"
+                            else "Store is currently closed",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Text(
-                        text = "ACTIVE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = StatusOpenGreen,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(StatusOpenGreen.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-        }
 
-        // Uncategorized Items Banner (if any legacy/unassigned items exist)
-        if (uncategorizedItems.isNotEmpty()) {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .testTag("uncategorized_banner")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("⚠️", fontSize = 22.sp)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${uncategorizedItems.size} ${if (uncategorizedItems.size == 1) "item needs" else "items need"} a category",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Text(
-                            text = "Legacy categories detected. Customers can still view them; assign them to an official category below.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    FilledTonalButton(
-                        onClick = { onCategorySelect("UNCATEGORIZED") },
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("fix_uncategorized_banner_btn")
+                    // Status Chip
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (effectiveOpen) StatusOpenGreen.copy(alpha = 0.15f) else StatusClosedRed.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
                     ) {
-                        Text("Fix Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (effectiveOpen) "Open" else "Closed",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
+                            )
+                        }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Search field (products, tags)
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    placeholder = { Text("Search products, tags, dishes...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { onSearchQueryChange("") }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("menu_search_input")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Two buttons side by side: "Menu Management" (outlined, list icon) and "+ Add Product" (yellow/accent)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenMenuManagement,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("menu_management_btn")
+                    ) {
+                        Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Menu Management", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    Button(
+                        onClick = onAddItem,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = customColors.accent,
+                            contentColor = customColors.onAccent
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("add_product_btn")
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("+ Add Product", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Summary line: "<N> products · <M> sold out · <K> not available now"
+                Text(
+                    text = "$totalProducts products · $soldOutCount sold out · $notAvailableNowCount not available now",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
-        // Category Filter Chips: "All" plus the list, with item counts (zero is fine)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // 2. ONE horizontal chip row of Category Classes ("All" plus classes with counts) and Filter icon with badge
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            FilterChip(
-                selected = selectedCategoryId == null,
-                onClick = { onCategorySelect(null) },
-                label = { Text("All (${totalThisTypeCount})") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = customColors.accentTint,
-                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                ),
-                modifier = Modifier.testTag("cat_chip_all")
-            )
-
-            allowedCategories.forEach { catName ->
-                val count = categoryCounts[catName] ?: 0
-                val catDocId = categories.find { it.name.equals(catName, ignoreCase = true) }?.id ?: catName
-                val isSelected = selectedCategoryId == catDocId || selectedCategoryId == catName
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { onCategorySelect(catDocId) },
-                    label = { Text("$catName ($count)") },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = customColors.accentTint,
-                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier.testTag("cat_chip_${catName.lowercase().replace(" ", "_")}")
-                )
-            }
-
-            if (uncategorizedItems.isNotEmpty()) {
-                val isSelected = selectedCategoryId == "UNCATEGORIZED"
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { onCategorySelect("UNCATEGORIZED") },
-                    label = { Text("⚠️ Uncategorized (${uncategorizedItems.size})") },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.errorContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onErrorContainer
-                    ),
-                    modifier = Modifier.testTag("cat_chip_uncategorized")
-                )
-            }
-        }
-
-        // Subcategory ("Category Class") Filter Chips
-        if (subcategories.isNotEmpty() || otherSubcategoryCount > 0) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(
-                    selected = selectedSubcategoryId == null,
-                    onClick = { onSubcategorySelect(null) },
-                    label = { Text("All Classes (${totalThisTypeCount})", fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = customColors.accentTint,
-                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier.testTag("subcat_chip_all")
-                )
-
-                subcategories.forEach { sub ->
-                    val count = subcategoryCounts[sub.id] ?: 0
-                    val isSelected = selectedSubcategoryId == sub.id
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { onSubcategorySelect(if (isSelected) null else sub.id) },
-                        label = { Text("${sub.name} ($count)", fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier.testTag("subcat_chip_${sub.id}")
-                    )
-                }
-
-                if (otherSubcategoryCount > 0) {
-                    val isSelected = selectedSubcategoryId == "OTHER"
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { onSubcategorySelect(if (isSelected) null else "OTHER") },
-                        label = { Text("Other ($otherSubcategoryCount)", fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier.testTag("subcat_chip_other")
-                    )
-                }
-            }
-        }
-
-        // Quick Stock Availability Filter Chips
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf("All", "In stock", "Sold out").forEach { stockStatus ->
-                val isSelected = stockFilter == stockStatus
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { onStockFilterChange(stockStatus) },
-                    label = { Text(stockStatus, fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = if (stockStatus == "Sold out") StatusClosedRed.copy(alpha = 0.15f) else customColors.accentTint,
-                        selectedLabelColor = if (stockStatus == "Sold out") StatusClosedRed else MaterialTheme.colorScheme.onSurface
-                    )
-                )
-            }
-        }
-
-        // Multi-Select Bulk Actions Bar
-        AnimatedVisibility(visible = isMultiSelectMode) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // Filter icon with active filter badge
+                BadgedBox(
+                    badge = {
+                        if (activeFilterCount > 0) {
+                            Badge(
+                                containerColor = customColors.accent,
+                                contentColor = customColors.onAccent
+                            ) {
+                                Text("$activeFilterCount")
+                            }
+                        }
+                    },
+                    modifier = Modifier.padding(end = 6.dp)
                 ) {
-                    Text(
-                        text = "${selectedItemIds.size} selected",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.bodyMedium
+                    IconButton(
+                        onClick = { showFilterBottomSheet = true },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (activeFilterCount > 0) customColors.accentTint
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                            .testTag("menu_filter_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.FilterList,
+                            contentDescription = "Filters",
+                            tint = if (activeFilterCount > 0) customColors.accent else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Horizontal scroll of Category Classes
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedSubcategoryId == null,
+                        onClick = { onSubcategorySelect(null) },
+                        label = { Text("All ($totalProducts)", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = customColors.accent,
+                            selectedLabelColor = customColors.onAccent
+                        ),
+                        modifier = Modifier.testTag("class_chip_all")
                     )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton(
-                            onClick = onBulkMarkInStock,
-                            enabled = selectedItemIds.isNotEmpty()
-                        ) {
-                            Text("In Stock", fontSize = 12.sp, color = StatusOpenGreen)
-                        }
+                    subcategories.forEach { sub ->
+                        val count = subcategoryCounts[sub.id] ?: 0
+                        val isSelected = selectedSubcategoryId == sub.id
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onSubcategorySelect(if (isSelected) null else sub.id) },
+                            label = { Text("${sub.name} ($count)", fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = customColors.accent,
+                                selectedLabelColor = customColors.onAccent
+                            ),
+                            modifier = Modifier.testTag("class_chip_${sub.id}")
+                        )
+                    }
 
-                        TextButton(
-                            onClick = onBulkMarkSoldOut,
-                            enabled = selectedItemIds.isNotEmpty()
-                        ) {
-                            Text("Sold Out", fontSize = 12.sp, color = StatusClosedRed)
-                        }
-
-                        TextButton(
-                            onClick = { showBulkPriceDialog = true },
-                            enabled = selectedItemIds.isNotEmpty()
-                        ) {
-                            Text("Price ±%", fontSize = 12.sp)
-                        }
+                    if (otherSubcategoryCount > 0) {
+                        val isSelected = selectedSubcategoryId == "OTHER"
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onSubcategorySelect(if (isSelected) null else "OTHER") },
+                            label = { Text("Other ($otherSubcategoryCount)", fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = customColors.accent,
+                                selectedLabelColor = customColors.onAccent
+                            ),
+                            modifier = Modifier.testTag("class_chip_other")
+                        )
                     }
                 }
             }
         }
 
-        // Items List
+        // 3. Products List or Empty State
         if (displayedItems.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -480,61 +444,102 @@ fun MenuScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("🔍", fontSize = 42.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("No matching items found", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Try adjusting your filters or search terms", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(
+                        Icons.Default.RestaurantMenu,
+                        contentDescription = null,
+                        tint = customColors.accent,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "No products yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Add your first product to start accepting customer orders.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onAddItem,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = customColors.accent,
+                            contentColor = customColors.onAccent
+                        )
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("+ Add Product", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         } else {
-            val groupedItems = remember(displayedItems, subcategories) {
-                val result = linkedMapOf<String, MutableList<MenuItem>>()
-                displayedItems.forEach { item ->
-                    val groupName = if (!item.subcategoryId.isNullOrBlank()) {
-                        subcategories.find { it.id == item.subcategoryId }?.name ?: (item.subcategoryName ?: "Other")
-                    } else if (!item.subcategoryName.isNullOrBlank()) {
-                        item.subcategoryName!!
-                    } else {
-                        "Other"
-                    }
-                    result.getOrPut(groupName) { mutableListOf() }.add(item)
-                }
-
-                val sortedKeys = result.keys.sortedWith(Comparator { a, b ->
-                    if (a == "Other" && b != "Other") 1
-                    else if (b == "Other" && a != "Other") -1
-                    else {
-                        val aIndex = subcategories.indexOfFirst { it.name.equals(a, ignoreCase = true) }
-                        val bIndex = subcategories.indexOfFirst { it.name.equals(b, ignoreCase = true) }
-                        if (aIndex != -1 && bIndex != -1) aIndex.compareTo(bIndex)
-                        else if (aIndex != -1) -1
-                        else if (bIndex != -1) 1
-                        else a.compareTo(b, ignoreCase = true)
-                    }
-                })
-
-                sortedKeys.map { key -> key to (result[key] ?: emptyList()) }
-            }
-
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
+                contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Dismissible intro card: "How your menu works"
+                if (showIntroCard && searchQuery.isBlank() && selectedCategoryId == null && selectedSubcategoryId == null) {
+                    item(key = "intro_card") {
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = customColors.accentTint.copy(alpha = 0.45f)),
+                            border = BorderStroke(1.dp, customColors.accent.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth().testTag("menu_intro_card")
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Lightbulb, contentDescription = null, tint = customColors.accent, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "How your menu works",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = customColors.accent
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { showIntroCard = false },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("1. Menus: When products can be ordered (e.g. Breakfast from 6 AM).", style = MaterialTheme.typography.bodySmall)
+                                Text("2. Category Classes: Sections customers see on your storefront.", style = MaterialTheme.typography.bodySmall)
+                                Text("3. Products: Individual dishes, drinks, or retail items.", style = MaterialTheme.typography.bodySmall)
+                                Text("4. Sets: Choices customers pick (flavors, drinks, or add-ons).", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+
+                // Grouped product rows
                 groupedItems.forEach { (categoryClassName, itemsInGroup) ->
                     item(key = "header_$categoryClassName") {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 12.dp, bottom = 4.dp),
+                                .padding(top = 10.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Surface(
                                 color = customColors.accent.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.padding(end = 8.dp)
+                                shape = RoundedCornerShape(6.dp)
                             ) {
                                 Text(
                                     text = categoryClassName,
@@ -544,6 +549,7 @@ fun MenuScreen(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                 )
                             }
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "• ${itemsInGroup.size} ${if (itemsInGroup.size == 1) "item" else "items"}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -558,18 +564,23 @@ fun MenuScreen(
                     }
 
                     items(itemsInGroup, key = { it.id }) { item ->
-                        val isUncat = !allowedCategories.any { it.equals(resolveCategoryName(item), ignoreCase = true) }
-                        MenuItemRow(
+                        val isAvailableNow = item.isAvailableNow(menus, currentTime, settings.timezone)
+                        val nonMainMenuNames = remember(item, menus) {
+                            val eff = item.getEffectiveMenuIds()
+                            menus.filter { it.id in eff && it.id != "main" }.map { it.name }
+                        }
+
+                        ProductCard(
                             item = item,
                             businessType = businessType,
-                            isUncategorized = isUncat,
-                            isMultiSelectMode = isMultiSelectMode,
-                            isSelected = selectedItemIds.contains(item.id),
-                            onSelectToggle = { onToggleItemSelection(item.id) },
+                            isAvailableNow = isAvailableNow,
+                            nonMainMenuNames = nonMainMenuNames,
+                            onCardClick = { onEditItem(item) },
                             onToggleStock = { onToggleItemAvailability(item) },
                             onEdit = { onEditItem(item) },
                             onDuplicate = { onDuplicateItem(item.id) },
-                            onQuickAssign = { quickAssignTargetItem = item }
+                            onMoveToMenu = { itemToMoveMenu = item },
+                            onDelete = { itemToDelete = item }
                         )
                     }
                 }
@@ -577,154 +588,232 @@ fun MenuScreen(
         }
     }
 
-    // Quick Assign Category Dialog
-    if (quickAssignTargetItem != null) {
-        val target = quickAssignTargetItem!!
-        AlertDialog(
-            onDismissRequest = { quickAssignTargetItem = null },
-            title = { Text("Assign Category", fontWeight = FontWeight.Bold) },
-            text = {
+    // 4. BOTTOM SHEET: Filter by Main category, Stock, Menu, Clear & Apply
+    if (showFilterBottomSheet) {
+        var tempMainCategory by remember { mutableStateOf(selectedCategoryId) }
+        var tempStockFilter by remember { mutableStateOf(stockFilter) }
+        var tempMenuFilter by remember { mutableStateOf(selectedMenuIdFilter) }
+
+        ModalBottomSheet(
+            onDismissRequest = { showFilterBottomSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Filter Products", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    TextButton(
+                        onClick = {
+                            tempMainCategory = null
+                            tempStockFilter = "All"
+                            tempMenuFilter = null
+                        }
+                    ) {
+                        Text("Clear all")
+                    }
+                }
+
+                // 1. Main Category filter
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Choose an official category for \"${target.name}\":",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    allowedCategories.forEach { catName ->
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onQuickAssignCategory(target, catName)
-                                    quickAssignTargetItem = null
-                                }
-                                .testTag("quick_assign_option_${catName.lowercase().replace(" ", "_")}")
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = catName,
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Icon(
-                                    Icons.Default.ChevronRight,
-                                    contentDescription = null,
-                                    tint = customColors.accent
-                                )
-                            }
+                    Text("Main Category", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = tempMainCategory == null,
+                            onClick = { tempMainCategory = null },
+                            label = { Text("All") }
+                        )
+                        allowedCategories.forEach { catName ->
+                            val isSelected = tempMainCategory.equals(catName, ignoreCase = true)
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { tempMainCategory = if (isSelected) null else catName },
+                                label = { Text(catName) }
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { quickAssignTargetItem = null }) {
-                    Text("Cancel")
+
+                // 2. Stock filter (All, In stock, Sold out)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Stock Availability", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("All", "In stock", "Sold out").forEach { s ->
+                            FilterChip(
+                                selected = tempStockFilter == s,
+                                onClick = { tempStockFilter = s },
+                                label = { Text(s) }
+                            )
+                        }
+                    }
                 }
+
+                // 3. Menu filter (All plus each menu)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Menu", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = tempMenuFilter == null,
+                            onClick = { tempMenuFilter = null },
+                            label = { Text("All") }
+                        )
+                        menus.forEach { m ->
+                            val isSelected = tempMenuFilter == m.id
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { tempMenuFilter = if (isSelected) null else m.id },
+                                label = { Text(m.name) }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Apply button
+                Button(
+                    onClick = {
+                        onCategorySelect(tempMainCategory)
+                        onStockFilterChange(tempStockFilter)
+                        onMenuFilterChange(tempMenuFilter)
+                        showFilterBottomSheet = false
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = customColors.accent, contentColor = customColors.onAccent),
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("apply_menu_filters_btn")
+                ) {
+                    Text("Apply Filters", fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
-        )
+        }
     }
 
-    // Bulk Price Adjustment Dialog
-    if (showBulkPriceDialog) {
+    // Move to Menu dialog
+    itemToMoveMenu?.let { targetItem ->
+        var chosenMenuId by remember { mutableStateOf(targetItem.getEffectiveMenuIds().firstOrNull() ?: "main") }
         AlertDialog(
-            onDismissRequest = { showBulkPriceDialog = false },
-            title = { Text("Adjust Prices in Bulk") },
+            onDismissRequest = { itemToMoveMenu = null },
+            title = { Text("Move \"${targetItem.name}\"", fontWeight = FontWeight.Bold) },
             text = {
-                Column {
-                    Text("Apply percentage adjustment to ${selectedItemIds.size} selected items:")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = bulkPriceDeltaText,
-                        onValueChange = { bulkPriceDeltaText = it },
-                        label = { Text("Percentage change (e.g. 10 for +10%, -5 for -5%)") },
-                        shape = RoundedCornerShape(10.dp),
-                        singleLine = true
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Select which menu will display this product:")
+                    menus.forEach { m ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { chosenMenuId = m.id }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = chosenMenuId == m.id,
+                                onClick = { chosenMenuId = m.id }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(m.name, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val delta = bulkPriceDeltaText.toDoubleOrNull() ?: 0.0
-                        onBulkPriceAdjust(delta, 0.0)
-                        showBulkPriceDialog = false
-                    }
+                        onMoveItemToMenu(targetItem, chosenMenuId)
+                        itemToMoveMenu = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = customColors.accent, contentColor = customColors.onAccent)
                 ) {
-                    Text("Apply Adjustment")
+                    Text("Move")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showBulkPriceDialog = false }) {
-                    Text("Cancel")
+                TextButton(onClick = { itemToMoveMenu = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Delete confirmation dialog
+    itemToDelete?.let { targetItem ->
+        AlertDialog(
+            onDismissRequest = { itemToDelete = null },
+            title = { Text("Delete Product", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) },
+            text = { Text("Are you sure you want to delete \"${targetItem.name}\"? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteItem(targetItem.id)
+                        itemToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
                 }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDelete = null }) { Text("Cancel") }
             }
         )
     }
 }
 
 @Composable
-fun MenuItemRow(
+private fun ProductCard(
     item: MenuItem,
     businessType: BusinessType,
-    isUncategorized: Boolean = false,
-    isMultiSelectMode: Boolean,
-    isSelected: Boolean,
-    onSelectToggle: () -> Unit,
+    isAvailableNow: Boolean,
+    nonMainMenuNames: List<String>,
+    onCardClick: () -> Unit,
     onToggleStock: () -> Unit,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
-    onQuickAssign: () -> Unit = {}
+    onMoveToMenu: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val customColors = LocalDelivioColors.current
-    val isSoldOut = !item.inStock
+    var showMenu by remember { mutableStateOf(false) }
 
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSoldOut) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = if (!item.inStock) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
             else MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSoldOut) 0.dp else 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (item.inStock) 1.5.dp else 0.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                if (isMultiSelectMode) onSelectToggle() else onEdit()
-            }
-            .testTag("menu_row_${item.id}")
+            .clickable { onCardClick() }
+            .testTag("product_card_${item.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Checkbox for bulk actions
-            if (isMultiSelectMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onSelectToggle() }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-
-            // Visual Image or Fallback
+            // Rounded image: neutral icon when there is no image (no emoji)
             Box(
                 modifier = Modifier
-                    .size(56.dp)
+                    .size(60.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isSoldOut) MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-                        else customColors.accentTint
-                    ),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
             ) {
                 if (item.imageUrl.isNotBlank()) {
@@ -735,7 +824,12 @@ fun MenuItemRow(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Text(if (businessType == BusinessType.FOOD) "🍔" else "🛍️", fontSize = 26.sp)
+                    Icon(
+                        imageVector = if (businessType == BusinessType.FOOD) Icons.Default.Restaurant else Icons.Default.ShoppingBag,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
             }
 
@@ -743,132 +837,115 @@ fun MenuItemRow(
 
             // Details
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = if (isSoldOut) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                        ),
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+
+                Text(
+                    text = FormatUtils.formatCurrency(item.price),
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 14.sp,
+                    color = if (item.inStock) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Small chips row: sets, sold out, menu name (when not Main Menu), "Not available now" in amber
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Prep time chip
+                    if (businessType == BusinessType.FOOD && item.prepTimeMinutes > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                text = "${item.prepTimeMinutes}m prep",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Sets chip: e.g. "2 sets"
                     if (item.hasSets && item.sets.isNotEmpty()) {
-                        Spacer(modifier = Modifier.width(6.dp))
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.primaryContainer
                         ) {
                             Text(
                                 text = "${item.sets.size} ${if (item.sets.size == 1) "set" else "sets"}",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
                         }
                     }
-                }
 
-                if (isSoldOut) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "SOLD OUT • ${item.soldOutReason ?: "Unavailable"}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = StatusClosedRed
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(2.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = FormatUtils.formatCurrency(item.price),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp,
-                        color = if (isSoldOut) MaterialTheme.colorScheme.onSurfaceVariant else customColors.accent
-                    )
-
-                    if (businessType == BusinessType.FOOD) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "⏱ ${item.prepTimeMinutes}m",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Stock: ${item.stockCount} (${item.unit})",
-                            fontSize = 11.sp,
-                            color = if (item.stockCount <= item.lowStockAlertThreshold) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (item.stockCount <= item.lowStockAlertThreshold) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-
-                // Convenience SKU & Barcode specs
-                if (businessType == BusinessType.CONVENIENCE) {
-                    val codeInfo = listOfNotNull(
-                        item.sku.takeIf { it.isNotBlank() }?.let { "SKU: $it" },
-                        item.barcode.takeIf { it.isNotBlank() }?.let { "Barcode: $it" }
-                    ).joinToString(" • ")
-                    if (codeInfo.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = codeInfo,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                // Tags preview (Food)
-                if (businessType == BusinessType.FOOD && item.tags.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        item.tags.take(2).forEach { tag ->
+                    // Sold out chip
+                    if (!item.inStock) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = StatusClosedRed.copy(alpha = 0.15f)
+                        ) {
                             Text(
-                                text = tag,
-                                fontSize = 9.sp,
+                                text = "Sold out",
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                color = StatusClosedRed,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
                         }
                     }
-                }
 
-                // Uncategorized Quick Assign Warning & Action
-                if (isUncategorized) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    AssistChip(
-                        onClick = onQuickAssign,
-                        label = {
+                    // Non-main menu name chip(s)
+                    nonMainMenuNames.forEach { menuName ->
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = customColors.accent.copy(alpha = 0.15f)
+                        ) {
                             Text(
-                                text = "Assign Category",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error
+                                text = menuName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = customColors.accent,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
-                        },
-                        leadingIcon = { Text("⚠️", fontSize = 11.sp) },
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.testTag("quick_assign_chip_${item.id}")
-                    )
+                        }
+                    }
+
+                    // Not available now in amber when its menus are closed
+                    if (!isAvailableNow && item.inStock) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = StatusWarningAmber.copy(alpha = 0.20f)
+                        ) {
+                            Text(
+                                text = "Not available now",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB45309),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
-            // Actions: In-Stock Switch and Duplicate
+            // In stock switch and ⋮ menu
             Column(horizontalAlignment = Alignment.End) {
                 Switch(
                     checked = item.inStock,
@@ -880,16 +957,52 @@ fun MenuItemRow(
                     modifier = Modifier.testTag("stock_switch_${item.id}")
                 )
 
-                IconButton(
-                    onClick = onDuplicate,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = "Duplicate",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.size(32.dp).testTag("menu_more_btn_${item.id}")
+                    ) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Options")
+                    }
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Edit") },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Duplicate") },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            onClick = {
+                                showMenu = false
+                                onDuplicate()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Move to menu") },
+                            leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            onClick = {
+                                showMenu = false
+                                onMoveToMenu()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp)) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    }
                 }
             }
         }

@@ -107,6 +107,11 @@ class MainActivity : ComponentActivity() {
             val showReviewsScreen by viewModel.showReviewsScreen.collectAsStateWithLifecycle()
             val subcategories by viewModel.subcategories.collectAsStateWithLifecycle()
             val selectedSubcategoryId by viewModel.selectedSubcategoryId.collectAsStateWithLifecycle()
+            val menus by viewModel.menus.collectAsStateWithLifecycle()
+            val showMenuManagementScreen by viewModel.showMenuManagementScreen.collectAsStateWithLifecycle()
+            val editingShopMenu by viewModel.editingShopMenu.collectAsStateWithLifecycle()
+            val isNewShopMenu by viewModel.isNewShopMenu.collectAsStateWithLifecycle()
+            val selectedMenuIdFilter by viewModel.selectedMenuIdFilter.collectAsStateWithLifecycle()
 
             val isOwner = currentUser?.role != "staff"
             val userRole = currentUser?.role?.lowercase() ?: "merchant"
@@ -231,6 +236,42 @@ class MainActivity : ComponentActivity() {
                         riderReviewsCount = riderReviewsCount,
                         onBack = { viewModel.closeReviews() }
                     )
+                } else if (editingShopMenu != null) {
+                    // Full-screen Add / Edit Menu route
+                    MenuEditScreen(
+                        menu = editingShopMenu!!,
+                        isNew = isNewShopMenu,
+                        allMenus = menus,
+                        menuItems = menuItems,
+                        onSave = { updatedMenu, assignedProductIds, onComplete ->
+                            viewModel.saveShopMenu(updatedMenu, assignedProductIds, onComplete)
+                        },
+                        onBack = { viewModel.closeEditShopMenu() }
+                    )
+                } else if (showMenuManagementScreen) {
+                    // Full-screen Menu Management route (Menus, Category Classes, Bulk edit)
+                    MenuManagementScreen(
+                        menus = menus,
+                        subcategories = subcategories,
+                        menuItems = menuItems,
+                        currentTime = currentTime,
+                        timeZoneId = settings.timezone,
+                        onBack = { viewModel.closeMenuManagement() },
+                        onAddMenu = { viewModel.openAddShopMenu() },
+                        onEditMenu = { viewModel.openEditShopMenu(it) },
+                        onToggleMenuActive = { id, active -> viewModel.toggleShopMenuActive(id, active) },
+                        onDuplicateMenu = { viewModel.duplicateShopMenu(it) },
+                        onDeleteMenu = { viewModel.deleteShopMenu(it) },
+                        onReorderSubcategories = { viewModel.reorderSubcategories(it) },
+                        onAddSubcategory = { name, cb -> viewModel.createSubcategory(name, cb) },
+                        onRenameSubcategory = { id, name, cb -> viewModel.renameSubcategory(id, name, cb) },
+                        onDeleteSubcategory = { id, cb -> viewModel.deleteSubcategory(id, cb) },
+                        onBulkMarkStock = { ids, inStock, cb -> viewModel.bulkMarkItemsStock(ids, inStock, cb) },
+                        onBulkMoveToMenu = { ids, menuId, cb -> viewModel.bulkMoveItemsToMenu(ids, menuId, cb) },
+                        onBulkSetCategoryClass = { ids, subId, subName, cb -> viewModel.bulkSetCategoryClass(ids, subId, subName, cb) },
+                        onBulkAdjustPrices = { ids, pct, fix, cb -> viewModel.bulkAdjustPrices(ids, pct, fix, cb) },
+                        onBulkDeleteItems = { ids, cb -> viewModel.bulkDeleteItems(ids, cb) }
+                    )
                 } else if (editingMenuItem != null) {
                     // Full-screen Add / Edit Product route
                     ProductEditScreen(
@@ -238,6 +279,7 @@ class MainActivity : ComponentActivity() {
                         isNew = isNewMenuItem,
                         categories = categories,
                         subcategories = subcategories,
+                        menus = menus,
                         menuItems = menuItems,
                         businessType = settings.businessType,
                         onSave = { updatedItem, onComplete ->
@@ -333,11 +375,16 @@ class MainActivity : ComponentActivity() {
                                         viewModel.onMenuOpened()
                                     }
                                     MenuScreen(
+                                        settings = settings,
                                         categories = categories,
                                         subcategories = subcategories,
+                                        menus = menus,
                                         menuItems = menuItems,
                                         promos = promos,
                                         businessType = settings.businessType,
+                                        currentTime = currentTime,
+                                        isServiceLocked = isServiceLocked,
+                                        serviceLockMessage = serviceLockMessage,
                                         searchQuery = menuSearchQuery,
                                         onSearchQueryChange = { viewModel.setMenuSearchQuery(it) },
                                         stockFilter = menuStockFilter,
@@ -346,6 +393,8 @@ class MainActivity : ComponentActivity() {
                                         onCategorySelect = { viewModel.selectMenuCategory(it) },
                                         selectedSubcategoryId = selectedSubcategoryId,
                                         onSubcategorySelect = { viewModel.setMenuSubcategoryFilter(it) },
+                                        selectedMenuIdFilter = selectedMenuIdFilter,
+                                        onMenuFilterChange = { viewModel.setMenuIdFilter(it) },
                                         isMultiSelectMode = isMultiSelectMode,
                                         selectedItemIds = selectedItemIds,
                                         onToggleMultiSelect = { viewModel.toggleMultiSelectMode() },
@@ -357,11 +406,9 @@ class MainActivity : ComponentActivity() {
                                         onAddItem = { viewModel.openAddMenuItem(selectedCategoryId) },
                                         onEditItem = { viewModel.openEditMenuItem(it) },
                                         onDuplicateItem = { viewModel.duplicateMenuItem(it) },
-                                        onQuickAssignCategory = { item, cat -> viewModel.quickAssignCategory(item, cat) },
-                                        onAddCategory = { viewModel.addCategory(it) },
-                                        onReorderCategory = { id, up -> viewModel.reorderCategory(id, up) },
-                                        onToggleCategoryVisibility = { viewModel.toggleCategoryVisibility(it) },
-                                        onDeleteCategory = { viewModel.deleteCategory(it) }
+                                        onMoveItemToMenu = { item, menuId -> viewModel.bulkMoveItemsToMenu(setOf(item.id), menuId) { _, _, _ -> } },
+                                        onDeleteItem = { viewModel.deleteMenuItem(it) },
+                                        onOpenMenuManagement = { viewModel.openMenuManagement() }
                                     )
                                 }
 

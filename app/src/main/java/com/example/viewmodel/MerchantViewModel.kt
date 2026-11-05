@@ -156,6 +156,13 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _selectedSubcategoryId.value = subId
     }
 
+    private val _selectedMenuIdFilter = MutableStateFlow<String?>(null)
+    val selectedMenuIdFilter: StateFlow<String?> = _selectedMenuIdFilter.asStateFlow()
+
+    fun setMenuIdFilter(menuId: String?) {
+        _selectedMenuIdFilter.value = menuId
+    }
+
     private val _isMultiSelectMode = MutableStateFlow(false)
     val isMultiSelectMode: StateFlow<Boolean> = _isMultiSelectMode.asStateFlow()
 
@@ -1047,6 +1054,108 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
             }
             onResult(success, err)
         }
+    }
+
+    fun reorderSubcategories(reorderedList: List<Subcategory>, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        repository.reorderSubcategories(reorderedList) { success, err ->
+            if (success) {
+                showSnackbar("Categories reordered")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
+    }
+
+    // --- Menu Management (Full Screen & CRUD) ---
+    val menus: StateFlow<List<ShopMenu>> = repository.menus
+
+    private val _showMenuManagementScreen = MutableStateFlow(false)
+    val showMenuManagementScreen: StateFlow<Boolean> = _showMenuManagementScreen.asStateFlow()
+
+    private val _editingShopMenu = MutableStateFlow<ShopMenu?>(null)
+    val editingShopMenu: StateFlow<ShopMenu?> = _editingShopMenu.asStateFlow()
+
+    private val _isNewShopMenu = MutableStateFlow(false)
+    val isNewShopMenu: StateFlow<Boolean> = _isNewShopMenu.asStateFlow()
+
+    fun openMenuManagement() {
+        _showMenuManagementScreen.value = true
+    }
+
+    fun closeMenuManagement() {
+        _showMenuManagementScreen.value = false
+    }
+
+    fun openAddShopMenu() {
+        _editingShopMenu.value = ShopMenu(id = "", name = "", active = true)
+        _isNewShopMenu.value = true
+    }
+
+    fun openEditShopMenu(menu: ShopMenu) {
+        _editingShopMenu.value = menu
+        _isNewShopMenu.value = false
+    }
+
+    fun closeEditShopMenu() {
+        _editingShopMenu.value = null
+    }
+
+    fun saveShopMenu(menu: ShopMenu, assignedProductIds: Set<String>?, onResult: (Boolean, String?) -> Unit) {
+        repository.saveMenu(menu, assignedProductIds) { success, err ->
+            if (success) {
+                _editingShopMenu.value = null
+                showSnackbar("Menu saved successfully")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun toggleShopMenuActive(menuId: String, active: Boolean) {
+        repository.toggleMenuActive(menuId, active)
+    }
+
+    fun duplicateShopMenu(menuId: String) {
+        repository.duplicateMenu(menuId) { success, err ->
+            if (success) {
+                showSnackbar("Menu duplicated")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+        }
+    }
+
+    fun deleteShopMenu(menuId: String) {
+        repository.deleteMenu(menuId) { success, err ->
+            if (success) {
+                showSnackbar("Menu deleted. Products moved to Main Menu.")
+            } else if (err != null) {
+                showSnackbar(err)
+            }
+        }
+    }
+
+    // --- Bulk Item Operations ---
+    fun bulkMarkItemsStock(itemIds: Set<String>, inStock: Boolean, onResult: (Boolean, Int, String?) -> Unit) {
+        repository.bulkMarkItemsStock(itemIds, inStock, onResult)
+    }
+
+    fun bulkMoveItemsToMenu(itemIds: Set<String>, targetMenuId: String, onResult: (Boolean, Int, String?) -> Unit) {
+        repository.bulkMoveItemsToMenu(itemIds, targetMenuId, onResult)
+    }
+
+    fun bulkSetCategoryClass(itemIds: Set<String>, subcategoryId: String?, subcategoryName: String?, onResult: (Boolean, Int, String?) -> Unit) {
+        repository.bulkSetCategoryClass(itemIds, subcategoryId, subcategoryName, onResult)
+    }
+
+    fun bulkAdjustPrices(itemIds: Set<String>, percentDelta: Double, fixedDelta: Double, onResult: (Boolean, Int, String?) -> Unit) {
+        repository.bulkAdjustPrices(itemIds, percentDelta, fixedDelta, onResult)
+    }
+
+    fun bulkDeleteItems(itemIds: Set<String>, onResult: (Boolean, Int, String?) -> Unit) {
+        repository.bulkDeleteItems(itemIds, onResult)
     }
 
     // --- Earnings & Finance ---

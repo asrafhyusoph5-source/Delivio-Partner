@@ -562,6 +562,127 @@ data class ProductSet(
     val choices: List<ProductSetChoice> = emptyList()
 )
 
+data class MenuSchedule(
+    val days: List<String> = emptyList(), // subset of ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    val start: String = "00:00", // "HH:mm" 24h
+    val end: String = "23:59" // "HH:mm" 24h
+) {
+    fun isOvernight(): Boolean {
+        if (start.isBlank() || end.isBlank()) return false
+        val (sH, sM) = start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else return false }
+        val (eH, eM) = end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else return false }
+        return (eH * 60 + eM) < (sH * 60 + sM)
+    }
+
+    fun isAllDay(): Boolean {
+        return (start == "00:00" && (end == "23:59" || end == "24:00")) || (start.isBlank() && end.isBlank())
+    }
+
+    fun scheduleSummary(): String {
+        if (days.isEmpty()) return "Always available"
+        val dayLabel = when {
+            days.size == 7 -> "Every day"
+            days.size == 5 && days.containsAll(listOf("mon", "tue", "wed", "thu", "fri")) -> "Weekdays"
+            days.size == 2 && days.containsAll(listOf("sat", "sun")) -> "Weekends"
+            else -> days.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
+        }
+        if (isAllDay()) return "$dayLabel · All day"
+        return "$dayLabel · ${formatTime12h(start)} - ${formatTime12h(end)}"
+    }
+
+    companion object {
+        fun formatTime12h(time24: String): String {
+            if (time24.isBlank()) return ""
+            val parts = time24.split(":")
+            if (parts.size < 2) return time24
+            val h = parts[0].toIntOrNull() ?: return time24
+            val m = parts[1].toIntOrNull() ?: return time24
+            val ampm = if (h >= 12) "PM" else "AM"
+            val h12 = when {
+                h == 0 -> 12
+                h > 12 -> h - 12
+                else -> h
+            }
+            return "%d:%02d %s".format(h12, m, ampm)
+        }
+    }
+}
+
+data class ShopMenu(
+    val id: String = "main",
+    val merchantId: String = "",
+    val name: String = "Main Menu",
+    val active: Boolean = true,
+    val sortOrder: Int = 0,
+    val schedule: MenuSchedule? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    val isMainMenu: Boolean get() = id == "main"
+
+    fun scheduleSummary(): String {
+        return schedule?.scheduleSummary() ?: "Always available"
+    }
+
+    fun isAvailableNow(currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
+        if (!active) return false
+        val sched = schedule ?: return true
+        if (sched.days.isEmpty()) return true
+
+        val tz = try {
+            java.util.TimeZone.getTimeZone(timeZoneId)
+        } catch (_: Exception) {
+            java.util.TimeZone.getTimeZone("Asia/Manila")
+        }
+        val cal = java.util.Calendar.getInstance(tz).apply {
+            timeInMillis = currentTimeMillis
+        }
+
+        fun dayToKey(calDay: Int): String = when (calDay) {
+            java.util.Calendar.MONDAY -> "mon"
+            java.util.Calendar.TUESDAY -> "tue"
+            java.util.Calendar.WEDNESDAY -> "wed"
+            java.util.Calendar.THURSDAY -> "thu"
+            java.util.Calendar.FRIDAY -> "fri"
+            java.util.Calendar.SATURDAY -> "sat"
+            java.util.Calendar.SUNDAY -> "sun"
+            else -> "mon"
+        }
+
+        val todayKey = dayToKey(cal.get(java.util.Calendar.DAY_OF_WEEK))
+        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+
+        val (sH, sM) = sched.start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 0 to 0 }
+        val (eH, eM) = sched.end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 23 to 59 }
+        val startMin = sH * 60 + sM
+        val endMin = eH * 60 + eM
+
+        return if (!sched.isOvernight()) {
+            todayKey in sched.days && currentMinutes in startMin..endMin
+        } else {
+            // Overnight schedule: e.g. 20:00 to 04:00
+            // 1. Started today and hasn't passed midnight
+            val matchToday = todayKey in sched.days && currentMinutes >= startMin
+            // 2. Started yesterday and is currently before endMin
+            val calYesterday = (cal.clone() as java.util.Calendar).apply {
+                add(java.util.Calendar.DATE, -1)
+            }
+            val yesterdayKey = dayToKey(calYesterday.get(java.util.Calendar.DAY_OF_WEEK))
+            val matchYesterday = yesterdayKey in sched.days && currentMinutes <= endMin
+            matchToday || matchYesterday
+        }
+    }
+
+    fun nextOpenStatusDescription(currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): String {
+        if (!active) return "Inactive"
+        if (isAvailableNow(currentTimeMillis, timeZoneId)) {
+            return "Available now"
+        }
+        val sched = schedule ?: return "Available now"
+        return "Opens at ${MenuSchedule.formatTime12h(sched.start)}"
+    }
+}
+
 data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
@@ -569,6 +690,7 @@ data class MenuItem(
     val categoryName: String = "",
     val subcategoryId: String? = null,
     val subcategoryName: String? = null,
+    val menuIds: List<String> = listOf("main"),
     val name: String = "",
     val description: String = "",
     val price: Double = 0.0,
@@ -595,6 +717,23 @@ data class MenuItem(
     val discountPercentage: Double? = null
 ) {
     val available: Boolean get() = inStock
+
+    fun getEffectiveMenuIds(): List<String> {
+        val filtered = menuIds.filter { it.isNotBlank() }
+        return if (filtered.isEmpty()) listOf("main") else filtered
+    }
+
+    fun isAvailableNow(allMenus: List<ShopMenu>, currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
+        if (!inStock) return false
+        val effIds = getEffectiveMenuIds()
+        val relevantMenus = allMenus.filter { it.id in effIds }
+        if (relevantMenus.isEmpty()) {
+            // Default to main menu availability
+            val main = allMenus.find { it.id == "main" }
+            return main?.isAvailableNow(currentTimeMillis, timeZoneId) ?: true
+        }
+        return relevantMenus.any { it.isAvailableNow(currentTimeMillis, timeZoneId) }
+    }
 
     fun getEffectiveCategoryName(categories: List<MenuCategory>): String {
         if (categoryName.isNotBlank()) return categoryName
