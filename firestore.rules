@@ -11,6 +11,14 @@ service cloud.firestore {
     }
     function isAdmin() { return myRole() == 'admin'; }
     function isRider() { return myRole() == 'rider'; }
+    function isSubAdmin(kind) {
+      return myRole() == 'subadmin'
+        && myDoc().get('adminRole', '') == kind
+        && myDoc().get('status', 'active').lower() == 'active';
+    }
+    function isSupport() { return isAdmin() || isSubAdmin('support'); }
+    function isFinance() { return isAdmin() || isSubAdmin('finance'); }
+    function isBackoffice() { return isSupport() || isFinance(); }
     function isStaffOf(mid) {
       return myRole() == 'staff'
         && myDoc().get('merchantId', '') == mid
@@ -44,6 +52,54 @@ service cloud.firestore {
     function refundOrderAfter() {
       return getAfter(/databases/$(db)/documents/orders/$(request.resource.data.walletRefundOrderId)).data;
     }
+    function linkedCustomerUid() {
+      return isRider() && exists(/databases/$(db)/documents/riders/$(request.auth.uid))
+        ? get(/databases/$(db)/documents/riders/$(request.auth.uid)).data.get('linkedCustomerUid', '')
+        : '';
+    }
+    function walletOf(u) {
+      return get(/databases/$(db)/documents/users/$(u)).data.get('walletBalance', 0);
+    }
+    function walletAfterOf(u) {
+      return getAfter(/databases/$(db)/documents/users/$(u)).data.get('walletBalance', 0);
+    }
+    function transferAfter() {
+      return getAfter(/databases/$(db)/documents/walletTransfers/$(request.resource.data.lastTransferId)).data;
+    }
+    function riderDoc() {
+      return get(/databases/$(db)/documents/riders/$(request.auth.uid)).data;
+    }
+    function riderMayTake(svc, veh) {
+      return riderDoc().get('allowedServices', []).hasAny([svc])
+        && (svc != 'taxi' || veh == riderDoc().get('vehicleType', ''));
+    }
+    function merchantLinkedCustomerUid() {
+      return isMerchant() && exists(/databases/$(db)/documents/merchants/$(request.auth.uid))
+        ? get(/databases/$(db)/documents/merchants/$(request.auth.uid)).data.get('linkedCustomerUid', '')
+        : '';
+    }
+    function cityServiceOn(cid, svc) {
+      return cid == null || cid == ''
+        || !exists(/databases/$(db)/documents/cities/$(cid))
+        || get(/databases/$(db)/documents/cities/$(cid)).data.get('services', {}).get(svc, true) == true;
+    }
+    function merchantAccepting(mid) {
+      return mid == null
+        || (get(/databases/$(db)/documents/merchants/$(mid)).data.get('status', 'active') == 'active'
+            && cityServiceOn(get(/databases/$(db)/documents/merchants/$(mid)).data.get('cityId', null),
+                             get(/databases/$(db)/documents/merchants/$(mid)).data.get('type', 'food'))
+            && (get(/databases/$(db)/documents/merchants/$(mid)).data.get('closedUntil', null) == null
+                || get(/databases/$(db)/documents/merchants/$(mid)).data.closedUntil <= request.time));
+    }
+    function merchantAcceptingFor(mid, at) {
+      return mid == null
+        || (get(/databases/$(db)/documents/merchants/$(mid)).data.get('status', 'active') == 'active'
+            && cityServiceOn(get(/databases/$(db)/documents/merchants/$(mid)).data.get('cityId', null),
+                             get(/databases/$(db)/documents/merchants/$(mid)).data.get('type', 'food'))
+            && (get(/databases/$(db)/documents/merchants/$(mid)).data.get('closedUntil', null) == null
+                || get(/databases/$(db)/documents/merchants/$(mid)).data.closedUntil <= request.time
+                || (at != null && get(/databases/$(db)/documents/merchants/$(mid)).data.closedUntil <= at)));
+    }
     function merchantActive(mid) {
       return get(/databases/$(db)/documents/merchants/$(mid)).data.get('status', 'active') == 'active';
     }
@@ -55,8 +111,10 @@ service cloud.firestore {
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isAdmin()
-        || (isMerchant() && resource.data.merchantId == request.auth.uid));
+      allow read: if signedIn() && (request.auth.uid == uid || isBackoffice()
+        || (isMerchant() && resource.data.merchantId == request.auth.uid)
+        || (isRider() && linkedCustomerUid() == uid)
+        || (isMerchant() && merchantLinkedCustomerUid() == uid));
       allow create: if isAdmin() || signedIn() && (
         (request.auth.uid == uid
           && request.resource.data.role == 'customer'
@@ -66,10 +124,18 @@ service cloud.firestore {
         || (isMerchant()
           && request.resource.data.role == 'staff'
           && request.resource.data.merchantId == request.auth.uid
-          && request.resource.data.status == 'active'));
+          && request.resource.data.status == 'active')
+        || (request.auth.uid == uid
+          && request.resource.data.role == 'subadmin'
+          && request.resource.data.adminRole in ['support', 'finance']
+          && request.resource.data.email == request.auth.token.email
+          && request.auth.token.email_verified == true
+          && request.resource.data.status == 'active'
+          && exists(/databases/$(db)/documents/staffInvites/$(request.auth.token.email.lower()))
+          && get(/databases/$(db)/documents/staffInvites/$(request.auth.token.email.lower())).data.adminRole == request.resource.data.adminRole));
       allow update: if isAdmin()
         || (request.auth.uid == uid
-            && !touches(['role','email','status','walletBalance','createdAt','merchantId','staffRole']))
+            && !touches(['role','email','status','walletBalance','createdAt','merchantId','staffRole','adminRole']))
         || (isMerchant() && resource.data.role == 'staff'
             && resource.data.merchantId == request.auth.uid
             && onlyChanges(['status','staffRole','name','phone']))
@@ -86,10 +152,35 @@ service cloud.firestore {
             && refundOrder().get('walletRefunded', false) == false
             && refundOrderAfter().get('walletRefunded', false) == true
             && request.resource.data.walletBalance <= resource.data.get('walletBalance', 0) + refundOrder().fees.total + 0.01
-            && request.resource.data.walletBalance >= resource.data.get('walletBalance', 0) + refundOrder().fees.total - 0.01);
+            && request.resource.data.walletBalance >= resource.data.get('walletBalance', 0) + refundOrder().fees.total - 0.01)
+        || (request.auth.uid != uid
+            && onlyChanges(['walletBalance', 'lastTransferId'])
+            && request.resource.data.lastTransferId is string
+            && !exists(/databases/$(db)/documents/walletTransfers/$(request.resource.data.lastTransferId))
+            && existsAfter(/databases/$(db)/documents/walletTransfers/$(request.resource.data.lastTransferId))
+            && transferAfter().toUid == uid
+            && transferAfter().fromUid == request.auth.uid
+            && request.resource.data.walletBalance <= resource.data.get('walletBalance', 0) + transferAfter().amount + 0.01
+            && request.resource.data.walletBalance >= resource.data.get('walletBalance', 0) + transferAfter().amount - 0.01)
+        || (request.auth.uid == uid
+            && onlyChanges(['walletBalance', 'walletRefundOrderId'])
+            && request.resource.data.walletRefundOrderId is string
+            && refundOrder().customerId == uid
+            && refundOrder().get('paymentMethod', '') == 'wallet'
+            && refundOrder().get('walletAdjustDue', 0) > 0
+            && refundOrder().get('walletAdjustApplied', 0) == 0
+            && refundOrderAfter().get('walletAdjustApplied', 0) == refundOrder().get('walletAdjustDue', 0)
+            && request.resource.data.walletBalance <= resource.data.get('walletBalance', 0) + refundOrder().get('walletAdjustDue', 0) + 0.01
+            && request.resource.data.walletBalance >= resource.data.get('walletBalance', 0) + refundOrder().get('walletAdjustDue', 0) - 0.01);
       allow delete: if isAdmin()
         || (isMerchant() && resource.data.role == 'staff' && resource.data.merchantId == request.auth.uid);
+      match /favorites/{fid} {
+        allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+      }
       match /addresses/{aid} {
+        allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+      }
+      match /inboxReads/{mid} {
         allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
       }
     }
@@ -130,7 +221,13 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (canManage(mid)
-        && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt']));
+        && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt','walletBalance','linkedCustomerUid','linkedCustomerEmail','linkedAt','specialRadius'])
+        && (!touches(['lat', 'lng', 'address', 'storeLocation'])
+            || (request.resource.data.get('locationChangedAt', null) == request.time
+                && (resource.data.get('locationChangedAt', null) == null
+                    || request.time >= resource.data.locationChangedAt + duration.value(30, 'd'))))
+        && (!touches(['locationChangedAt'])
+            || request.resource.data.get('locationChangedAt', null) == request.time));
       match /categories/{cid} {
         allow read: if signedIn();
         allow write: if isAdmin() || canManage(mid);
@@ -138,6 +235,21 @@ service cloud.firestore {
       match /items/{iid} {
         allow read: if signedIn();
         allow write: if isAdmin() || canManage(mid);
+      }
+      match /subcategories/{sid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || canManage(mid);
+      }
+      match /stats/{sid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || canManage(mid);
+      }
+      match /menus/{menuId} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || canManage(mid);
+      }
+      match /inboxReads/{rid} {
+        allow read, write: if isAdmin() || canManage(mid);
       }
     }
 
@@ -148,13 +260,24 @@ service cloud.firestore {
         || resource.data.get('riderId', null) == request.auth.uid
         || (isRider() && resource.data.get('riderId', null) == null
             && resource.data.status in ['Placed Order', 'Preparing', 'Ready'])
-        || isAdmin());
-      allow create: if signedIn() && (
+        || isBackoffice());
+      allow create: if isAdmin() || signedIn() && (
         (request.resource.data.customerId == request.auth.uid
           && myDoc().get('status', 'active') == 'active'
+          && merchantAcceptingFor(request.resource.data.get('merchantId', null), request.resource.data.get('scheduledFor', null))
+          && cityServiceOn(request.resource.data.get('cityId', null), request.resource.data.serviceType)
           && request.resource.data.status.lower() in ['placed order', 'placed', 'pending']
-          && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
+          && request.resource.data.serviceType in ['food','convenience','parcel','pabili','taxi']
+          && (request.resource.data.serviceType != 'taxi'
+              || request.resource.data.get('vehicleType', '') in ['motorcycle','tricycle','car4','car8'])
           && request.resource.data.get('riderId', null) == null
+          && (request.resource.data.get('scheduledFor', null) == null
+              || (request.resource.data.scheduledFor is timestamp
+                  && request.resource.data.scheduledFor > request.time
+                  && request.resource.data.scheduledFor < request.time + duration.value(8, 'd')))
+          && request.resource.data.get('fulfillment', 'delivery') in ['pickup', 'delivery', 'scheduled']
+          && (request.resource.data.get('fulfillment', 'delivery') == 'delivery'
+              || request.resource.data.serviceType in ['food', 'convenience'])
           && (request.resource.data.get('paymentMethod', 'cod') != 'wallet'
               || walletPaid(request.resource.data.fees.total)))
         || (request.resource.data.serviceType == 'request_rider'
@@ -167,6 +290,13 @@ service cloud.firestore {
         || (resource.data.customerId == request.auth.uid
             && resource.data.status.lower() in ['placed order', 'placed', 'pending']
             && request.resource.data.status.lower() in ['cancelled', 'canceled']
+            && (resource.data.get('scheduledFor', null) == null
+                || resource.data.scheduledFor > request.time + duration.value(1, 'h'))
+            && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.get('serviceType', '') == 'taxi'
+            && resource.data.status == 'Driver is on the way'
+            && request.resource.data.status.lower() in ['cancelled', 'canceled']
             && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
         || (resource.data.customerId == request.auth.uid
             && resource.data.get('paymentMethod', '') == 'wallet'
@@ -174,40 +304,86 @@ service cloud.firestore {
             && resource.data.get('walletRefunded', false) == false
             && request.resource.data.get('walletRefunded', false) == true
             && onlyChanges(['walletRefunded', 'updatedAt']))
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.get('paymentMethod', '') == 'wallet'
+            && resource.data.get('walletAdjustDue', 0) > 0
+            && resource.data.get('walletAdjustApplied', 0) == 0
+            && request.resource.data.get('walletAdjustApplied', 0) == resource.data.get('walletAdjustDue', 0)
+            && onlyChanges(['walletAdjustApplied', 'updatedAt']))
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.status in ['Delivered', 'Completed']
+            && resource.data.get('riderId', null) != null
+            && resource.data.get('lateTip', null) == null
+            && request.resource.data.lateTip.amount is number
+            && request.resource.data.lateTip.amount >= 1
+            && request.resource.data.lateTip.amount <= 500
+            && onlyChanges(['lateTip', 'updatedAt'])
+            && walletOf(request.auth.uid) >= request.resource.data.lateTip.amount
+            && walletAfterOf(request.auth.uid) <= walletOf(request.auth.uid) - request.resource.data.lateTip.amount + 0.01
+            && walletAfterOf(request.auth.uid) >= walletOf(request.auth.uid) - request.resource.data.lateTip.amount - 0.01)
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)
+            && merchantActive(resource.data.merchantId)
+            && resource.data.status == 'Preparing'
+            && request.resource.data.status == 'Preparing'
+            && resource.data.get('editedAt', null) == null
+            && request.resource.data.get('editedAt', null) != null
+            && onlyChanges(['items','fees','cashToCollect','walletAdjustDue','editedAt','editedBy','editNote','originalItems','originalTotal','updatedAt'])
+            && request.resource.data.items.size() >= 1
+            && request.resource.data.fees.total <= resource.data.fees.total
+            && request.resource.data.fees.subtotal <= resource.data.fees.subtotal
+            && request.resource.data.fees.deliveryFee == resource.data.fees.deliveryFee
+            && request.resource.data.fees.get('tip', 0) == resource.data.fees.get('tip', 0)
+            && (resource.data.get('paymentMethod', '') == 'wallet'
+                ? (request.resource.data.get('walletAdjustDue', 0) <= resource.data.fees.total - request.resource.data.fees.total + 0.01
+                   && request.resource.data.get('walletAdjustDue', 0) >= resource.data.fees.total - request.resource.data.fees.total - 0.01)
+                : request.resource.data.get('walletAdjustDue', 0) == 0))
         || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)
             && merchantActive(resource.data.merchantId)
             && resource.data.status.lower() in ['placed order','preparing','ready','pending']
             && request.resource.data.status.lower() in ['preparing','ready','rejected','cancelled','canceled','searching','completed']
-            && !touches(['customerId','merchantId','serviceType','items','fees','paymentMethod','cityId','createdAt','riderId','riderName','riderPhone','riderLocation']))
+            && (request.resource.data.status.lower() != 'completed' || resource.data.get('fulfillment', 'delivery') == 'pickup')
+            && !touches(['customerId','merchantId','serviceType','items','fees','paymentMethod','cityId','createdAt','riderId','riderName','riderPhone','riderLocation','dispatch','deliveryOption','excludeRiderIds','splitOf','splitOut','isSplitChild','orderNumber']))
         || (isActiveRider()
             && resource.data.get('riderId', null) == null
             && resource.data.status in ['Placed Order', 'Preparing', 'Ready']
+            && resource.data.get('fulfillment', 'delivery') != 'pickup'
+            && riderMayTake(resource.data.get('serviceType', ''), resource.data.get('vehicleType', ''))
+            && cityServiceOn(resource.data.get('cityId', null), resource.data.get('serviceType', ''))
+            && !(request.auth.uid in resource.data.get('excludeRiderIds', []))
             && request.resource.data.get('riderId', null) == request.auth.uid
             && request.resource.data.status in ['Placed Order', 'Preparing', 'Ready',
-                'Rider is on the way to sender', 'Rider is on the way to vendor']
-            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel']))
+                'Rider is on the way to sender', 'Rider is on the way to vendor', 'Driver is on the way']
+            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel','dispatch','deliveryOption','excludeRiderIds','splitOf','splitOut','isSplitChild','sourceMerchantId','sourceCustomerId','acceptedAt','readyAt','riderFeeFixed','orderNumber']))
         || (isActiveRider()
             && resource.data.get('riderId', null) == request.auth.uid
             && request.resource.data.get('riderId', null) == request.auth.uid
-            && request.resource.data.status in ['Preparing','Ready','Rider is on the way','Delivered',
+            && request.resource.data.status in ['Preparing','Ready','Rider is on the way','On another delivery','Delivered',
                 'Rider is on the way to sender','Arrived at sender','Rider is on the way to recipient','Arrived at recipient',
-                'Rider is on the way to vendor','Arrived at vendor']
-            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel']))
+                'Rider is on the way to vendor','Arrived at vendor',
+                'Driver is on the way','Driver arrived','On trip','Completed']
+            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel','dispatch','deliveryOption','excludeRiderIds','splitOf','splitOut','isSplitChild','sourceMerchantId','sourceCustomerId','acceptedAt','readyAt','riderFeeFixed','orderNumber']))
         || (isActiveRider()
             && resource.data.get('riderId', null) == request.auth.uid
             && request.resource.data.get('riderId', null) == null
             && request.resource.data.status in ['Placed Order', 'Preparing', 'Ready']
-            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel']));
+            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel','dispatch','deliveryOption','excludeRiderIds','splitOf','splitOut','isSplitChild','sourceMerchantId','sourceCustomerId','acceptedAt','readyAt','riderFeeFixed','orderNumber']));
       allow delete: if false;
     }
 
     match /riders/{rid} {
-      allow read: if signedIn() && (request.auth.uid == rid || isAdmin());
+      allow read: if signedIn() && (request.auth.uid == rid || isBackoffice());
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (request.auth.uid == rid && isRider()
         && onlyChanges(['phone','isOnline','location','activeServices','lastSeenAt','settings']));
       match /inboxReads/{mid} {
         allow read, write: if signedIn() && (request.auth.uid == rid || isAdmin());
+      }
+      match /offerLog/{oid} {
+        allow read: if signedIn() && (request.auth.uid == rid || isAdmin());
+        allow create: if signedIn() && request.auth.uid == rid && isRider();
+        allow update: if signedIn() && request.auth.uid == rid && isRider()
+          && onlyChanges(['finalOutcome', 'finalAt']);
+        allow delete: if false;
       }
     }
 
@@ -226,8 +402,58 @@ service cloud.firestore {
     match /inbox/{mid} {
       allow read: if signedIn() && (isAdmin()
         || resource.data.get('riderId', null) == request.auth.uid
-        || (isRider() && resource.data.get('audience', '') == 'all_riders'));
-      allow write: if isAdmin();
+        || resource.data.get('customerId', null) == request.auth.uid
+        || (isRider() && resource.data.get('audience', '') == 'all_riders')
+        || (myRole() == 'customer' && resource.data.get('audience', '') == 'all_customers')
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId))
+        || (myRole() in ['merchant', 'owner', 'partner', 'staff'] && resource.data.get('audience', '') == 'all_merchants'));
+      allow write: if isSupport();
+    }
+
+    match /staffInvites/{email} {
+      allow read: if signedIn() && (isAdmin() || request.auth.token.email.lower() == email);
+      allow create, update: if isAdmin() && request.resource.data.adminRole in ['support', 'finance'];
+      allow delete: if isAdmin() || (signedIn() && request.auth.token.email.lower() == email);
+    }
+
+    match /promoCodes/{code} {
+      allow get: if signedIn();
+      allow list, create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (signedIn() && myRole() == 'customer'
+            && onlyChanges(['usedCount', 'lastRedemptionId'])
+            && resource.data.get('active', false) == true
+            && (resource.data.get('expiresAt', null) == null || resource.data.expiresAt > request.time)
+            && request.resource.data.usedCount == resource.data.get('usedCount', 0) + 1
+            && (resource.data.get('usageLimit', null) == null
+                || resource.data.get('usedCount', 0) < resource.data.usageLimit)
+            && request.resource.data.lastRedemptionId is string
+            && !exists(/databases/$(db)/documents/promoRedemptions/$(request.resource.data.lastRedemptionId))
+            && existsAfter(/databases/$(db)/documents/promoRedemptions/$(request.resource.data.lastRedemptionId))
+            && getAfter(/databases/$(db)/documents/promoRedemptions/$(request.resource.data.lastRedemptionId)).data.code == code
+            && getAfter(/databases/$(db)/documents/promoRedemptions/$(request.resource.data.lastRedemptionId)).data.customerId == request.auth.uid);
+    }
+
+    match /promoRedemptions/{rid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow create: if signedIn() && myRole() == 'customer'
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.code is string
+        && request.resource.data.orderId is string
+        && rid == request.resource.data.code + '_' + request.auth.uid + '_' + request.resource.data.orderId
+        && exists(/databases/$(db)/documents/promoCodes/$(request.resource.data.code))
+        && get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.get('active', false) == true
+        && (get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.get('expiresAt', null) == null
+            || get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.expiresAt > request.time)
+        && request.resource.data.discount is number
+        && request.resource.data.discount >= 0;
+      allow update, delete: if isAdmin();
+    }
+
+    match /fraudFlags/{fid} {
+      allow read: if isBackoffice();
+      allow create, update: if isSupport();
+      allow delete: if isAdmin();
     }
 
     match /tierConfig/{tid} { allow read: if signedIn(); allow write: if isAdmin(); }
@@ -254,7 +480,8 @@ service cloud.firestore {
     }
 
     match /auditLogs/{id} {
-      allow read, create: if isAdmin();
+      allow read: if isAdmin();
+      allow create: if isBackoffice();
       allow update, delete: if false;
     }
     match /editHistory/{id} {
@@ -263,23 +490,141 @@ service cloud.firestore {
     }
     match /walletTransactions/{id} {
       allow read: if signedIn() && (resource.data.get('riderId', null) == request.auth.uid
-        || resource.data.get('customerId', null) == request.auth.uid || isAdmin());
+        || resource.data.get('customerId', null) == request.auth.uid
+        || (isRider() && linkedCustomerUid() != '' && resource.data.get('customerId', '') == linkedCustomerUid())
+        || resource.data.get('merchantId', null) == request.auth.uid
+        || (isMerchant() && merchantLinkedCustomerUid() != '' && resource.data.get('customerId', '') == merchantLinkedCustomerUid())
+        || isFinance());
       allow write: if isAdmin();
     }
     match /cashRemittances/{id} {
-      allow read: if signedIn() && (resource.data.riderId == request.auth.uid || isAdmin());
-      allow write: if isAdmin();
+      allow read: if signedIn() && (resource.data.riderId == request.auth.uid || isFinance());
+      allow write: if isFinance();
     }
     match /merchantPayouts/{id} {
-      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isAdmin());
+      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isFinance());
+      allow write: if isFinance();
+    }
+
+    match /walletDirectory/{did} {
+      allow get: if signedIn();
+      allow list: if isAdmin();
+      allow create: if signedIn() && myRole() == 'customer'
+        && request.resource.data.uid == request.auth.uid
+        && (did == request.auth.uid
+            || did == 'email_' + request.auth.token.email.lower()
+            || did.matches('phone_63[0-9]{10}'));
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid);
+      allow delete: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
+    match /walletTransfers/{tid} {
+      allow read: if signedIn() && (resource.data.fromUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid || isFinance());
+      allow create: if signedIn()
+        && myRole() == 'customer'
+        && myDoc().get('status', 'active') == 'active'
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.toUid != request.auth.uid
+        && request.resource.data.amount is number
+        && request.resource.data.amount >= 1
+        && request.resource.data.amount <= 10000
+        && get(/databases/$(db)/documents/users/$(request.resource.data.toUid)).data.get('role', '') == 'customer'
+        && get(/databases/$(db)/documents/users/$(request.resource.data.toUid)).data.get('status', 'active') == 'active'
+        && walletOf(request.auth.uid) >= request.resource.data.amount
+        && walletAfterOf(request.auth.uid) <= walletOf(request.auth.uid) - request.resource.data.amount + 0.01
+        && walletAfterOf(request.auth.uid) >= walletOf(request.auth.uid) - request.resource.data.amount - 0.01
+        && walletAfterOf(request.resource.data.toUid) <= walletOf(request.resource.data.toUid) + request.resource.data.amount + 0.01
+        && walletAfterOf(request.resource.data.toUid) >= walletOf(request.resource.data.toUid) + request.resource.data.amount - 0.01;
+      allow update, delete: if false;
+    }
+
+    match /supportTickets/{tid} {
+      allow read: if signedIn() && (isSupport()
+        || resource.data.get('customerId', null) == request.auth.uid
+        || resource.data.get('riderId', null) == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.status == 'open'
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 80
+        && ((myRole() == 'customer'
+             && request.resource.data.get('customerId', null) == request.auth.uid
+             && (request.resource.data.get('orderId', null) == null
+                 || get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('customerId', null) == request.auth.uid))
+            || (isActiveRider()
+                && request.resource.data.get('reporterType', '') == 'rider'
+                && request.resource.data.get('riderId', null) == request.auth.uid
+                && request.resource.data.get('orderId', null) != null
+                && get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('riderId', null) == request.auth.uid));
+      allow update: if isSupport()
+        || (signedIn()
+            && (resource.data.get('customerId', null) == request.auth.uid
+                || resource.data.get('riderId', null) == request.auth.uid)
+            && resource.data.status != 'resolved'
+            && onlyChanges(['lastMessageAt', 'lastMessagePreview', 'unreadByAdmin', 'customerLastReadAt', 'riderLastReadAt']));
+      allow delete: if false;
+
+      match /messages/{mid} {
+        allow read: if signedIn() && (isSupport()
+          || get(/databases/$(db)/documents/supportTickets/$(tid)).data.get('customerId', null) == request.auth.uid
+          || get(/databases/$(db)/documents/supportTickets/$(tid)).data.get('riderId', null) == request.auth.uid);
+        allow create: if isSupport()
+          || (signedIn()
+              && request.resource.data.senderId == request.auth.uid
+              && request.resource.data.senderType in ['customer', 'rider']
+              && request.resource.data.get('imageData', '').size() < 400000
+              && request.resource.data.get('text', '').size() <= 1000
+              && ((!exists(/databases/$(db)/documents/supportTickets/$(tid))
+                   && existsAfter(/databases/$(db)/documents/supportTickets/$(tid))
+                   && (getAfter(/databases/$(db)/documents/supportTickets/$(tid)).data.get('customerId', null) == request.auth.uid
+                       || getAfter(/databases/$(db)/documents/supportTickets/$(tid)).data.get('riderId', null) == request.auth.uid)
+                   && request.resource.data.get('isInitial', false) == true)
+                  || (exists(/databases/$(db)/documents/supportTickets/$(tid))
+                      && (get(/databases/$(db)/documents/supportTickets/$(tid)).data.get('customerId', null) == request.auth.uid
+                          || get(/databases/$(db)/documents/supportTickets/$(tid)).data.get('riderId', null) == request.auth.uid)
+                      && get(/databases/$(db)/documents/supportTickets/$(tid)).data.status == 'accepted')));
+        allow update, delete: if false;
+      }
+    }
+
+    match /riderReviews/{oid} {
+      allow read: if signedIn() && (isAdmin()
+        || resource.data.get('riderId', null) == request.auth.uid
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
+      allow create: if isActiveRider()
+        && request.resource.data.riderId == request.auth.uid
+        && get(/databases/$(db)/documents/orders/$(oid)).data.get('riderId', null) == request.auth.uid
+        && get(/databases/$(db)/documents/orders/$(oid)).data.status in ['Delivered', 'Completed']
+        && get(/databases/$(db)/documents/orders/$(oid)).data.get('merchantId', null) == request.resource.data.get('merchantId', null);
+      allow update, delete: if isAdmin();
+    }
+
+    match /quests/{qid} {
+      allow read: if signedIn() && (isAdmin() || isRider());
       allow write: if isAdmin();
     }
 
+    match /questClaims/{cid} {
+      allow read: if signedIn() && (isAdmin() || resource.data.get('riderId', null) == request.auth.uid);
+      allow create: if isActiveRider()
+        && request.resource.data.riderId == request.auth.uid
+        && request.resource.data.status == 'Pending'
+        && cid == request.resource.data.questId + '_' + request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
     match /reviews/{oid} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (isAdmin()
+        || resource.data.get('customerId', null) == request.auth.uid
+        || resource.data.get('riderId', null) == request.auth.uid
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
       allow create: if signedIn()
         && request.resource.data.customerId == request.auth.uid
-        && get(/databases/$(db)/documents/orders/$(oid)).data.status == 'Delivered'
+        && get(/databases/$(db)/documents/orders/$(oid)).data.status in ['Delivered', 'Completed']
         && get(/databases/$(db)/documents/orders/$(oid)).data.customerId == request.auth.uid;
       allow update, delete: if isAdmin();
     }
