@@ -287,7 +287,7 @@ object MockDataGenerator {
             barcode = "4800012345678",
             unit = "1000ml",
             stockCount = 34,
-            lowStockAlertThreshold = 8
+            lowStockAt = 8
         ),
         MenuItem(
             id = "conv_2",
@@ -301,7 +301,7 @@ object MockDataGenerator {
             barcode = "4800012345679",
             unit = "500ml",
             stockCount = 48,
-            lowStockAlertThreshold = 10
+            lowStockAt = 10
         ),
         MenuItem(
             id = "conv_3",
@@ -315,7 +315,7 @@ object MockDataGenerator {
             barcode = "4800012345680",
             unit = "600ml",
             stockCount = 22,
-            lowStockAlertThreshold = 5
+            lowStockAt = 5
         ),
         MenuItem(
             id = "conv_4",
@@ -329,7 +329,7 @@ object MockDataGenerator {
             barcode = "4800098765432",
             unit = "150g bag",
             stockCount = 18,
-            lowStockAlertThreshold = 6
+            lowStockAt = 6
         ),
         MenuItem(
             id = "conv_5",
@@ -343,7 +343,7 @@ object MockDataGenerator {
             barcode = "4800098765433",
             unit = "100g",
             stockCount = 28,
-            lowStockAlertThreshold = 5
+            lowStockAt = 5
         ),
         MenuItem(
             id = "conv_6",
@@ -357,7 +357,7 @@ object MockDataGenerator {
             barcode = "4800098765434",
             unit = "200g pouch",
             stockCount = 12,
-            lowStockAlertThreshold = 4
+            lowStockAt = 4
         ),
         MenuItem(
             id = "conv_7",
@@ -371,7 +371,7 @@ object MockDataGenerator {
             barcode = "4800055512341",
             unit = "1 bowl (120g)",
             stockCount = 40,
-            lowStockAlertThreshold = 10
+            lowStockAt = 10
         ),
         MenuItem(
             id = "conv_8",
@@ -385,7 +385,7 @@ object MockDataGenerator {
             barcode = "4800055512342",
             unit = "450g loaf",
             stockCount = 15,
-            lowStockAlertThreshold = 4
+            lowStockAt = 4
         ),
         MenuItem(
             id = "conv_9",
@@ -399,7 +399,7 @@ object MockDataGenerator {
             barcode = "4800055512343",
             unit = "Dozen",
             stockCount = 8,
-            lowStockAlertThreshold = 5
+            lowStockAt = 5
         ),
         MenuItem(
             id = "conv_10",
@@ -413,7 +413,7 @@ object MockDataGenerator {
             barcode = "4800077799911",
             unit = "250ml pump",
             stockCount = 30,
-            lowStockAlertThreshold = 5
+            lowStockAt = 5
         ),
         MenuItem(
             id = "conv_11",
@@ -427,7 +427,7 @@ object MockDataGenerator {
             barcode = "4800077799912",
             unit = "4 pack",
             stockCount = 20,
-            lowStockAlertThreshold = 4
+            lowStockAt = 4
         ),
         MenuItem(
             id = "conv_12",
@@ -441,7 +441,7 @@ object MockDataGenerator {
             barcode = "4800077799913",
             unit = "150g tube",
             stockCount = 19,
-            lowStockAlertThreshold = 5
+            lowStockAt = 5
         )
     )
 

@@ -55,7 +55,7 @@ fun OrderRouteMapView(
                     id = "pickup_marker"
                     position = pickupPoint
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    title = "📍 Store Pickup"
+                    title = "Store Pickup"
                 }
                 overlays.add(pickupMarker)
 
@@ -64,7 +64,7 @@ fun OrderRouteMapView(
                     id = "dropoff_marker"
                     position = dropoffPoint
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    title = "🏁 Customer Drop-off"
+                    title = "Customer Drop-off"
                     if (isDropoffEditable) {
                         isDraggable = true
                         setOnMarkerDragListener(object : Marker.OnMarkerDragListener {
@@ -97,7 +97,7 @@ fun OrderRouteMapView(
                         id = "rider_marker"
                         position = riderPoint
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        title = "🛵 Rider Location"
+                        title = "Rider Location"
                     }
                     overlays.add(riderMarker)
                 }
@@ -162,7 +162,7 @@ fun OrderRouteMapView(
                         id = "rider_marker"
                         position = riderPoint
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        title = "🛵 Rider Location"
+                        title = "Rider Location"
                     }
                     mapView.overlays.add(rMarker)
                 } else {

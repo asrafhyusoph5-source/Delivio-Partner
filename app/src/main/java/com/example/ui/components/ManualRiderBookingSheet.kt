@@ -242,7 +242,12 @@ fun ManualRiderBookingSheet(
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (hasMerchantLocation) "📍" else "⚠️", fontSize = 18.sp)
+                            Icon(
+                                imageVector = if (hasMerchantLocation) Icons.Default.Storefront else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (hasMerchantLocation) customColors.accent else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Pickup Location: ${settings.storeName.ifBlank { "Your Store" }}",
@@ -456,19 +461,37 @@ fun ManualRiderBookingSheet(
 
                         if (!hasDropoffPin) {
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "⚠️ Tap Expand above to place and confirm the drop-off pin.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = StatusClosedRed
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = StatusClosedRed,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Tap Expand above to place and confirm the drop-off pin.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = StatusClosedRed
+                                )
+                            }
                         } else if (dropoffArea.isNotBlank()) {
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "📍 Area: $dropoffArea",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = customColors.accent
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = customColors.accent,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Area: $dropoffArea",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = customColors.accent
+                                )
+                            }
                         }
                     }
                 }

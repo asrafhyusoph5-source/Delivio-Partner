@@ -57,25 +57,30 @@ fun InboxScreen(
 
     val filterOptions = listOf("All", "Updates", "Orders", "Wallet", "Promos")
 
-    val filteredMessages = remember(messages, selectedFilter) {
+    val now = System.currentTimeMillis()
+    val availableMessages = remember(messages) {
+        messages.filter { it.sendAt == null || it.sendAt <= now }
+    }
+
+    val filteredMessages = remember(availableMessages, selectedFilter) {
         when (selectedFilter) {
-            "Updates" -> messages.filter {
+            "Updates" -> availableMessages.filter {
                 val cat = it.category.lowercase()
                 cat in listOf("update", "updates", "system", "admin", "notice")
             }
-            "Orders" -> messages.filter {
+            "Orders" -> availableMessages.filter {
                 val cat = it.category.lowercase()
                 cat in listOf("order", "orders", "delivery", "dispatch")
             }
-            "Wallet" -> messages.filter {
+            "Wallet" -> availableMessages.filter {
                 val cat = it.category.lowercase()
                 cat in listOf("wallet", "finance", "payout", "earnings", "cash")
             }
-            "Promos" -> messages.filter {
+            "Promos" -> availableMessages.filter {
                 val cat = it.category.lowercase()
                 cat in listOf("promo", "promos", "promotion", "marketing", "discount", "campaign")
             }
-            else -> messages
+            else -> availableMessages
         }
     }
 

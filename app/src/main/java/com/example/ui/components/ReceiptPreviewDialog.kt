@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,7 @@ import com.example.data.model.Order
 import com.example.ui.theme.LocalDelivioColors
 import com.example.data.model.ReceiptDesign
 import com.example.util.ReceiptPrinterHelper
+import kotlinx.coroutines.launch
 
 @Composable
 fun ReceiptPreviewDialog(
@@ -40,6 +42,7 @@ fun ReceiptPreviewDialog(
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
     val activity = context as? Activity
+    val coroutineScope = rememberCoroutineScope()
 
     val paperSize = settings.printerPaperSize.ifBlank { "80mm" }
     val formattedText = remember(order, settings.storeName, paperSize, receiptDesign) {
@@ -146,26 +149,77 @@ fun ReceiptPreviewDialog(
                         Text("Share Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
 
+                    val coroutineScope = rememberCoroutineScope()
+                    var isPrintingBt by remember { mutableStateOf(false) }
+
+                    val btPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+                    ) { grants ->
+                        val allGranted = grants.values.all { it }
+                        if (allGranted && settings.bluetoothPrinterAddress.isNotBlank()) {
+                            isPrintingBt = true
+                            coroutineScope.launch {
+                                val res = com.example.util.BluetoothPrinterHelper.printOrder(
+                                    context = context,
+                                    deviceAddress = settings.bluetoothPrinterAddress,
+                                    order = order,
+                                    storeName = settings.storeName,
+                                    design = receiptDesign
+                                )
+                                isPrintingBt = false
+                                if (res.isSuccess) {
+                                    Toast.makeText(context, "Printed to Bluetooth printer!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Bluetooth print failed: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+
                     Button(
                         onClick = {
-                            if (activity != null) {
-                                ReceiptPrinterHelper.printOrderReceipt(
-                                    activity,
-                                    order,
-                                    settings.storeName,
-                                    paperSize,
-                                    receiptDesign
-                                )
+                            if (settings.bluetoothPrinterAddress.isNotBlank()) {
+                                if (!com.example.util.BluetoothPrinterHelper.hasBluetoothPermissions(context)) {
+                                    btPermissionLauncher.launch(com.example.util.BluetoothPrinterHelper.getRequiredPermissions())
+                                } else {
+                                    isPrintingBt = true
+                                    coroutineScope.launch {
+                                        val res = com.example.util.BluetoothPrinterHelper.printOrder(
+                                            context = context,
+                                            deviceAddress = settings.bluetoothPrinterAddress,
+                                            order = order,
+                                            storeName = settings.storeName,
+                                            design = receiptDesign
+                                        )
+                                        isPrintingBt = false
+                                        if (res.isSuccess) {
+                                            Toast.makeText(context, "Printed to Bluetooth printer!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Bluetooth print failed: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
                             } else {
-                                ReceiptPrinterHelper.shareReceiptAsText(
-                                    context,
-                                    order,
-                                    settings.storeName,
-                                    paperSize,
-                                    receiptDesign
-                                )
+                                if (activity != null) {
+                                    ReceiptPrinterHelper.printOrderReceipt(
+                                        activity,
+                                        order,
+                                        settings.storeName,
+                                        paperSize,
+                                        receiptDesign
+                                    )
+                                } else {
+                                    ReceiptPrinterHelper.shareReceiptAsText(
+                                        context,
+                                        order,
+                                        settings.storeName,
+                                        paperSize,
+                                        receiptDesign
+                                    )
+                                }
                             }
                         },
+                        enabled = !isPrintingBt,
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = customColors.accent,
@@ -176,9 +230,21 @@ fun ReceiptPreviewDialog(
                             .height(50.dp)
                             .testTag("print_receipt_action_btn")
                     ) {
-                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(20.dp))
+                        if (isPrintingBt) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = customColors.onAccent,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(20.dp))
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Print Receipt", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                        Text(
+                            text = if (settings.bluetoothPrinterAddress.isNotBlank()) "Print (Bluetooth)" else "Print Receipt",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
                     }
                 }
             }

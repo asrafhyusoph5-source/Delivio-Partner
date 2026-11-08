@@ -27,11 +27,33 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MerchantViewModel by viewModels()
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.onAppForeground()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         setContent {
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                        viewModel.onAppForeground()
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
+
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val networkHelper = remember { com.example.util.NetworkConnectivityHelper(context) }
+            val isOnline by networkHelper.isOnline.collectAsStateWithLifecycle()
+
             val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
             val merchantApplication by viewModel.merchantApplication.collectAsStateWithLifecycle()
             val isAuthLoading by viewModel.isAuthLoading.collectAsStateWithLifecycle()
@@ -95,6 +117,7 @@ class MainActivity : ComponentActivity() {
             val showInboxScreen by viewModel.showInboxScreen.collectAsStateWithLifecycle()
             val showStoreProfileScreen by viewModel.showStoreProfileScreen.collectAsStateWithLifecycle()
             val showSettingsScreen by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
+            val showPrinterScreen by viewModel.showPrinterScreen.collectAsStateWithLifecycle()
 
             val isServiceLocked by viewModel.isServiceLocked.collectAsStateWithLifecycle()
             val serviceLockMessage by viewModel.serviceLockMessage.collectAsStateWithLifecycle()
@@ -206,6 +229,15 @@ class MainActivity : ComponentActivity() {
                         onOpenMapLocation = { viewModel.openMapLocation() },
                         onOpenStaffDialog = { viewModel.openStaffDialog() },
                         onBack = { viewModel.closeSettings() }
+                    )
+                } else if (showPrinterScreen) {
+                    // Full-screen Bluetooth Printer route (Profile > Printer)
+                    BluetoothPrinterScreen(
+                        settings = settings,
+                        onSavePrinter = { name, address ->
+                            viewModel.saveBluetoothPrinter(name, address)
+                        },
+                        onBack = { viewModel.closePrinterScreen() }
                     )
                 } else if (showStoreProfileScreen) {
                     // Full-screen Store Profile Details route
@@ -326,13 +358,16 @@ class MainActivity : ComponentActivity() {
                     // Main Merchant Dashboard & Tabs
                     Scaffold(
                         topBar = {
-                            DelivioTopBar(
-                                settings = settings,
-                                onToggleOpen = { viewModel.toggleStoreOpen() },
-                                currentTime = currentTime,
-                                isServiceLocked = isServiceLocked,
-                                serviceLockMessage = serviceLockMessage
-                            )
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                DelivioTopBar(
+                                    settings = settings,
+                                    onToggleOpen = { viewModel.toggleStoreOpen() },
+                                    currentTime = currentTime,
+                                    isServiceLocked = isServiceLocked,
+                                    serviceLockMessage = serviceLockMessage
+                                )
+                                OfflineBanner(isOnline = isOnline)
+                            }
                         },
                         bottomBar = {
                             DelivioBottomBar(
@@ -415,7 +450,7 @@ class MainActivity : ComponentActivity() {
                                 MerchantTab.DASHBOARD -> {
                                     val soldOutCount = menuItems.count { it.businessType == settings.businessType && !it.inStock }
                                     val lowStockCount = menuItems.count {
-                                        it.businessType == settings.businessType && it.stockCount <= it.lowStockAlertThreshold
+                                        it.businessType == settings.businessType && it.trackStock && it.stockCount <= it.lowStockAt
                                     }
 
                                     DashboardScreen(
@@ -473,6 +508,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
                                         onOpenStaffDialog = { viewModel.openStaffDialog() },
                                         onOpenSettings = { viewModel.openSettings() },
+                                        onOpenPrinter = { viewModel.openPrinterScreen() },
                                         onLogout = { viewModel.logout() },
                                         isOwner = isOwner,
                                         canAccessInbox = canAccessInbox,
@@ -673,8 +709,12 @@ class MainActivity : ComponentActivity() {
                     BusinessHoursDialog(
                         initialHours = settings.hours,
                         initialAutoSchedule = settings.autoSchedule,
+                        initialHolidays = settings.holidays,
                         onSave = { hours, autoSchedule ->
                             viewModel.saveBusinessHours(hours, autoSchedule)
+                        },
+                        onSaveHolidays = { holidays ->
+                            viewModel.saveHolidays(holidays)
                         },
                         onDismiss = {
                             viewModel.closeBusinessHoursDialog()

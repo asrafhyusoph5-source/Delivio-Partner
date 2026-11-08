@@ -20,7 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,6 +52,7 @@ fun OrderDetailScreen(
 ) {
     BackHandler { onBack() }
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val customColors = LocalDelivioColors.current
 
     var showConfirmPickedUpDialog by remember { mutableStateOf(false) }
@@ -110,6 +113,10 @@ fun OrderDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             FulfillmentChip(order = order)
+                            if (order.isScheduled) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                ScheduledChip(order = order)
+                            }
                             if (!order.isPickUp) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 DeliveryOptionChip(deliveryOption = order.deliveryOption)
@@ -172,28 +179,38 @@ fun OrderDetailScreen(
                     when (order.status) {
                         OrderStatus.PLACED_ORDER -> {
                             OutlinedButton(
-                                onClick = { onReject(order) },
-                                shape = RoundedCornerShape(14.dp),
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onReject(order)
+                                },
+                                shape = RoundedCornerShape(16.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(50.dp)
+                                    .height(54.dp)
                             ) {
-                                Text("Reject", fontWeight = FontWeight.Bold)
+                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Reject", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             }
                             Button(
-                                onClick = { onAccept(order) },
-                                shape = RoundedCornerShape(14.dp),
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onAccept(order)
+                                },
+                                shape = RoundedCornerShape(16.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = customColors.accent,
                                     contentColor = customColors.onAccent
                                 ),
                                 modifier = Modifier
                                     .weight(1.5f)
-                                    .height(50.dp)
+                                    .height(54.dp)
                                     .testTag("detail_accept_btn")
                             ) {
-                                Text("Accept Order", fontWeight = FontWeight.ExtraBold)
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Accept Order", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                             }
                         }
                         OrderStatus.PREPARING -> {
@@ -512,7 +529,12 @@ fun OrderDetailScreen(
                                     .background(customColors.accentTint),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("👤", fontSize = 20.sp)
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = "Customer",
+                                    tint = customColors.accent,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
@@ -562,7 +584,16 @@ fun OrderDetailScreen(
                         Column {
                             if (order.isPickUp) {
                                 Text("Pick Up Order", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                Text("🛍️ Customer will pick up at store location.", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = customColors.accent)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.ShoppingBag,
+                                        contentDescription = null,
+                                        tint = customColors.accent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Customer will pick up at store location.", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = customColors.accent)
+                                }
                             } else {
                                 Text("Delivery Address", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                                 Text(order.deliveryAddress.formatted, style = MaterialTheme.typography.bodyMedium)
@@ -718,7 +749,12 @@ fun OrderDetailScreen(
                                         .background(customColors.accentTint),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(rider?.avatarEmoji ?: "🛵", fontSize = 20.sp)
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.DirectionsBike,
+                                        contentDescription = "Rider",
+                                        tint = customColors.accent,
+                                        modifier = Modifier.size(24.dp)
+                                    )
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {

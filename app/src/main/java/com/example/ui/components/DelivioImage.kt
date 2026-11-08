@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -98,16 +99,12 @@ fun DelivioAsyncImage(
             modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
             contentAlignment = Alignment.Center
         ) {
-            if (fallbackEmoji != null) {
-                Text(fallbackEmoji, fontSize = 24.sp)
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Image,
-                    contentDescription = contentDescription,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            Icon(
+                imageVector = Icons.Default.Storefront,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }
@@ -117,8 +114,7 @@ fun MerchantAvatarImage(
     logoUrl: String?,
     bannerUrl: String?,
     imageUrl: String?,
-    modifier: Modifier = Modifier,
-    fallbackEmoji: String = "🏬"
+    modifier: Modifier = Modifier
 ) {
     val cleanLogo = logoUrl?.trim().orEmpty()
     val cleanBanner = bannerUrl?.trim().orEmpty()
@@ -134,8 +130,7 @@ fun MerchantAvatarImage(
     DelivioAsyncImage(
         url = chosenUrl,
         contentDescription = "Merchant Avatar",
-        modifier = modifier,
-        fallbackEmoji = fallbackEmoji
+        modifier = modifier
     )
 }
 

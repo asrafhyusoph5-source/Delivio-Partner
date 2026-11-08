@@ -93,7 +93,7 @@ fun MenuItemEditDialog(
     var barcode by remember { mutableStateOf(item.barcode) }
     var unit by remember { mutableStateOf(item.unit) }
     var stockCountText by remember { mutableStateOf(item.stockCount.toString()) }
-    var lowStockThresholdText by remember { mutableStateOf(item.lowStockAlertThreshold.toString()) }
+    var lowStockThresholdText by remember { mutableStateOf(item.lowStockAt.toString()) }
 
     val allTagOptions = listOf("Best Seller", "Chef Special", "Spicy", "Vegetarian", "Halal")
 
@@ -413,7 +413,7 @@ fun MenuItemEditDialog(
                             val parsedPrice = priceText.toDoubleOrNull() ?: item.price
                             val parsedPrep = prepTimeText.toIntOrNull() ?: item.prepTimeMinutes
                             val parsedStock = stockCountText.toIntOrNull() ?: item.stockCount
-                            val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAlertThreshold
+                            val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAt
 
                             val finalCatName = selectedCategoryName
                             val finalCatId = selectedCategoryId.ifBlank {
@@ -434,8 +434,10 @@ fun MenuItemEditDialog(
                                 sku = if (businessType == BusinessType.CONVENIENCE) sku.trim() else "",
                                 barcode = if (businessType == BusinessType.CONVENIENCE) barcode.trim() else "",
                                 unit = if (businessType == BusinessType.CONVENIENCE) unit.trim().ifBlank { "1 pc" } else "1 pc",
-                                stockCount = if (businessType == BusinessType.CONVENIENCE) parsedStock else 50,
-                                lowStockAlertThreshold = if (businessType == BusinessType.CONVENIENCE) parsedThreshold else 5,
+                                trackStock = item.trackStock,
+                                stockCount = parsedStock,
+                                lowStockAt = parsedThreshold,
+                                inStock = if (item.trackStock && parsedStock <= 0) false else item.inStock,
                                 businessType = businessType
                             )
                             onSave(updated)

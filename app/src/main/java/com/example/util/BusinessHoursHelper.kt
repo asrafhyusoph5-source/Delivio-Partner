@@ -62,6 +62,23 @@ object BusinessHoursHelper {
      *     true only inside today's window (settings/platform.timezone, default "Asia/Manila"; overnight windows check yesterday)
      * - else isOpen
      */
+    fun getActiveHoliday(settings: MerchantSettings, nowMs: Long = System.currentTimeMillis()): com.example.data.model.HolidaySchedule? {
+        return settings.holidays.firstOrNull { h ->
+            h.from > 0L && h.to > 0L && nowMs in h.from..h.to
+        }
+    }
+
+    /**
+     * effectiveOpen(shop):
+     * - false when status != "active"
+     * - false when within any holiday date range (settings.holidays)
+     * - false when closedUntil is set and now < closedUntil
+     * - false when isPaused and now < pauseUntilTime
+     * - true when openUntil is set and now < openUntil
+     * - else when autoSchedule is true and hours exist:
+     *     true only inside today's window (settings/platform.timezone, default "Asia/Manila"; overnight windows check yesterday)
+     * - else isOpen
+     */
     fun isEffectiveOpen(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis(),
@@ -71,6 +88,12 @@ object BusinessHoursHelper {
             return false
         }
         if (!settings.status.equals("active", ignoreCase = true)) {
+            return false
+        }
+
+        // Check if currently closed for a holiday
+        val holiday = getActiveHoliday(settings, nowMs)
+        if (holiday != null) {
             return false
         }
 
@@ -298,6 +321,14 @@ object BusinessHoursHelper {
         val isOpenNow = isInsideScheduleWindow(hours, settings.timezone, nowMs)
         val currentDayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
         val currentMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+
+        val holiday = getActiveHoliday(settings, nowMs)
+        if (holiday != null) {
+            val dateFmt = java.text.SimpleDateFormat("MMM d", java.util.Locale.US).apply { timeZone = tz }
+            val toDateStr = dateFmt.format(java.util.Date(holiday.to))
+            val notePart = if (holiday.note.isNotBlank()) " for ${holiday.note}" else ""
+            return "Closed$notePart until $toDateStr"
+        }
 
         if (isOpenNow) {
             // Check when it closes

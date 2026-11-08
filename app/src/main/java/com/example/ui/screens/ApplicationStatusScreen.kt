@@ -42,39 +42,39 @@ fun ApplicationStatusScreen(
 
     val status = application.status.ifBlank { "Pending" }
 
-    val (badgeBg, badgeFg, iconEmoji, statusTitle, statusSubtitle) = when (status.lowercase()) {
+    val (badgeBg, badgeFg, iconVector, statusTitle, statusSubtitle) = when (status.lowercase()) {
         "pending" -> Tuple5(
             Color(0xFFFEF3C7),
             Color(0xFF92400E),
-            "⏳",
+            Icons.Default.HourglassEmpty,
             "Application Submitted",
             "Wait for admin approval. Our onboarding team is reviewing your documents."
         )
         "under review" -> Tuple5(
             Color(0xFFDBEAFE),
             Color(0xFF1E40AF),
-            "🔍",
+            Icons.Default.FactCheck,
             "Under Review",
             "Your merchant application is currently being verified by Delivio administrators."
         )
         "needs info" -> Tuple5(
             Color(0xFFFFEDD5),
             Color(0xFFC2410C),
-            "📝",
+            Icons.Default.EditNote,
             "Additional Info Required",
             "The admin team has requested revisions or additional details for your store."
         )
         "rejected" -> Tuple5(
             Color(0xFFFEE2E2),
             Color(0xFF991B1B),
-            "❌",
+            Icons.Default.Cancel,
             "Application Rejected",
             "Your application could not be approved at this time."
         )
         else -> Tuple5(
             Color(0xFFF3F4F6),
             Color(0xFF374151),
-            "📋",
+            Icons.Default.Assignment,
             status,
             "Application status: $status"
         )
@@ -101,7 +101,12 @@ fun ApplicationStatusScreen(
                     .background(badgeBg),
                 contentAlignment = Alignment.Center
             ) {
-                Text(iconEmoji, fontSize = 36.sp)
+                Icon(
+                    imageVector = iconVector,
+                    contentDescription = null,
+                    tint = badgeFg,
+                    modifier = Modifier.size(42.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

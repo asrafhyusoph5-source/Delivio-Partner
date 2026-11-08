@@ -11,7 +11,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +21,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -41,6 +45,7 @@ fun NewOrderAlertDialog(
     onDismiss: () -> Unit
 ) {
     val customColors = LocalDelivioColors.current
+    val haptic = LocalHapticFeedback.current
     var secondsLeft by remember { mutableIntStateOf(60) }
     var selectedPrepMinutes by remember { mutableIntStateOf(15) }
 
@@ -220,12 +225,21 @@ fun NewOrderAlertDialog(
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "📍 ${order.deliveryAddress.formatted}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = order.deliveryAddress.formatted,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
@@ -262,38 +276,48 @@ fun NewOrderAlertDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Accept & Reject Action Buttons
+                // Accept & Reject Action Buttons - Large and easily reachable
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onReject,
-                        shape = RoundedCornerShape(14.dp),
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onReject()
+                        },
+                        shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(52.dp)
+                            .height(56.dp)
                             .testTag("reject_order_popup_btn")
                     ) {
-                        Text("Reject", fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Reject", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
 
                     Button(
-                        onClick = { onAccept(selectedPrepMinutes) },
-                        shape = RoundedCornerShape(14.dp),
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAccept(selectedPrepMinutes)
+                        },
+                        shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = customColors.accent,
                             contentColor = customColors.onAccent
                         ),
                         modifier = Modifier
                             .weight(1.5f)
-                            .height(52.dp)
+                            .height(56.dp)
                             .testTag("accept_order_popup_btn")
                     ) {
-                        Text("Accept ($selectedPrepMinutes min)", fontWeight = FontWeight.ExtraBold)
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Accept (${selectedPrepMinutes}m)", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                     }
                 }
             }

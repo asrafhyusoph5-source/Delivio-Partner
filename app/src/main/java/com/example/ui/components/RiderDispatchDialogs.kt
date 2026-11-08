@@ -63,7 +63,12 @@ fun ChooseOrderForDispatchDialog(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("🛵", fontSize = 44.sp)
+                    Icon(
+                        imageVector = Icons.Default.TwoWheeler,
+                        contentDescription = null,
+                        modifier = Modifier.size(52.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "No orders waiting for a rider.",

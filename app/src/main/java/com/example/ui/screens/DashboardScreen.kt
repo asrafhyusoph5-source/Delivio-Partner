@@ -10,9 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -193,7 +194,12 @@ fun DashboardScreen(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(if (isServiceLocked) "🔒" else "🚫", fontSize = 14.sp)
+                            Icon(
+                                imageVector = if (isServiceLocked) Icons.Default.Lock else Icons.Default.Block,
+                                contentDescription = null,
+                                tint = StatusClosedRed,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = bannerText,
@@ -252,7 +258,12 @@ fun DashboardScreen(
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("📢", fontSize = 20.sp)
+                Icon(
+                    imageVector = Icons.Default.Campaign,
+                    contentDescription = null,
+                    tint = customColors.accent,
+                    modifier = Modifier.size(22.dp)
+                )
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -283,7 +294,7 @@ fun DashboardScreen(
                 title = "Total Orders",
                 value = (orders.size).toString(),
                 subtitle = "${deliveredOrders.size} delivered",
-                icon = "📦",
+                iconVector = Icons.Default.LocalMall,
                 modifier = Modifier.weight(1f)
             )
 
@@ -291,7 +302,7 @@ fun DashboardScreen(
                 title = "Net Earnings",
                 value = FormatUtils.formatCurrency(netEarnings),
                 subtitle = "Subtotal: ${FormatUtils.formatCurrency(deliveredSubtotal)}",
-                icon = "💰",
+                iconVector = Icons.Default.Payments,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -304,7 +315,7 @@ fun DashboardScreen(
                 title = "Avg Prep Time",
                 value = "${settings.defaultPrepTime} mins",
                 subtitle = "Target: <20m",
-                icon = "⏱",
+                iconVector = Icons.Default.Timer,
                 modifier = Modifier.weight(1f)
             )
 
@@ -312,7 +323,7 @@ fun DashboardScreen(
                 title = "Accept Rate",
                 value = "98.4%",
                 subtitle = "Store Rating: 4.9★",
-                icon = "⭐",
+                iconVector = Icons.Default.Star,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -331,7 +342,12 @@ fun DashboardScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🛵", fontSize = 20.sp)
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.DirectionsBike,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
@@ -351,6 +367,396 @@ fun DashboardScreen(
                         fontWeight = FontWeight.ExtraBold,
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        // SALES REPORTS SECTION
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth().testTag("sales_reports_card")
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+
+                var selectedDateRange by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("Today") }
+                var customStartMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(currentTime - 7 * 86400000L) }
+                var customEndMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(currentTime) }
+                var showDatePickerModal by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+                val (rangeStartMs, rangeEndMs) = androidx.compose.runtime.remember(selectedDateRange, customStartMs, customEndMs, currentTime) {
+                    val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })).apply {
+                        timeInMillis = currentTime
+                    }
+                    when (selectedDateRange) {
+                        "Today" -> {
+                            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                            cal.set(java.util.Calendar.MINUTE, 0)
+                            cal.set(java.util.Calendar.SECOND, 0)
+                            cal.set(java.util.Calendar.MILLISECOND, 0)
+                            val start = cal.timeInMillis
+                            cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                            cal.set(java.util.Calendar.MINUTE, 59)
+                            cal.set(java.util.Calendar.SECOND, 59)
+                            start to cal.timeInMillis
+                        }
+                        "7 days" -> {
+                            cal.add(java.util.Calendar.DAY_OF_YEAR, -6)
+                            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                            cal.set(java.util.Calendar.MINUTE, 0)
+                            cal.set(java.util.Calendar.SECOND, 0)
+                            val start = cal.timeInMillis
+                            start to currentTime
+                        }
+                        "30 days" -> {
+                            cal.add(java.util.Calendar.DAY_OF_YEAR, -29)
+                            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                            cal.set(java.util.Calendar.MINUTE, 0)
+                            cal.set(java.util.Calendar.SECOND, 0)
+                            val start = cal.timeInMillis
+                            start to currentTime
+                        }
+                        else -> {
+                            customStartMs to customEndMs
+                        }
+                    }
+                }
+
+                // Filter orders in date range, excluding cancelled/rejected
+                val filteredSalesOrders = remember(orders, rangeStartMs, rangeEndMs) {
+                    orders.filter { ord ->
+                        ord.status != OrderStatus.CANCELLED && ord.status != OrderStatus.REJECTED &&
+                        !ord.serviceType.equals("request_rider", ignoreCase = true) &&
+                        ord.placedAtTimestamp >= rangeStartMs && ord.placedAtTimestamp <= rangeEndMs
+                    }
+                }
+
+                // Strictly subtotal sum (NEVER show fees, tip, VAT, delivery fee, or grand total with fees)
+                val totalGrossSubtotal = filteredSalesOrders.sumOf { it.subtotal }
+                val totalOrdersCount = filteredSalesOrders.size
+                val totalItemsCount = filteredSalesOrders.sumOf { it.totalItemCount }
+                val avgOrderValue = if (totalOrdersCount > 0) totalGrossSubtotal / totalOrdersCount else 0.0
+
+                // Orders by day breakdown
+                val tz = java.util.TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
+                val dayFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = tz }
+                val displayDateFormat = java.text.SimpleDateFormat("MMM d (EEE)", java.util.Locale.US).apply { timeZone = tz }
+
+                data class DaySales(val dateStr: String, val displayDate: String, val orderCount: Int, val subtotal: Double)
+                val ordersByDay = androidx.compose.runtime.remember(filteredSalesOrders) {
+                    filteredSalesOrders.groupBy { dayFormat.format(java.util.Date(it.placedAtTimestamp)) }
+                        .map { (dateKey, dayOrders) ->
+                            val disp = try {
+                                displayDateFormat.format(dayFormat.parse(dateKey) ?: java.util.Date())
+                            } catch (_: Exception) { dateKey }
+                            DaySales(
+                                dateStr = dateKey,
+                                displayDate = disp,
+                                orderCount = dayOrders.size,
+                                subtotal = dayOrders.sumOf { it.subtotal }
+                            )
+                        }
+                        .sortedByDescending { it.dateStr }
+                }
+
+                // Top products breakdown
+                data class ProductSaleStat(val name: String, val quantity: Int, val subtotal: Double)
+                val topProducts = androidx.compose.runtime.remember(filteredSalesOrders) {
+                    val map = mutableMapOf<String, Pair<Int, Double>>()
+                    filteredSalesOrders.forEach { ord ->
+                        ord.items.forEach { itm ->
+                            val current = map[itm.name] ?: (0 to 0.0)
+                            map[itm.name] = (current.first + itm.quantity) to (current.second + itm.lineTotal)
+                        }
+                    }
+                    map.map { (pName, pair) ->
+                        ProductSaleStat(name = pName, quantity = pair.first, subtotal = pair.second)
+                    }.sortedByDescending { it.quantity }
+                }
+
+                // Header with Export CSV button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Sales Reports",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "Product items & subtotal only",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            try {
+                                val reportsDir = java.io.File(context.cacheDir, "reports")
+                                if (!reportsDir.exists()) reportsDir.mkdirs()
+                                val csvFile = java.io.File(reportsDir, "sales_report_${selectedDateRange.lowercase().replace(' ', '_')}_${System.currentTimeMillis()}.csv")
+
+                                csvFile.bufferedWriter().use { writer ->
+                                    writer.appendLine("DELIVIO PARTNER - SALES REPORT")
+                                    writer.appendLine("Shop,${settings.storeName}")
+                                    writer.appendLine("Period,$selectedDateRange")
+                                    writer.appendLine("Generated,${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())}")
+                                    writer.appendLine()
+                                    writer.appendLine("SUMMARY")
+                                    writer.appendLine("Total Orders,$totalOrdersCount")
+                                    writer.appendLine("Total Items Sold,$totalItemsCount")
+                                    writer.appendLine("Subtotal Sales,${FormatUtils.formatCurrency(totalGrossSubtotal)}")
+                                    writer.appendLine("Average Order Value,${FormatUtils.formatCurrency(avgOrderValue)}")
+                                    writer.appendLine()
+                                    writer.appendLine("ORDERS BY DAY")
+                                    writer.appendLine("Date,Order Count,Subtotal")
+                                    ordersByDay.forEach { d ->
+                                        writer.appendLine("\"${d.displayDate}\",${d.orderCount},${d.subtotal}")
+                                    }
+                                    writer.appendLine()
+                                    writer.appendLine("TOP PRODUCTS")
+                                    writer.appendLine("Product Name,Quantity Sold,Subtotal")
+                                    topProducts.forEach { p ->
+                                        writer.appendLine("\"${p.name.replace("\"", "\"\"")}\",${p.quantity},${p.subtotal}")
+                                    }
+                                }
+
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    csvFile
+                                )
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "text/csv"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Delivio Sales Report - $selectedDateRange")
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(android.content.Intent.createChooser(shareIntent, "Export Sales Report CSV"))
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "Export error: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = customColors.accent,
+                            contentColor = customColors.onAccent
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("export_csv_btn")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Export CSV", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Date Range Chips: Today, 7 days, 30 days, Custom
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Today", "7 days", "30 days", "Custom").forEach { opt ->
+                        FilterChip(
+                            selected = selectedDateRange == opt,
+                            onClick = {
+                                selectedDateRange = opt
+                                if (opt == "Custom") {
+                                    showDatePickerModal = true
+                                }
+                            },
+                            label = { Text(opt, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = customColors.accentTint,
+                                selectedLabelColor = customColors.accent
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                if (selectedDateRange == "Custom") {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Range: ${FormatUtils.formatDate(customStartMs)} - ${FormatUtils.formatDate(customEndMs)} (tap to change)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = customColors.accent,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { showDatePickerModal = true }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Totals Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = customColors.accentTint.copy(alpha = 0.5f),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Subtotal Sales", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(totalGrossSubtotal), fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = customColors.accent)
+                            Text("$totalOrdersCount orders", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Average Order", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FormatUtils.formatCurrency(avgOrderValue), fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+                            Text("$totalItemsCount items sold", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Orders by Day Table
+                Text(
+                    text = "Orders by Day (${ordersByDay.size} days)",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (ordersByDay.isEmpty()) {
+                    Text(
+                        text = "No delivered sales in this period.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ordersByDay.take(7).forEach { day ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(day.displayDate, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("${day.orderCount} orders", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(
+                                    text = FormatUtils.formatCurrency(day.subtotal),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = customColors.accent
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Top Products Ranking
+                Text(
+                    text = "Top Products (${topProducts.size})",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (topProducts.isEmpty()) {
+                    Text(
+                        text = "No product sales recorded in this period.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        topProducts.take(5).forEachIndexed { idx, prod ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Text("#${idx + 1}", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = customColors.accent)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(prod.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        Text("${prod.quantity} sold", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                Text(
+                                    text = FormatUtils.formatCurrency(prod.subtotal),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Custom Date Range Modal
+                if (showDatePickerModal) {
+                    var startDaysAgo by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(7) }
+                    var endDaysAgo by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+
+                    AlertDialog(
+                        onDismissRequest = { showDatePickerModal = false },
+                        title = { Text("Select Custom Period", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Choose date range window:", style = MaterialTheme.typography.bodySmall)
+                                listOf(
+                                    "Past 14 Days" to (14 to 0),
+                                    "Past 60 Days" to (60 to 0),
+                                    "Past 90 Days" to (90 to 0),
+                                    "Previous Month" to (60 to 30)
+                                ).forEach { (label, pair) ->
+                                    Button(
+                                        onClick = {
+                                            customStartMs = currentTime - (pair.first * 86400000L)
+                                            customEndMs = currentTime - (pair.second * 86400000L)
+                                            showDatePickerModal = false
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(label, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showDatePickerModal = false }) { Text("Close") }
+                        }
                     )
                 }
             }
@@ -444,8 +850,13 @@ fun DashboardScreen(
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("✨", fontSize = 32.sp)
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text("Kitchen is all caught up!", fontWeight = FontWeight.Bold)
                     Text("No orders currently waiting or preparing.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -501,7 +912,7 @@ fun KpiCard(
     title: String,
     value: String,
     subtitle: String,
-    icon: String,
+    iconVector: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -517,7 +928,12 @@ fun KpiCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(icon, fontSize = 16.sp)
+                Icon(
+                    imageVector = iconVector,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(value, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)

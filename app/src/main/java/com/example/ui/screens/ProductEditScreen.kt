@@ -186,6 +186,9 @@ fun ProductEditScreen(
 
     // 6. Stock
     var inStock by remember { mutableStateOf(item.inStock) }
+    var trackStock by remember { mutableStateOf(item.trackStock) }
+    var stockCountText by remember { mutableStateOf(item.stockCount.toString()) }
+    var lowStockThresholdText by remember { mutableStateOf(item.lowStockAt.toString()) }
 
     // 7. Kitchen & tags (collapsed by default)
     var isKitchenExpanded by remember { mutableStateOf(!isNew) }
@@ -194,8 +197,6 @@ fun ProductEditScreen(
     var sku by remember { mutableStateOf(item.sku) }
     var barcode by remember { mutableStateOf(item.barcode) }
     var unit by remember { mutableStateOf(item.unit) }
-    var stockCountText by remember { mutableStateOf(item.stockCount.toString()) }
-    var lowStockThresholdText by remember { mutableStateOf(item.lowStockAlertThreshold.toString()) }
 
     // Validation & Error state
     var hasTappedSaveOnce by remember { mutableStateOf(false) }
@@ -320,13 +321,24 @@ fun ProductEditScreen(
                             setErrors.isNotEmpty() -> setErrors.first()
                             else -> "Please correct highlighted fields above"
                         }
-                        Text(
-                            text = "⚠️ $summaryText",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(bottom = 8.dp)
-                        )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = summaryText,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     Row(
@@ -353,7 +365,7 @@ fun ProductEditScreen(
                                 val priceVal = parsedPrice ?: 0.0
                                 val parsedPrep = prepTimeText.toIntOrNull() ?: item.prepTimeMinutes
                                 val parsedStock = stockCountText.toIntOrNull() ?: item.stockCount
-                                val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAlertThreshold
+                                val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAt
 
                                 val finalCatName = selectedCategoryName
                                 val finalCatId = selectedCategoryId.ifBlank {
@@ -394,14 +406,15 @@ fun ProductEditScreen(
                                     subcategoryName = selectedSubcategoryName.ifBlank { null },
                                     menuIds = finalMenuIds,
                                     imageUrl = imageUrl.trim(),
-                                    inStock = inStock,
                                     prepTimeMinutes = if (businessType == BusinessType.FOOD) parsedPrep else 0,
                                     tags = if (businessType == BusinessType.FOOD) selectedTags.toList() else emptyList(),
                                     sku = if (businessType == BusinessType.CONVENIENCE) sku.trim() else "",
                                     barcode = if (businessType == BusinessType.CONVENIENCE) barcode.trim() else "",
                                     unit = if (businessType == BusinessType.CONVENIENCE) unit.trim().ifBlank { "1 pc" } else "1 pc",
-                                    stockCount = if (businessType == BusinessType.CONVENIENCE) parsedStock else 50,
-                                    lowStockAlertThreshold = if (businessType == BusinessType.CONVENIENCE) parsedThreshold else 5,
+                                    trackStock = trackStock,
+                                    stockCount = parsedStock,
+                                    lowStockAt = parsedThreshold,
+                                    inStock = if (trackStock && parsedStock <= 0) false else inStock,
                                     businessType = businessType,
                                     hasSets = finalSets.isNotEmpty(),
                                     sets = finalSets
@@ -1051,30 +1064,92 @@ fun ProductEditScreen(
             // SECTION 6: Stock
             SectionCard(
                 title = "Stock",
-                helpText = "Toggle whether this product is currently in stock or sold out.",
+                helpText = "Manage in-stock availability and low stock inventory alerts.",
                 onHelpClick = { activeHelpDialogText = it }
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(if (inStock) "In stock" else "Sold out", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = if (inStock) "Available to order when store is open" else "Marked as sold out on your menu",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(if (inStock) "In stock" else "Sold out", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (inStock) "Available to order when store is open" else "Marked as sold out on your menu",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = inStock,
+                            onCheckedChange = { inStock = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = customColors.accent,
+                                checkedTrackColor = customColors.accentTint
+                            )
                         )
                     }
-                    Switch(
-                        checked = inStock,
-                        onCheckedChange = { inStock = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = customColors.accent,
-                            checkedTrackColor = customColors.accentTint
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                    // Track stock count toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Track stock count", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = "Alert when stock is low, and auto mark sold out at 0",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = trackStock,
+                            onCheckedChange = { trackStock = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = customColors.accent,
+                                checkedTrackColor = customColors.accentTint
+                            )
                         )
-                    )
+                    }
+
+                    if (trackStock) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = stockCountText,
+                                onValueChange = {
+                                    stockCountText = it
+                                    val count = it.toIntOrNull() ?: 0
+                                    if (count <= 0) {
+                                        inStock = false
+                                    }
+                                },
+                                label = { Text("Stock count") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                shape = RoundedCornerShape(12.dp),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("stock_count_input")
+                            )
+
+                            OutlinedTextField(
+                                value = lowStockThresholdText,
+                                onValueChange = { lowStockThresholdText = it },
+                                label = { Text("Low stock at") },
+                                placeholder = { Text("5") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                shape = RoundedCornerShape(12.dp),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("low_stock_threshold_input")
+                            )
+                        }
+                    }
                 }
             }
 

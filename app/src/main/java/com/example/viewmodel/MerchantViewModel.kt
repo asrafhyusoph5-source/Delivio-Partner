@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -55,26 +56,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
     val currentTime: StateFlow<Long> = _currentTime.asStateFlow()
 
-    private val alertedScheduledDueOrderIds = mutableSetOf<String>()
-    private var isInitialOrderLoad = true
-
     init {
-        // Check on app start when orders first arrive
-        viewModelScope.launch {
-            orders.collect { orderList ->
-                val now = System.currentTimeMillis()
-                if (isInitialOrderLoad && orderList.isNotEmpty()) {
-                    isInitialOrderLoad = false
-                    // Pre-seed any already-due orders so we only alert transitions or newly due
-                    val initialDue = orderList.filter {
-                        it.status == OrderStatus.PLACED_ORDER && it.isScheduled && it.isScheduledDue(now)
-                    }
-                    initialDue.forEach { alertedScheduledDueOrderIds.add(it.id) }
-                } else {
-                    checkDueScheduledOrders(now)
-                }
-            }
-        }
 
         // Periodic 30-second ticker
         viewModelScope.launch {
@@ -82,16 +64,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
                 delay(30_000L)
                 val now = System.currentTimeMillis()
                 _currentTime.value = now
-                checkDueScheduledOrders(now)
+                repository.recheckScheduledOrders(now)
             }
         }
 
-        // 1-minute ticker: evaluate and write isOpen = effectiveOpen when it changes and clear expired values
+        // Listen for new order alerts to play alert sound & vibration
+        viewModelScope.launch {
+            repository.newOrderAlert.collect { alertOrder ->
+                if (alertOrder != null && !isServiceLocked.value) {
+                    SoundVibrationHelper.playNewOrderAlert(getApplication())
+                }
+            }
+        }
+
+        // 1-minute ticker: evaluate effectiveOpen and refresh inbox visibility when sendAt passes
         viewModelScope.launch {
             repository.checkAndUpdateEffectiveOpen(System.currentTimeMillis())
+            repository.refreshInboxVisibility()
             while (isActive) {
-                delay(60_000L)
+                delay(30_000L)
                 repository.checkAndUpdateEffectiveOpen(System.currentTimeMillis())
+                repository.refreshInboxVisibility()
             }
         }
 
@@ -99,20 +92,11 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         onMenuOpened()
     }
 
-    private fun checkDueScheduledOrders(now: Long) {
-        val currentOrders = repository.orders.value
-        val newlyDue = currentOrders.filter { order ->
-            order.status == OrderStatus.PLACED_ORDER &&
-            order.isScheduled &&
-            order.isScheduledDue(now) &&
-            !alertedScheduledDueOrderIds.contains(order.id)
-        }
-        if (newlyDue.isNotEmpty()) {
-            newlyDue.forEach { alertedScheduledDueOrderIds.add(it.id) }
-            if (!isServiceLocked.value) {
-                SoundVibrationHelper.playNewOrderAlert(getApplication())
-            }
-        }
+    fun onAppForeground() {
+        val now = System.currentTimeMillis()
+        _currentTime.value = now
+        repository.recheckScheduledOrders(now)
+        repository.refreshInboxVisibility()
     }
 
     // Navigation and Tab States
@@ -126,17 +110,17 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _orderStatusFilter = MutableStateFlow<String>("New")
     val orderStatusFilter: StateFlow<String> = _orderStatusFilter.asStateFlow()
 
-    // Fulfillment filter ("All", "Delivery", "Pick Up", "Scheduled")
-    private val _fulfillmentFilter = MutableStateFlow<String>("All")
+    // Fulfillment filter ("Delivery", "Pick Up")
+    private val _fulfillmentFilter = MutableStateFlow<String>("Delivery")
     val fulfillmentFilter: StateFlow<String> = _fulfillmentFilter.asStateFlow()
 
     fun setFulfillmentFilter(filter: String) {
         _fulfillmentFilter.value = filter
     }
 
-    // Unaccepted (New) orders count for badge: Placed Orders that are not upcoming scheduled
-    val newOrdersCount: StateFlow<Int> = orders.combine(_currentTime) { orderList, now ->
-        orderList.count { it.status == OrderStatus.PLACED_ORDER && (!it.isScheduled || it.isScheduledDue(now)) }
+    // Unaccepted (New) orders count for badge: Placed Orders that are visible
+    val newOrdersCount: StateFlow<Int> = orders.map { orderList ->
+        orderList.count { it.status == OrderStatus.PLACED_ORDER }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Menu tab states
@@ -622,6 +606,39 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
                 showSnackbar("Business hours saved successfully")
             } else {
                 showSnackbar(error ?: "Failed to save business hours")
+            }
+        }
+    }
+
+    fun saveHolidays(holidays: List<com.example.data.model.HolidaySchedule>) {
+        _isActionLoading.value = true
+        repository.saveHolidays(holidays) { success, error ->
+            _isActionLoading.value = false
+            if (success) {
+                showSnackbar("Holiday hours saved successfully")
+            } else {
+                showSnackbar(error ?: "Failed to save holiday hours")
+            }
+        }
+    }
+
+    private val _showPrinterScreen = MutableStateFlow(false)
+    val showPrinterScreen: StateFlow<Boolean> = _showPrinterScreen.asStateFlow()
+
+    fun openPrinterScreen() {
+        _showPrinterScreen.value = true
+    }
+
+    fun closePrinterScreen() {
+        _showPrinterScreen.value = false
+    }
+
+    fun saveBluetoothPrinter(name: String, address: String) {
+        repository.saveBluetoothPrinter(name, address) { success, error ->
+            if (success) {
+                showSnackbar("Bluetooth printer paired: $name")
+            } else {
+                showSnackbar(error ?: "Failed to save bluetooth printer")
             }
         }
     }

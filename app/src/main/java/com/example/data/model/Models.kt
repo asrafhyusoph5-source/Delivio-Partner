@@ -58,29 +58,19 @@ enum class OrderStatus(val displayTitle: String) {
     }
 }
 
-const val SCHEDULED_LEAD_TIME_MS: Long = 30 * 60 * 1000L
+const val SCHEDULED_LEAD_TIME_MS: Long = 0L
 
 enum class FulfillmentType(val label: String) {
-    PICK_UP("Pick Up"),
-    SCHEDULED("Scheduled"),
-    DELIVERY("Delivery")
+    DELIVERY("Delivery"),
+    PICK_UP("Pick Up")
 }
 
 fun fulfillmentOf(order: Order): FulfillmentType {
     val clean = order.fulfillment.trim().lowercase().replace("[\\s_\\-]".toRegex(), "")
-    return when (clean) {
-        "pickup" -> FulfillmentType.PICK_UP
-        "scheduled", "scheduleddelivery" -> FulfillmentType.SCHEDULED
-        "delivery" -> FulfillmentType.DELIVERY
-        else -> {
-            // If missing: Scheduled when scheduledFor exists, otherwise Delivery.
-            // Never infer Pick Up from a missing dropoff or a zero delivery fee.
-            if (order.scheduledFor != null && order.scheduledFor > 0) {
-                FulfillmentType.SCHEDULED
-            } else {
-                FulfillmentType.DELIVERY
-            }
-        }
+    return if (clean == "pickup" || order.hasPickup) {
+        FulfillmentType.PICK_UP
+    } else {
+        FulfillmentType.DELIVERY
     }
 }
 
@@ -273,19 +263,24 @@ data class Order(
     val isPickUp: Boolean
         get() = fulfillmentType == FulfillmentType.PICK_UP
 
-    val isScheduled: Boolean
-        get() = fulfillmentType == FulfillmentType.SCHEDULED
-
     val isDelivery: Boolean
         get() = fulfillmentType == FulfillmentType.DELIVERY
 
-    fun isScheduledDue(now: Long = System.currentTimeMillis()): Boolean {
+    val isScheduled: Boolean
+        get() = scheduledFor != null && scheduledFor > 0
+
+    fun isScheduledDue(now: Long = System.currentTimeMillis(), leadMinutes: Int = 0): Boolean {
         val target = scheduledFor ?: return true
-        return now >= (target - SCHEDULED_LEAD_TIME_MS)
+        if (target <= 0) return true
+        val leadMs = leadMinutes * 60 * 1000L
+        return now >= (target - leadMs)
     }
 
     val scheduledForFormatted: String
         get() = scheduledFor?.let { com.example.util.FormatUtils.formatScheduledDateTime(it) } ?: ""
+
+    val scheduledTimeFormatted: String
+        get() = scheduledFor?.let { com.example.util.FormatUtils.formatScheduledTime(it) } ?: ""
 
     val receiptTotal: Double
         get() = if (isPickUp) (subtotal + serviceFee - discount).coerceAtLeast(0.0) else total
@@ -293,10 +288,6 @@ data class Order(
     val fulfillmentChipLabel: String
         get() = when (fulfillmentType) {
             FulfillmentType.PICK_UP -> "Pick Up"
-            FulfillmentType.SCHEDULED -> {
-                val timeStr = scheduledForFormatted
-                if (timeStr.isNotBlank()) "Scheduled: $timeStr" else "Scheduled"
-            }
             FulfillmentType.DELIVERY -> "Delivery"
         }
 
@@ -712,11 +703,17 @@ data class MenuItem(
     val sku: String = "",
     val barcode: String = "",
     val unit: String = "1 pc",
+    val trackStock: Boolean = false,
     val stockCount: Int = 50,
-    val lowStockAlertThreshold: Int = 5,
+    val lowStockAt: Int = 5,
     val discountPercentage: Double? = null
 ) {
     val available: Boolean get() = inStock
+
+    val lowStockAlertThreshold: Int get() = lowStockAt
+
+    val isLowStock: Boolean
+        get() = inStock && trackStock && stockCount > 0 && stockCount <= lowStockAt
 
     fun getEffectiveMenuIds(): List<String> {
         val filtered = menuIds.filter { it.isNotBlank() }
@@ -895,7 +892,17 @@ data class MerchantSettings(
     val closedUntil: Long? = null,
     val openUntil: Long? = null,
     val closedAt: Long? = null,
-    val locationChangedAt: Long? = null
+    val locationChangedAt: Long? = null,
+    val holidays: List<HolidaySchedule> = emptyList(),
+    val bluetoothPrinterName: String = "",
+    val bluetoothPrinterAddress: String = ""
+)
+
+data class HolidaySchedule(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val from: Long = 0L,
+    val to: Long = 0L,
+    val note: String = ""
 )
 
 data class InboxMessage(
@@ -907,8 +914,12 @@ data class InboxMessage(
     val category: String = "update", // "update" | "order" | "wallet" | "promo" | "system" | "admin"
     val imageUrl: String = "",
     val createdAt: Long = System.currentTimeMillis(),
+    val sendAt: Long? = null,
     val isRead: Boolean = false
-)
+) {
+    val isAvailableNow: Boolean
+        get() = sendAt == null || sendAt <= System.currentTimeMillis()
+}
 
 data class CustomerReview(
     val id: String = "",

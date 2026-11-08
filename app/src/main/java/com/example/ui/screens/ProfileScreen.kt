@@ -43,6 +43,7 @@ fun ProfileScreen(
     onOpenBusinessHours: () -> Unit = {},
     onOpenStaffDialog: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenPrinter: () -> Unit = {},
     onLogout: () -> Unit = {},
     isOwner: Boolean = true,
     canAccessInbox: Boolean = true,
@@ -599,6 +600,22 @@ fun ProfileScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
+                ListItem(
+                    headlineContent = { Text("Printer", fontWeight = FontWeight.SemiBold) },
+                    supportingContent = {
+                        Text(
+                            if (settings.bluetoothPrinterAddress.isNotBlank())
+                                "Connected: ${settings.bluetoothPrinterName.ifBlank { "58mm Printer" }}"
+                            else "Bluetooth 58 mm receipt printer (scan, pair, test print)"
+                        )
+                    },
+                    leadingContent = { Icon(Icons.Default.Print, contentDescription = null, tint = customColors.accent) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier
+                        .clickable { onOpenPrinter() }
+                        .testTag("profile_printer_row")
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 ListItem(
                     headlineContent = { Text("Settings", fontWeight = FontWeight.SemiBold) },
                     supportingContent = { Text("Store pickup point & staff accounts") },

@@ -26,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,20 +46,15 @@ fun FulfillmentChip(
     order: Order,
     modifier: Modifier = Modifier
 ) {
-    val (bgColor, textColor, icon, label) = when {
-        order.isPickUp -> listOf(
+    val (bgColor, textColor, icon, label) = if (order.isPickUp) {
+        listOf(
             Color(0xFFD1FAE5),
             Color(0xFF047857),
             Icons.Default.ShoppingBag,
             "Pick Up"
         )
-        order.isScheduled -> listOf(
-            Color(0xFFEDE9FE),
-            Color(0xFF6D28D9),
-            Icons.Default.Schedule,
-            if (order.scheduledForFormatted.isNotBlank()) "Scheduled: ${order.scheduledForFormatted}" else "Scheduled"
-        )
-        else -> listOf(
+    } else {
+        listOf(
             Color(0xFFDBEAFE),
             Color(0xFF1D4ED8),
             Icons.Default.DeliveryDining,
@@ -68,7 +65,7 @@ fun FulfillmentChip(
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = bgColor as Color,
-        modifier = modifier
+        modifier = modifier.testTag(if (order.isPickUp) "fulfillment_chip_pickup" else "fulfillment_chip_delivery")
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -86,6 +83,42 @@ fun FulfillmentChip(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = textColor
+            )
+        }
+    }
+}
+
+@Composable
+fun ScheduledChip(
+    order: Order,
+    modifier: Modifier = Modifier
+) {
+    val sched = order.scheduledFor ?: return
+    if (sched <= 0) return
+    val timeStr = order.scheduledTimeFormatted.ifBlank {
+        FormatUtils.formatScheduledTime(sched)
+    }
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFFEDE9FE),
+        modifier = modifier.testTag("scheduled_chip_${order.id}")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Schedule,
+                contentDescription = null,
+                tint = Color(0xFF6D28D9),
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "Scheduled - $timeStr",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF6D28D9)
             )
         }
     }
@@ -158,9 +191,8 @@ fun OrdersScreen(
 ) {
     val customColors = LocalDelivioColors.current
     val filterTabs = listOf("New", "Preparing", "Ready", "Completed", "Cancelled")
-    val fulfillmentOptions = listOf("All", "Delivery", "Pick Up", "Scheduled")
+    val fulfillmentOptions = listOf("Delivery", "Pick Up")
 
-    var isUpcomingExpanded by remember { mutableStateOf(true) }
     var orderToPickUp by remember { mutableStateOf<Order?>(null) }
     var orderToCancel by remember { mutableStateOf<Order?>(null) }
 
@@ -169,23 +201,11 @@ fun OrdersScreen(
         orders.filter { !it.isSplitChild }
     }
 
-    // Placed orders partitioning for New tab
-    val allPlacedOrders = remember(activeOrders) {
-        activeOrders.filter { it.status == OrderStatus.PLACED_ORDER }
-    }
-    val upcomingScheduledOrders = remember(allPlacedOrders, currentTime) {
-        allPlacedOrders.filter { it.isScheduled && !it.isScheduledDue(currentTime) }
-            .sortedBy { it.scheduledFor ?: it.placedAtTimestamp }
-    }
-    val normalNewOrders = remember(allPlacedOrders, currentTime) {
-        allPlacedOrders.filter { !it.isScheduled || it.isScheduledDue(currentTime) }
-    }
-
     // Filter orders based on active status tab
-    val statusFilteredOrders = remember(activeOrders, activeFilter, currentTime) {
+    val statusFilteredOrders = remember(activeOrders, activeFilter) {
         activeOrders.filter { order ->
             when (activeFilter) {
-                "New" -> order.status == OrderStatus.PLACED_ORDER && (!order.isScheduled || order.isScheduledDue(currentTime))
+                "New" -> order.status == OrderStatus.PLACED_ORDER
                 "Preparing" -> order.status == OrderStatus.PREPARING
                 "Ready" -> order.status == OrderStatus.READY || order.status == OrderStatus.RIDER_ON_THE_WAY || order.status == OrderStatus.ON_ANOTHER_DELIVERY
                 "Completed" -> order.status == OrderStatus.DELIVERED || order.status == OrderStatus.COMPLETED
@@ -195,22 +215,12 @@ fun OrdersScreen(
         }
     }
 
-    // Helper to filter by fulfillment
+    // Helper to filter by fulfillment: Delivery or Pick Up
     fun filterByFulfillment(list: List<Order>, filter: String): List<Order> {
         return when (filter) {
-            "Delivery" -> list.filter { !it.isPickUp && !it.isScheduled }
             "Pick Up" -> list.filter { it.isPickUp }
-            "Scheduled" -> list.filter { it.isScheduled }
-            else -> list
+            else -> list.filter { !it.isPickUp }
         }
-    }
-
-    val displayUpcomingScheduled = remember(upcomingScheduledOrders, fulfillmentFilter) {
-        filterByFulfillment(upcomingScheduledOrders, fulfillmentFilter)
-    }
-
-    val displayNormalNew = remember(normalNewOrders, fulfillmentFilter) {
-        filterByFulfillment(normalNewOrders, fulfillmentFilter)
     }
 
     val displayFilteredOrders = remember(statusFilteredOrders, fulfillmentFilter) {
@@ -282,7 +292,7 @@ fun OrdersScreen(
         ) {
             filterTabs.forEach { tabName ->
                 val count = when (tabName) {
-                    "New" -> normalNewOrders.size + upcomingScheduledOrders.size
+                    "New" -> activeOrders.count { it.status == OrderStatus.PLACED_ORDER }
                     "Preparing" -> activeOrders.count { it.status == OrderStatus.PREPARING }
                     "Ready" -> activeOrders.count { it.status == OrderStatus.READY || it.status == OrderStatus.RIDER_ON_THE_WAY || it.status == OrderStatus.ON_ANOTHER_DELIVERY }
                     "Completed" -> activeOrders.count { it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED }
@@ -327,22 +337,17 @@ fun OrdersScreen(
             }
         }
 
-        // 2. Fulfillment Filter Chips: "All, Delivery, Pick Up, Scheduled" with counts
-        val baseForCounts = if (activeFilter == "New") (normalNewOrders + upcomingScheduledOrders) else statusFilteredOrders
+        // 2. Fulfillment Filter Chips: "Delivery" and "Pick Up" with counts
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             fulfillmentOptions.forEach { opt ->
                 val count = when (opt) {
-                    "All" -> baseForCounts.size
-                    "Delivery" -> baseForCounts.count { !it.isPickUp && !it.isScheduled }
-                    "Pick Up" -> baseForCounts.count { it.isPickUp }
-                    "Scheduled" -> baseForCounts.count { it.isScheduled }
-                    else -> 0
+                    "Pick Up" -> statusFilteredOrders.count { it.isPickUp }
+                    else -> statusFilteredOrders.count { !it.isPickUp }
                 }
                 val isSelected = fulfillmentFilter == opt
 
@@ -352,10 +357,8 @@ fun OrdersScreen(
                     label = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             when (opt) {
-                                "Delivery" -> Icon(Icons.Default.DeliveryDining, contentDescription = null, modifier = Modifier.size(14.dp))
                                 "Pick Up" -> Icon(Icons.Default.ShoppingBag, contentDescription = null, modifier = Modifier.size(14.dp))
-                                "Scheduled" -> Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(14.dp))
-                                else -> Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(14.dp))
+                                else -> Icon(Icons.Default.DeliveryDining, contentDescription = null, modifier = Modifier.size(14.dp))
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(opt, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
@@ -380,10 +383,9 @@ fun OrdersScreen(
         Spacer(modifier = Modifier.height(4.dp))
 
         // Orders List
-        val isNewTabEmpty = activeFilter == "New" && displayNormalNew.isEmpty() && displayUpcomingScheduled.isEmpty()
-        val isOtherTabEmpty = activeFilter != "New" && displayFilteredOrders.isEmpty()
+        val isListEmpty = displayFilteredOrders.isEmpty()
 
-        if (isNewTabEmpty || isOtherTabEmpty) {
+        if (isListEmpty) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -391,18 +393,36 @@ fun OrdersScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("📦", fontSize = 48.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Icon(
+                        imageVector = Icons.Default.Inbox,
+                        contentDescription = "Empty orders",
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = if (fulfillmentFilter != "All") "No $fulfillmentFilter Orders" else "No $activeFilter Orders",
+                        text = "No $fulfillmentFilter Orders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Orders in this stage will appear here automatically.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    OutlinedButton(
+                        onClick = { onFilterChanged("All") },
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("orders_empty_state_action_btn")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("View All Orders", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         } else {
@@ -413,94 +433,7 @@ fun OrdersScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
             ) {
-                // In New tab, show collapsible upcoming scheduled section at top
-                if (activeFilter == "New" && displayUpcomingScheduled.isNotEmpty()) {
-                    item(key = "upcoming_scheduled_header") {
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = StatusWarningAmber.copy(alpha = 0.12f)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, StatusWarningAmber.copy(alpha = 0.4f)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isUpcomingExpanded = !isUpcomingExpanded }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Schedule,
-                                        contentDescription = null,
-                                        tint = StatusWarningAmber,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        text = "Upcoming scheduled (${displayUpcomingScheduled.size})",
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 14.sp,
-                                        color = StatusWarningAmber
-                                    )
-                                }
-                                Icon(
-                                    imageVector = if (isUpcomingExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = if (isUpcomingExpanded) "Collapse" else "Expand",
-                                    tint = StatusWarningAmber
-                                )
-                            }
-                        }
-                    }
-
-                    if (isUpcomingExpanded) {
-                        items(displayUpcomingScheduled, key = { "upcoming_${it.id}" }) { order ->
-                            OrderCard(
-                                order = order,
-                                isUpcomingScheduled = true,
-                                onClick = { onOrderClick(order) },
-                                onAccept = { onAcceptClick(order) },
-                                onReject = { onRejectClick(order) },
-                                onCancel = { orderToCancel = order },
-                                onSetReady = { onSetReadyClick(order) },
-                                onRequestRider = { onRequestRiderClick(order) },
-                                onPrintReceipt = { onPrintReceiptClick(order) },
-                                onCancelRiderRequest = { onCancelRiderRequestClick(order) },
-                                onRetryRiderRequest = { onRetryRiderRequestClick(order) },
-                                onMarkPickedUp = { orderToPickUp = order },
-                                onEditOrder = { onEditOrderClick(order) },
-                                onRequestRiderAgain = { onRequestRiderAgainClick(order) },
-                                currentTime = currentTime
-                            )
-                        }
-
-                        if (displayNormalNew.isNotEmpty()) {
-                            item(key = "normal_new_divider") {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    Text(
-                                        text = " Orders Due Now (${displayNormalNew.size}) ",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Render orders for the active filter
-                val listToRender = if (activeFilter == "New") displayNormalNew else displayFilteredOrders
-                items(listToRender, key = { it.id }) { order ->
+                items(displayFilteredOrders, key = { it.id }) { order ->
                     OrderCard(
                         order = order,
                         isUpcomingScheduled = false,
@@ -544,6 +477,7 @@ fun OrderCard(
     currentTime: Long = System.currentTimeMillis()
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val customColors = LocalDelivioColors.current
     val rider = order.riderRequest?.rider
 
@@ -610,6 +544,11 @@ fun OrderCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         FulfillmentChip(order = order)
+
+                        if (order.isScheduled) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            ScheduledChip(order = order)
+                        }
 
                         // Delivery option chip on each Delivery order card
                         if (!order.isPickUp) {
@@ -761,19 +700,37 @@ fun OrderCard(
                             style = MaterialTheme.typography.bodyLarge
                         )
                         if (order.isPickUp) {
-                            Text(
-                                text = "🛍️ Customer will pick up",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF047857)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.ShoppingBag,
+                                    contentDescription = null,
+                                    tint = Color(0xFF047857),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Customer will pick up",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF047857)
+                                )
+                            }
                         } else {
-                            Text(
-                                text = "📍 ${order.deliveryAddress.formatted}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = order.deliveryAddress.formatted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
 
@@ -1123,9 +1080,11 @@ fun OrderCard(
                                                     .background(customColors.accent),
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                Text(
-                                                    text = rider?.avatarEmoji ?: "🛵",
-                                                    fontSize = 20.sp
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.DirectionsBike,
+                                                    contentDescription = "Delivery Rider",
+                                                    tint = customColors.onAccent,
+                                                    modifier = Modifier.size(22.dp)
                                                 )
                                             }
                                             Spacer(modifier = Modifier.width(10.dp))
@@ -1210,7 +1169,12 @@ fun OrderCard(
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("🛍️", fontSize = 16.sp)
+                            Icon(
+                                imageVector = Icons.Default.ShoppingBag,
+                                contentDescription = null,
+                                tint = StatusOpenGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Ready for Pick Up • Customer will pick up",
@@ -1263,26 +1227,41 @@ fun OrderCard(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 OutlinedButton(
-                                    onClick = onReject,
-                                    shape = RoundedCornerShape(12.dp),
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onReject()
+                                    },
+                                    shape = RoundedCornerShape(16.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         contentColor = MaterialTheme.colorScheme.error
                                     ),
-                                    modifier = Modifier.weight(1f).height(44.dp)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp)
                                 ) {
-                                    Text("Reject", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Reject", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 }
 
                                 Button(
-                                    onClick = onAccept,
-                                    shape = RoundedCornerShape(12.dp),
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onAccept()
+                                    },
+                                    shape = RoundedCornerShape(16.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = customColors.accent,
                                         contentColor = customColors.onAccent
                                     ),
-                                    modifier = Modifier.weight(1.4f).height(44.dp).testTag("card_accept_order_btn")
+                                    modifier = Modifier
+                                        .weight(1.5f)
+                                        .height(52.dp)
+                                        .testTag("card_accept_order_btn")
                                 ) {
-                                    Text("Accept Order", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Accept Order", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                                 }
                             }
                         }

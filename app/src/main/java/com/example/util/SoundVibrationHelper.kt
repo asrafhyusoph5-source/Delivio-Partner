@@ -13,8 +13,8 @@ object SoundVibrationHelper {
     fun playNewOrderAlert(context: Context, soundEnabled: Boolean = true, vibrationEnabled: Boolean = true) {
         if (soundEnabled) {
             try {
-                val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-                toneGen.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600)
+                val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+                toneGen.startTone(ToneGenerator.TONE_CDMA_HIGH_L, 750)
             } catch (e: Exception) {
                 // Fallback silently
             }
@@ -33,13 +33,13 @@ object SoundVibrationHelper {
                 vibrator?.let { v ->
                     if (v.hasVibrator()) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            val pattern = longArrayOf(0, 250, 150, 250, 150, 400)
-                            val amplitudes = intArrayOf(0, 200, 0, 200, 0, 255)
+                            val pattern = longArrayOf(0, 300, 150, 300, 150, 450)
+                            val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255)
                             val effect = VibrationEffect.createWaveform(pattern, amplitudes, -1)
                             v.vibrate(effect)
                         } else {
                             @Suppress("DEPRECATION")
-                            v.vibrate(longArrayOf(0, 250, 150, 250, 150, 400), -1)
+                            v.vibrate(longArrayOf(0, 300, 150, 300, 150, 450), -1)
                         }
                     }
                 }

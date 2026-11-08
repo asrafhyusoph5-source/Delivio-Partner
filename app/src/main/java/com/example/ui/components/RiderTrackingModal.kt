@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -280,12 +281,21 @@ fun RiderTrackingModal(
                             .background(customColors.accentTint.copy(alpha = 0.5f))
                             .padding(10.dp)
                     ) {
-                        Text(
-                            text = "📍 Drop-off coordinates missing — search or drag pin on map:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = customColors.accent
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Drop-off coordinates missing — search or drag pin on map:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = customColors.accent
+                            )
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
@@ -360,7 +370,12 @@ fun RiderTrackingModal(
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         // Pickup
                         Row(verticalAlignment = Alignment.Top) {
-                            Text("📍", fontSize = 16.sp)
+                            Icon(
+                                imageVector = Icons.Default.Storefront,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text("Pickup Location (Your Store)", style = MaterialTheme.typography.labelSmall, color = customColors.accent, fontWeight = FontWeight.Bold)
@@ -372,7 +387,12 @@ fun RiderTrackingModal(
 
                         // Dropoff
                         Row(verticalAlignment = Alignment.Top) {
-                            Text("🏁", fontSize = 16.sp)
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = StatusClosedRed,
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text("Drop-off Location (Customer)", style = MaterialTheme.typography.labelSmall, color = StatusClosedRed, fontWeight = FontWeight.Bold)
@@ -392,7 +412,12 @@ fun RiderTrackingModal(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("👤", fontSize = 16.sp)
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(order.customerName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
@@ -739,7 +764,12 @@ fun RiderTrackingModal(
                                         .background(customColors.accentTint),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("🛵", fontSize = 24.sp)
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.DirectionsBike,
+                                        contentDescription = "Rider icon",
+                                        tint = customColors.accent,
+                                        modifier = Modifier.size(24.dp)
+                                    )
                                 }
 
                                 Spacer(modifier = Modifier.width(12.dp))

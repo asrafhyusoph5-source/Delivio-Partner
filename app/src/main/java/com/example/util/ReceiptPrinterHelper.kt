@@ -87,6 +87,10 @@ object ReceiptPrinterHelper {
         if (design.showOrderedAt) {
             sb.appendLine(alignLine(orderedAtLine, align, cols))
         }
+        if (order.scheduledFor != null && order.scheduledFor > 0) {
+            val schedTimeStr = FormatUtils.formatScheduledTime(order.scheduledFor)
+            sb.appendLine(alignLine("Scheduled for $schedTimeStr", align, cols))
+        }
         if (design.showCustomerName) {
             sb.appendLine(alignLine(itemsForLine, align, cols))
         } else {

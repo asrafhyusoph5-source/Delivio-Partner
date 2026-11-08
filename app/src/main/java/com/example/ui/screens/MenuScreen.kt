@@ -907,6 +907,20 @@ private fun ProductCard(
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
                         }
+                    } else if (item.trackStock && item.stockCount <= item.lowStockAt) {
+                        // Low stock alert amber chip
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = StatusWarningAmber.copy(alpha = 0.20f)
+                        ) {
+                            Text(
+                                text = "Low stock (${item.stockCount} left)",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB45309),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
                     }
 
                     // Non-main menu name chip(s)

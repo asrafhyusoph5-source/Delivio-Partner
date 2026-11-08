@@ -232,6 +232,45 @@ class MerchantRepository private constructor(context: Context) {
     private var listenedLinkedCustomerId: String? = null
 
     private var previousOrderIds = mutableSetOf<String>()
+    private var rawOrders = listOf<Order>()
+    private val alertedOrderIds = mutableSetOf<String>()
+    private val _scheduledReleaseLeadMinutes = MutableStateFlow<Int>(0)
+    val scheduledReleaseLeadMinutes: StateFlow<Int> = _scheduledReleaseLeadMinutes.asStateFlow()
+
+    fun isOrderVisible(order: Order, now: Long = System.currentTimeMillis()): Boolean {
+        val sched = order.scheduledFor ?: return true
+        if (sched <= 0) return true
+        val leadMs = _scheduledReleaseLeadMinutes.value * 60 * 1000L
+        val releaseTime = sched - leadMs
+        return now >= releaseTime
+    }
+
+    fun evaluateAndPublishOrders(now: Long = System.currentTimeMillis()) {
+        val isShopEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(_settings.value, isServiceLocked = _isServiceLocked.value)
+        val closedAtTimestamp = _settings.value.closedAt
+
+        val visibleList = rawOrders.filter { isOrderVisible(it, now) }
+
+        // Alert on incoming Placed Order (scheduled orders alert once they become visible/due)
+        val newPlaced = visibleList.filter {
+            it.status == OrderStatus.PLACED_ORDER &&
+            !alertedOrderIds.contains(it.id) &&
+            (isShopEffectiveOpen || closedAtTimestamp == null || it.placedAtTimestamp <= closedAtTimestamp)
+        }
+        if (newPlaced.isNotEmpty()) {
+            newPlaced.forEach { alertedOrderIds.add(it.id) }
+            if (!_isServiceLocked.value) {
+                _newOrderAlert.value = newPlaced.first()
+            }
+        }
+
+        alertedOrderIds.retainAll(rawOrders.map { it.id }.toSet())
+        _orders.value = visibleList
+    }
+
+    fun recheckScheduledOrders(now: Long = System.currentTimeMillis()) {
+        evaluateAndPublishOrders(now)
+    }
 
     init {
         ensureFirebaseInitialized(appContext)
@@ -674,7 +713,33 @@ class MerchantRepository private constructor(context: Context) {
                         closedUntil = closedUntilVal,
                         openUntil = openUntilVal,
                         closedAt = closedAtVal,
-                        locationChangedAt = locationChangedAtVal
+                        locationChangedAt = locationChangedAtVal,
+                        holidays = run {
+                            val rawHolidays = snapshot.get("holidays") as? List<*> ?: emptyList<Any>()
+                            rawHolidays.mapNotNull { hObj ->
+                                val hMap = hObj as? Map<*, *> ?: return@mapNotNull null
+                                val fromVal = when (val f = hMap["from"]) {
+                                    is com.google.firebase.Timestamp -> f.toDate().time
+                                    is java.util.Date -> f.time
+                                    is Number -> f.toLong()
+                                    else -> 0L
+                                }
+                                val toVal = when (val t = hMap["to"]) {
+                                    is com.google.firebase.Timestamp -> t.toDate().time
+                                    is java.util.Date -> t.time
+                                    is Number -> t.toLong()
+                                    else -> 0L
+                                }
+                                com.example.data.model.HolidaySchedule(
+                                    id = (hMap["id"] as? String) ?: java.util.UUID.randomUUID().toString(),
+                                    from = fromVal,
+                                    to = toVal,
+                                    note = (hMap["note"] as? String) ?: ""
+                                )
+                            }
+                        },
+                        bluetoothPrinterName = snapshot.getString("bluetoothPrinterName") ?: _settings.value.bluetoothPrinterName,
+                        bluetoothPrinterAddress = snapshot.getString("bluetoothPrinterAddress") ?: _settings.value.bluetoothPrinterAddress
                     )
 
                     val resolvedCityId = snapshot.getString("cityId") ?: snapshot.getString("city") ?: _settings.value.cityId.ifBlank { "taguig" }
@@ -1062,21 +1127,8 @@ class MerchantRepository private constructor(context: Context) {
 
                     // Sort newest first
                     list.sortByDescending { it.placedAtTimestamp }
-
-                    // Alert on incoming Placed Order (scheduled orders only alert once due; closed store suppresses alerts for orders after close; service locked suppresses alerts)
-                    val isShopEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(_settings.value, isServiceLocked = _isServiceLocked.value)
-                    val closedAtTimestamp = _settings.value.closedAt
-                    val newPlaced = list.filter {
-                        it.status == OrderStatus.PLACED_ORDER &&
-                        !previousOrderIds.contains(it.id) &&
-                        (!it.isScheduled || it.isScheduledDue()) &&
-                        (isShopEffectiveOpen || closedAtTimestamp == null || it.placedAtTimestamp <= closedAtTimestamp)
-                    }
-                    if (newPlaced.isNotEmpty() && !_isServiceLocked.value) {
-                        _newOrderAlert.value = newPlaced.first()
-                    }
-                    previousOrderIds = list.map { it.id }.toMutableSet()
-                    _orders.value = list
+                    rawOrders = list
+                    evaluateAndPublishOrders(System.currentTimeMillis())
                 }
             }
 
@@ -1140,12 +1192,24 @@ class MerchantRepository private constructor(context: Context) {
                             prepTimeMinutes = doc.getLong("prepTime")?.toInt() ?: doc.getLong("prepTimeMinutes")?.toInt() ?: 15,
                             sku = doc.getString("sku") ?: "",
                             unit = doc.getString("unit") ?: "1 pc",
+                            trackStock = doc.getBoolean("trackStock") ?: false,
                             stockCount = doc.getLong("stockCount")?.toInt() ?: 50,
-                            lowStockAlertThreshold = doc.getLong("lowStockAlertThreshold")?.toInt() ?: 5
+                            lowStockAt = doc.getLong("lowStockAt")?.toInt() ?: doc.getLong("lowStockAlertThreshold")?.toInt() ?: 5
                         )
                     }
                     _menuItems.value = items
                     syncCuisineTags(mId, items)
+
+                    // Check low-stock items and alert
+                    items.forEach { itm ->
+                        if (itm.trackStock && itm.stockCount <= itm.lowStockAt) {
+                            com.example.util.NotificationHelper.showLowStockNotification(
+                                context = appContext,
+                                productName = itm.name,
+                                remainingStock = itm.stockCount
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1392,10 +1456,14 @@ class MerchantRepository private constructor(context: Context) {
                     platformServicesMap = (snapshot.get("services") as? Map<*, *>)?.mapNotNull { (k, v) ->
                         (k as? String)?.let { it to v }
                     }?.toMap() ?: emptyMap()
+                    val leadMins = FormatUtils.parseInt(snapshot.get("scheduledReleaseLeadMinutes")) ?: 0
+                    _scheduledReleaseLeadMinutes.value = leadMins
                 } else {
                     platformServicesMap = emptyMap()
+                    _scheduledReleaseLeadMinutes.value = 0
                 }
                 evaluateServiceLock()
+                evaluateAndPublishOrders(System.currentTimeMillis())
             }
 
         // 11. Customer Reviews listener: reviews where merchantId == mId (latest 200, sorted in code)
@@ -1578,6 +1646,8 @@ class MerchantRepository private constructor(context: Context) {
         receiptSettingsListener = null
         bestSellersJob?.cancel()
         bestSellersJob = null
+        rawOrders = emptyList()
+        alertedOrderIds.clear()
     }
 
     private fun parseReceiptDesign(doc: DocumentSnapshot?): ReceiptDesign {
@@ -1737,8 +1807,15 @@ class MerchantRepository private constructor(context: Context) {
         val audience = doc.getString("audience") ?: ""
         val createdAt = when (val t = doc.get("createdAt")) {
             is Timestamp -> t.toDate().time
+            is java.util.Date -> t.time
             is Number -> t.toLong()
             else -> System.currentTimeMillis()
+        }
+        val sendAt = when (val s = doc.get("sendAt")) {
+            is Timestamp -> s.toDate().time
+            is java.util.Date -> s.time
+            is Number -> s.toLong()
+            else -> null
         }
         return InboxMessage(
             id = doc.id,
@@ -1748,15 +1825,23 @@ class MerchantRepository private constructor(context: Context) {
             body = body,
             category = category,
             imageUrl = imageUrl,
-            createdAt = createdAt
+            createdAt = createdAt,
+            sendAt = sendAt
         )
     }
 
+    fun refreshInboxVisibility() {
+        updateMergedInbox()
+    }
+
     private fun updateMergedInbox() {
+        val now = System.currentTimeMillis()
         val mergedMap = LinkedHashMap<String, InboxMessage>()
-        (rawMerchantInboxList + rawAudienceInboxList).forEach { msg ->
-            mergedMap[msg.id] = msg.copy(isRead = rawInboxReadIds.contains(msg.id))
-        }
+        (rawMerchantInboxList + rawAudienceInboxList)
+            .filter { msg -> msg.sendAt == null || msg.sendAt <= now }
+            .forEach { msg ->
+                mergedMap[msg.id] = msg.copy(isRead = rawInboxReadIds.contains(msg.id))
+            }
         val sorted = mergedMap.values.sortedByDescending { it.createdAt }
         _inboxMessages.value = sorted
         val unreadCount = sorted.count { !it.isRead }
@@ -3036,6 +3121,63 @@ class MerchantRepository private constructor(context: Context) {
             }
     }
 
+    fun saveHolidays(
+        holidays: List<com.example.data.model.HolidaySchedule>,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+
+        val holidaysData = holidays.map { h ->
+            mapOf(
+                "from" to java.util.Date(h.from),
+                "to" to java.util.Date(h.to),
+                "note" to h.note
+            )
+        }
+
+        db.collection("merchants").document(mId).update("holidays", holidaysData)
+            .addOnSuccessListener {
+                _settings.value = _settings.value.copy(holidays = holidays)
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to save holidays")
+            }
+    }
+
+    fun saveBluetoothPrinter(
+        printerName: String,
+        printerAddress: String,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val mId = _merchantId.value
+        val db = firestore
+        _settings.value = _settings.value.copy(
+            bluetoothPrinterName = printerName,
+            bluetoothPrinterAddress = printerAddress
+        )
+        prefs.edit()
+            .putString("bt_printer_name", printerName)
+            .putString("bt_printer_address", printerAddress)
+            .apply()
+
+        if (mId != null && db != null) {
+            db.collection("merchants").document(mId).update(
+                mapOf(
+                    "bluetoothPrinterName" to printerName,
+                    "bluetoothPrinterAddress" to printerAddress
+                )
+            ).addOnSuccessListener {
+                onResult(true, null)
+            }.addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage)
+            }
+        } else {
+            onResult(true, null)
+        }
+    }
+
     fun checkAndUpdateEffectiveOpen(nowMs: Long = System.currentTimeMillis()) {
         if (_isServiceLocked.value) return
         val mId = _merchantId.value ?: return
@@ -3318,6 +3460,8 @@ class MerchantRepository private constructor(context: Context) {
             )
         }
 
+        val effectiveInStock = if (item.trackStock && item.stockCount <= 0) false else item.inStock
+
         val itemMap = hashMapOf<String, Any?>(
             "name" to item.name,
             "description" to item.description,
@@ -3328,17 +3472,18 @@ class MerchantRepository private constructor(context: Context) {
             "subcategoryId" to item.subcategoryId,
             "subcategoryName" to item.subcategoryName,
             "menuIds" to item.getEffectiveMenuIds(),
-            "available" to item.inStock,
-            "inStock" to item.inStock,
-            "soldOutReason" to (item.soldOutReason ?: ""),
+            "available" to effectiveInStock,
+            "inStock" to effectiveInStock,
+            "soldOutReason" to (if (item.trackStock && item.stockCount <= 0) "Out of stock" else (item.soldOutReason ?: "")),
             "businessType" to if (item.businessType == BusinessType.FOOD) "food" else "convenience",
             "prepTime" to item.prepTimeMinutes,
             "tags" to item.tags,
             "sku" to item.sku,
             "barcode" to item.barcode,
             "unit" to item.unit,
+            "trackStock" to item.trackStock,
             "stockCount" to item.stockCount,
-            "lowStockAlertThreshold" to item.lowStockAlertThreshold,
+            "lowStockAt" to item.lowStockAt,
             "hasSets" to item.sets.isNotEmpty(),
             "sets" to setsList
         )

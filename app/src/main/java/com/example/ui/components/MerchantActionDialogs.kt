@@ -6,7 +6,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -473,10 +476,14 @@ fun SimpleTimePickerModal(
 fun BusinessHoursDialog(
     initialHours: Map<String, com.example.data.model.DayHours>,
     initialAutoSchedule: Boolean,
+    initialHolidays: List<com.example.data.model.HolidaySchedule> = emptyList(),
     onSave: (Map<String, com.example.data.model.DayHours>, Boolean) -> Unit,
+    onSaveHolidays: ((List<com.example.data.model.HolidaySchedule>) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val customColors = LocalDelivioColors.current
+    var selectedTab by remember { androidx.compose.runtime.mutableStateOf("Regular Hours") }
+
     val dayKeys = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
     val dayNames = mapOf(
         "mon" to "Monday",
@@ -504,6 +511,12 @@ fun BusinessHoursDialog(
     var autoSchedule by remember(initialAutoSchedule) {
         mutableStateOf(initialAutoSchedule)
     }
+
+    var holidaysList by remember(initialHolidays) {
+        mutableStateOf(initialHolidays.toMutableList())
+    }
+
+    var showAddHolidayDialog by remember { androidx.compose.runtime.mutableStateOf(false) }
 
     // Time picker picker target state: Pair(dayKey, "open" or "close")
     var timePickerTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -552,31 +565,147 @@ fun BusinessHoursDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("Weekly Business Hours", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge)
-                        Text("Configure store operating hours & automated schedule", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Business Hours", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge)
+                        Text("Weekly operating hours & scheduled holidays", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Tabs: Regular Hours vs Holidays
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Regular Hours", "Holidays").forEach { tab ->
+                        FilterChip(
+                            selected = selectedTab == tab,
+                            onClick = { selectedTab = tab },
+                            label = { Text(tab, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = customColors.accentTint,
+                                selectedLabelColor = customColors.accent
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
 
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // Auto-schedule Switch Card
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (autoSchedule) customColors.accentTint.copy(alpha = 0.5f)
-                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                if (selectedTab == "Holidays") {
+                    // HOLIDAYS SECTION
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text("Upcoming Holiday Closures", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Add holiday date ranges with a note. Your shop will automatically show as closed during these dates and reopen automatically when the holiday ends.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = { showAddHolidayDialog = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = customColors.accent, contentColor = customColors.onAccent),
+                                    modifier = Modifier.fillMaxWidth().testTag("add_holiday_btn")
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("+ Add Holiday", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        if (holidaysList.isEmpty()) {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "No holiday hours scheduled.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            }
+                        } else {
+                            val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+                            val df = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).apply { timeZone = tz }
+                            holidaysList.forEachIndexed { index, h ->
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (h.note.isNotBlank()) h.note else "Holiday",
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            val fromStr = df.format(java.util.Date(h.from))
+                                            val toStr = df.format(java.util.Date(h.to))
+                                            Text(
+                                                text = "$fromStr - $toStr",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = customColors.accent,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val updated = holidaysList.toMutableList()
+                                                updated.removeAt(index)
+                                                holidaysList = updated
+                                                onSaveHolidays?.invoke(updated)
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // REGULAR HOURS TIMETABLE
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Auto-schedule Switch Card
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (autoSchedule) customColors.accentTint.copy(alpha = 0.5f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -762,8 +891,15 @@ fun BusinessHoursDialog(
                                     if (isOvernight) {
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.AccessTime,
+                                                contentDescription = null,
+                                                tint = customColors.accent,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
                                             Text(
-                                                text = "🌙 Overnight: Closes next morning at ${dayHours.close}",
+                                                text = "Overnight: Closes next morning at ${dayHours.close}",
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = customColors.accent
@@ -811,6 +947,102 @@ fun BusinessHoursDialog(
                 }
             }
         }
+        }
+    }
+
+    if (showAddHolidayDialog) {
+        var noteInput by remember { mutableStateOf("") }
+        var fromDaysAhead by remember { mutableIntStateOf(1) }
+        var durationDays by remember { mutableIntStateOf(1) }
+
+        val nowMs = System.currentTimeMillis()
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Manila")).apply {
+            timeInMillis = nowMs
+        }
+        val df = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+        }
+
+        val fromMs = (cal.clone() as java.util.Calendar).apply {
+            add(java.util.Calendar.DAY_OF_YEAR, fromDaysAhead)
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val toMs = (cal.clone() as java.util.Calendar).apply {
+            add(java.util.Calendar.DAY_OF_YEAR, fromDaysAhead + durationDays - 1)
+            set(java.util.Calendar.HOUR_OF_DAY, 23)
+            set(java.util.Calendar.MINUTE, 59)
+            set(java.util.Calendar.SECOND, 59)
+            set(java.util.Calendar.MILLISECOND, 999)
+        }.timeInMillis
+
+        AlertDialog(
+            onDismissRequest = { showAddHolidayDialog = false },
+            title = { Text("Add Holiday Hours", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = noteInput,
+                        onValueChange = { noteInput = it },
+                        label = { Text("Holiday Note / Reason *") },
+                        placeholder = { Text("e.g. Christmas, Renovation, Staff Outing") },
+                        shape = RoundedCornerShape(10.dp),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("holiday_note_input")
+                    )
+
+                    Text("Starts in: $fromDaysAhead day(s) (${df.format(java.util.Date(fromMs))})", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(0 to "Today", 1 to "Tomorrow", 3 to "+3 days", 7 to "+1 week").forEach { (days, label) ->
+                            FilterChip(
+                                selected = fromDaysAhead == days,
+                                onClick = { fromDaysAhead = days },
+                                label = { Text(label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+
+                    Text("Duration: $durationDays day(s) (Until ${df.format(java.util.Date(toMs))})", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(1 to "1 Day", 2 to "2 Days", 3 to "3 Days", 7 to "1 Week").forEach { (days, label) ->
+                            FilterChip(
+                                selected = durationDays == days,
+                                onClick = { durationDays = days },
+                                label = { Text(label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val newHoliday = com.example.data.model.HolidaySchedule(
+                            id = java.util.UUID.randomUUID().toString(),
+                            from = fromMs,
+                            to = toMs,
+                            note = noteInput.trim().ifBlank { "Holiday" }
+                        )
+                        val updated = holidaysList.toMutableList()
+                        updated.add(newHoliday)
+                        holidaysList = updated
+                        onSaveHolidays?.invoke(updated)
+                        showAddHolidayDialog = false
+                    },
+                    enabled = noteInput.isNotBlank()
+                ) {
+                    Text("Add Holiday")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddHolidayDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

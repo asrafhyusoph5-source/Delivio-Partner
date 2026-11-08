@@ -282,7 +282,12 @@ fun RegisterMerchantScreen(
                         modifier = Modifier.padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("🍔", fontSize = 28.sp)
+                        Icon(
+                            imageVector = Icons.Default.Restaurant,
+                            contentDescription = null,
+                            tint = customColors.accent,
+                            modifier = Modifier.size(32.dp)
+                        )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text("Food & Dining", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text("Restaurant / Cafe", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -307,7 +312,12 @@ fun RegisterMerchantScreen(
                         modifier = Modifier.padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("🏪", fontSize = 28.sp)
+                        Icon(
+                            imageVector = Icons.Default.Storefront,
+                            contentDescription = null,
+                            tint = customColors.accent,
+                            modifier = Modifier.size(32.dp)
+                        )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text("Convenience", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text("Mart / Grocery", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

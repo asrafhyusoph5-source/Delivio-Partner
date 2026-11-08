@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.model.Order
+import com.example.data.model.OrderItem
 import com.example.data.model.OrderStatus
 import com.example.data.model.RiderRequest
 import org.junit.Assert.assertEquals
@@ -312,6 +313,95 @@ class OrderDeliveryOptionTest {
         assertTrue(customText.contains("Delivio Express\nOrder #4001"))
         assertTrue(customText.contains("─"))
         assertFalse(customText.contains("Total              ₱"))
+    }
+
+    @Test
+    fun testScheduledOrderVisibilitySelfCheck() {
+        // Self-check: a customer order for 8:00 PM is invisible at 5:00 PM and appears at 8:00 PM.
+        val zoneId = java.time.ZoneId.of("Asia/Manila")
+        val fivePm = java.time.ZonedDateTime.of(2026, 11, 6, 17, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+        val sevenFortyFourPm = java.time.ZonedDateTime.of(2026, 11, 6, 19, 44, 0, 0, zoneId).toInstant().toEpochMilli()
+        val sevenFortyFivePm = java.time.ZonedDateTime.of(2026, 11, 6, 19, 45, 0, 0, zoneId).toInstant().toEpochMilli()
+        val eightPm = java.time.ZonedDateTime.of(2026, 11, 6, 20, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+
+        val order = Order(
+            id = "order_sched_8pm",
+            scheduledFor = eightPm,
+            status = OrderStatus.PLACED_ORDER
+        )
+
+        // Default lead minutes = 0 (exact time)
+        assertFalse("At 5:00 PM order for 8:00 PM is invisible", order.isScheduledDue(fivePm, leadMinutes = 0))
+        assertFalse("At 7:45 PM order for 8:00 PM with lead=0 is invisible", order.isScheduledDue(sevenFortyFivePm, leadMinutes = 0))
+        assertTrue("At 8:00 PM order for 8:00 PM appears", order.isScheduledDue(eightPm, leadMinutes = 0))
+
+        // When scheduledReleaseLeadMinutes = 15
+        assertFalse("At 5:00 PM order for 8:00 PM with lead=15 is invisible", order.isScheduledDue(fivePm, leadMinutes = 15))
+        assertFalse("At 7:44 PM order for 8:00 PM with lead=15 is invisible", order.isScheduledDue(sevenFortyFourPm, leadMinutes = 15))
+        assertTrue("At 7:45 PM order for 8:00 PM with lead=15 appears", order.isScheduledDue(sevenFortyFivePm, leadMinutes = 15))
+    }
+
+    @Test
+    fun testReceiptShowsScheduledForTime() {
+        val zoneId = java.time.ZoneId.of("Asia/Manila")
+        val eightPm = java.time.ZonedDateTime.of(2026, 11, 6, 20, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+
+        val scheduledOrder = Order(
+            id = "ord_sched",
+            orderNumber = "1234",
+            scheduledFor = eightPm,
+            items = listOf(OrderItem(name = "Pizza", quantity = 1, price = 250.0)),
+            subtotal = 250.0,
+            total = 250.0
+        )
+
+        val receiptText = com.example.util.ReceiptPrinterHelper.generateFormattedReceiptText(
+            order = scheduledOrder,
+            storeName = "Pizza Hub",
+            paperSize = "80mm"
+        )
+        assertTrue("Receipt contains 'Scheduled for 8:00 PM'", receiptText.contains("Scheduled for 8:00 PM"))
+
+        val immediateOrder = Order(
+            id = "ord_imm",
+            orderNumber = "1235",
+            scheduledFor = null,
+            items = listOf(OrderItem(name = "Pizza", quantity = 1, price = 250.0)),
+            subtotal = 250.0,
+            total = 250.0
+        )
+        val immReceiptText = com.example.util.ReceiptPrinterHelper.generateFormattedReceiptText(
+            order = immediateOrder,
+            storeName = "Pizza Hub",
+            paperSize = "80mm"
+        )
+        assertFalse("Immediate order receipt does NOT contain 'Scheduled for'", immReceiptText.contains("Scheduled for"))
+    }
+
+    @Test
+    fun testFulfillmentClassificationDeliveryAndPickUpOnly() {
+        val zoneId = java.time.ZoneId.of("Asia/Manila")
+        val eightPm = java.time.ZonedDateTime.of(2026, 11, 6, 20, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+
+        // Scheduled Delivery order
+        val schedDelivery = Order(
+            id = "ord_1",
+            fulfillment = "delivery",
+            scheduledFor = eightPm
+        )
+        assertTrue(schedDelivery.isDelivery)
+        assertFalse(schedDelivery.isPickUp)
+        assertTrue(schedDelivery.isScheduled)
+
+        // Scheduled Pick Up order
+        val schedPickup = Order(
+            id = "ord_2",
+            fulfillment = "pickup",
+            scheduledFor = eightPm
+        )
+        assertFalse(schedPickup.isDelivery)
+        assertTrue(schedPickup.isPickUp)
+        assertTrue(schedPickup.isScheduled)
     }
 }
 

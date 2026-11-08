@@ -202,8 +202,13 @@ fun WalletScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("💳", fontSize = 42.sp)
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Icon(
+                            imageVector = Icons.Default.AccountBalanceWallet,
+                            contentDescription = null,
+                            modifier = Modifier.size(52.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "No Transactions Found",
                             style = MaterialTheme.typography.titleSmall,
