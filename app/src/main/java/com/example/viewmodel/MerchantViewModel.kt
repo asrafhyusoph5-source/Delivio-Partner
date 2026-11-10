@@ -9,6 +9,7 @@ import com.example.util.PlatformOrderStatuses
 import com.example.util.SoundVibrationHelper
 import com.example.util.FOOD_CATEGORIES
 import com.example.util.CONVENIENCE_CATEGORIES
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -1366,6 +1367,49 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         onResult: (Boolean, String?) -> Unit
     ) {
         repository.submitChangeRequest(kind, requestedValue, reason, onResult)
+    }
+
+    // Customer Order Chat
+    val orderChats: StateFlow<Map<String, OrderChatThread>> = repository.orderChats
+    val newIncomingMessageEvent = repository.newIncomingMessageEvent
+
+    private val _activeChatOrder = MutableStateFlow<Order?>(null)
+    val activeChatOrder: StateFlow<Order?> = _activeChatOrder.asStateFlow()
+
+    private val _activeChatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val activeChatMessages: StateFlow<List<ChatMessage>> = _activeChatMessages.asStateFlow()
+    private var chatMessagesJob: Job? = null
+
+    fun openCustomerChat(order: Order) {
+        _activeChatOrder.value = order
+        val chatId = "${order.id}_merchant"
+        repository.markChatAsRead(order.id)
+        repository.triggerExpiredChatCleanup(force = false)
+        chatMessagesJob?.cancel()
+        chatMessagesJob = viewModelScope.launch {
+            repository.listenToChatMessages(chatId).collect { msgs ->
+                _activeChatMessages.value = msgs
+            }
+        }
+    }
+
+    fun closeCustomerChat() {
+        _activeChatOrder.value = null
+        chatMessagesJob?.cancel()
+        chatMessagesJob = null
+        _activeChatMessages.value = emptyList()
+    }
+
+    fun sendCustomerChatMessage(order: Order, text: String, onResult: (Boolean, String?) -> Unit) {
+        repository.sendCustomerMessage(order, text, onResult)
+    }
+
+    fun markChatAsRead(orderId: String) {
+        repository.markChatAsRead(orderId)
+    }
+
+    fun cleanupExpiredChats(force: Boolean = true, onComplete: ((Int) -> Unit)? = null) {
+        repository.triggerExpiredChatCleanup(force = force, onComplete = onComplete)
     }
 }
 

@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.MerchantSettings
 import com.example.data.model.Order
 import com.example.data.model.OrderStatus
+import com.example.data.model.OrderChatThread
+import com.example.ui.components.CustomerChatButton
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
@@ -48,7 +50,9 @@ fun OrderDetailScreen(
     onMarkPickedUp: (Order) -> Unit = {},
     onEditOrder: (Order) -> Unit = {},
     onRequestRiderAgain: (Order) -> Unit = {},
-    currentTime: Long = System.currentTimeMillis()
+    currentTime: Long = System.currentTimeMillis(),
+    orderChats: Map<String, OrderChatThread> = emptyMap(),
+    onOpenChat: (Order) -> Unit = {}
 ) {
     BackHandler { onBack() }
     val context = LocalContext.current
@@ -552,21 +556,54 @@ fun OrderDetailScreen(
                             }
                         }
 
-                        // Call Customer Button (enabled once order placed)
-                        FilledIconButton(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:${order.customerPhone}")
-                                }
-                                context.startActivity(intent)
-                            },
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = StatusOpenGreen,
-                                contentColor = Color.White
-                            ),
-                            modifier = Modifier.testTag("call_customer_btn")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (order.isChatVisible(currentTime)) {
+                                val thread = orderChats[order.id]
+                                val hasUnread = thread?.isUnreadForMerchant() == true
+                                CustomerChatButton(
+                                    hasUnread = hasUnread,
+                                    onClick = { onOpenChat(order) },
+                                    orderId = order.id
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+
+                            // Call Customer Button (enabled once order placed)
+                            FilledIconButton(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                                        data = Uri.parse("tel:${order.customerPhone}")
+                                    }
+                                    context.startActivity(intent)
+                                },
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = StatusOpenGreen,
+                                    contentColor = Color.White
+                                ),
+                                modifier = Modifier.testTag("call_customer_btn")
+                            ) {
+                                Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                            }
+                        }
+                    }
+
+                    // In Completed tab or when closed within 24h: show prominent "View chat" button
+                    if (!order.isChatOpen() && order.isChatVisible(currentTime)) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = { onOpenChat(order) },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("view_chat_btn")
                         ) {
-                            Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Chat,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("View chat", fontWeight = FontWeight.Bold)
                         }
                     }
 

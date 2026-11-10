@@ -71,6 +71,7 @@ fun SettingsScreen(
     onOpenMapLocation: () -> Unit = {},
     onOpenStaffDialog: () -> Unit = {},
     onToggleDarkMode: (Boolean) -> Unit = {},
+    onCleanupExpiredChats: ((Int) -> Unit) -> Unit = { it(0) },
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -682,6 +683,68 @@ fun SettingsScreen(
                             )
                         },
                         modifier = Modifier.testTag("settings_dark_mode_row")
+                    )
+                }
+            }
+
+            // ==============================================================
+            // 5. DATA & STORAGE SECTION
+            // ==============================================================
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "DATA & STORAGE",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("settings_data_storage_card")
+                ) {
+                    var isCleaning by remember { mutableStateOf(false) }
+                    SettingsRow(
+                        icon = Icons.Default.DeleteSweep,
+                        title = "Delete all expired chats now",
+                        subtitle = "Clears chat messages and threads older than 10 days",
+                        trailingContent = {
+                            Button(
+                                onClick = {
+                                    isCleaning = true
+                                    onCleanupExpiredChats {
+                                        isCleaning = false
+                                    }
+                                },
+                                enabled = !isCleaning,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = DelivioYellow,
+                                    contentColor = Color(0xFF1A1A1A)
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("btn_cleanup_expired_chats")
+                            ) {
+                                if (isCleaning) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color(0xFF1A1A1A)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Clean Now",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("settings_cleanup_chats_row")
                     )
                 }
             }

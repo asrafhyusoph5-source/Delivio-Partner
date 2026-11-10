@@ -145,6 +145,18 @@ class MainActivity : ComponentActivity() {
             val showReportsScreen by viewModel.showReportsScreen.collectAsStateWithLifecycle()
             val editingVoucher by viewModel.editingVoucher.collectAsStateWithLifecycle()
             val isNewVoucher by viewModel.isNewVoucher.collectAsStateWithLifecycle()
+            val orderChats by viewModel.orderChats.collectAsStateWithLifecycle()
+            val activeChatOrder by viewModel.activeChatOrder.collectAsStateWithLifecycle()
+            val activeChatMessages by viewModel.activeChatMessages.collectAsStateWithLifecycle()
+            val hasUnreadCustomerMessages by remember(orderChats) {
+                derivedStateOf { orderChats.values.any { it.isUnreadForMerchant() } }
+            }
+
+            LaunchedEffect(Unit) {
+                viewModel.newIncomingMessageEvent.collect { thread ->
+                    viewModel.showSnackbar("New message on #${thread.orderNumber}")
+                }
+            }
 
             val isOwner = currentUser?.role != "staff"
             val userRole = currentUser?.role?.lowercase() ?: "merchant"
@@ -257,6 +269,16 @@ class MainActivity : ComponentActivity() {
                         onOpenMapLocation = { viewModel.openMapLocation() },
                         onOpenStaffDialog = { viewModel.openStaffDialog() },
                         onToggleDarkMode = { viewModel.toggleDarkMode(it) },
+                        onCleanupExpiredChats = { onFinished ->
+                            viewModel.cleanupExpiredChats(force = true) { count ->
+                                onFinished(count)
+                                if (count > 0) {
+                                    viewModel.showSnackbar("Deleted $count expired chat item${if (count == 1) "" else "s"}")
+                                } else {
+                                    viewModel.showSnackbar("No expired chats found to clean")
+                                }
+                            }
+                        },
                         onBack = { viewModel.closeSettings() }
                     )
                 } else if (showPrinterScreen) {
@@ -396,6 +418,21 @@ class MainActivity : ComponentActivity() {
                         onCreateVoucher = { viewModel.openCreateVoucher() },
                         onBack = { viewModel.closeReports() }
                     )
+                } else if (activeChatOrder != null) {
+                    // Full-screen Customer Chat view
+                    OrderChatScreen(
+                        order = activeChatOrder!!,
+                        messages = activeChatMessages,
+                        onSendMessage = { text ->
+                            viewModel.sendCustomerChatMessage(activeChatOrder!!, text) { success, err ->
+                                if (!success) {
+                                    viewModel.showSnackbar(err ?: "Failed to send message")
+                                }
+                            }
+                        },
+                        onBack = { viewModel.closeCustomerChat() },
+                        currentTime = currentTime
+                    )
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -412,7 +449,9 @@ class MainActivity : ComponentActivity() {
                             onMarkPickedUp = { viewModel.markOrderPickedUp(it.id) },
                             onEditOrder = { viewModel.openEditOrder(it) },
                             onRequestRiderAgain = { viewModel.requestRiderAgain(it.id) },
-                            currentTime = currentTime
+                            currentTime = currentTime,
+                            orderChats = orderChats,
+                            onOpenChat = { viewModel.openCustomerChat(it) }
                         )
                     } else {
                         viewModel.closeOrderDetail()
@@ -521,6 +560,7 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 },
                                                 badgeCount = newOrdersCount + unreadInboxCount,
+                                                hasUnreadChat = hasUnreadCustomerMessages,
                                                 currentTime = currentTime,
                                                 isServiceLocked = isServiceLocked,
                                                 serviceLockMessage = serviceLockMessage
@@ -554,7 +594,9 @@ class MainActivity : ComponentActivity() {
                                                     onCancelOrderClick = { viewModel.cancelOrder(it.id, "Merchant cancelled scheduled order") },
                                                     onEditOrderClick = { viewModel.openEditOrder(it) },
                                                     onRequestRiderAgainClick = { viewModel.requestRiderAgain(it.id) },
-                                                    currentTime = currentTime
+                                                    currentTime = currentTime,
+                                                    orderChats = orderChats,
+                                                    onOpenChat = { viewModel.openCustomerChat(it) }
                                                 )
                                             }
 

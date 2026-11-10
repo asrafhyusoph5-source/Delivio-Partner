@@ -245,8 +245,50 @@ data class Order(
     val promo: OrderPromo? = null,
     val customerId: String = "",
     val rejectedAt: Long? = null,
-    val statusHistory: List<Map<String, Any?>> = emptyList()
+    val statusHistory: List<Map<String, Any?>> = emptyList(),
+    val updatedAt: Long = 0L
 ) {
+    fun isChatOpen(): Boolean {
+        val s = status.name
+        return !s.equals("DELIVERED", true) &&
+               !s.equals("COMPLETED", true) &&
+               !s.equals("CANCELLED", true) &&
+               !s.equals("REJECTED", true)
+    }
+
+    fun getOrderClosedTimeMs(): Long? {
+        if (isChatOpen()) return null
+        val finalHistoryEntry = statusHistory.lastOrNull { entry ->
+            val st = (entry["status"] as? String) ?: ""
+            st.equals("Delivered", true) || st.equals("Completed", true) ||
+            st.equals("Cancelled", true) || st.equals("Rejected", true) ||
+            st.equals("DELIVERED", true) || st.equals("COMPLETED", true) ||
+            st.equals("CANCELLED", true) || st.equals("REJECTED", true)
+        }
+        if (finalHistoryEntry != null) {
+            val t = finalHistoryEntry["timestamp"]
+            val ms = com.example.util.FormatUtils.parseTimestamp(t)
+            if (ms != null && ms > 0L) return ms
+        }
+        if (rejectedAt != null && rejectedAt > 0L) return rejectedAt
+        if (updatedAt > 0L) return updatedAt
+        return placedAtTimestamp
+    }
+
+    fun isChatVisible(currentTime: Long = System.currentTimeMillis()): Boolean {
+        if (serviceType.equals("request_rider", ignoreCase = true)) return false
+        if (isScheduled && !isScheduledDue(currentTime)) return false
+        if (isChatOpen()) return true
+        val closedTime = getOrderClosedTimeMs() ?: return true
+        return (currentTime - closedTime) < (24 * 3600000L)
+    }
+
+    fun isChatDeleted(currentTime: Long = System.currentTimeMillis()): Boolean {
+        if (isChatOpen()) return false
+        val closedTime = getOrderClosedTimeMs() ?: return false
+        return (currentTime - closedTime) >= (24 * 3600000L)
+    }
+
     val effectiveMerchantPromoDiscount: Double
         get() = if (promo != null && promo.fundedBy.equals("merchant", ignoreCase = true)) promo.discount else 0.0
 
@@ -1061,5 +1103,44 @@ data class ReceiptDesign(
         title = "CUSTOMER'S COPY",
         showItemPrices = false
     )
+)
+
+data class OrderChatThread(
+    val chatId: String = "",
+    val orderId: String = "",
+    val orderNumber: String = "",
+    val channel: String = "merchant",
+    val customerId: String = "",
+    val customerName: String = "",
+    val merchantId: String = "",
+    val merchantName: String = "",
+    val riderId: String = "",
+    val riderName: String = "",
+    val createdAt: Long = 0L,
+    val lastMessageAt: Long = 0L,
+    val lastMessageText: String = "",
+    val lastSenderRole: String = "",
+    val customerReadAt: Long? = null,
+    val partnerReadAt: Long? = null,
+    val expireAt: Long? = null
+) {
+    fun isUnreadForMerchant(): Boolean {
+        if (lastSenderRole.equals("merchant", ignoreCase = true)) return false
+        if (lastMessageText.isBlank() && lastMessageAt == 0L) return false
+        val myReadAt = partnerReadAt ?: 0L
+        return lastMessageAt > myReadAt
+    }
+}
+
+data class ChatMessage(
+    val id: String = "",
+    val senderId: String = "",
+    val senderRole: String = "merchant",
+    val type: String = "text",
+    val text: String = "",
+    val image: String? = null,
+    val source: String? = null,
+    val createdAt: Long = 0L,
+    val expireAt: Long? = null
 )
 

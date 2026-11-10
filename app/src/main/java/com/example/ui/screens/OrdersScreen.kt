@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Order
 import com.example.data.model.OrderStatus
+import com.example.data.model.OrderChatThread
+import com.example.ui.components.CustomerChatButton
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
@@ -189,6 +191,8 @@ fun OrdersScreen(
     onRequestRiderAgainClick: (Order) -> Unit = {},
     onHandedToRiderClick: (Order) -> Unit = {},
     currentTime: Long = System.currentTimeMillis(),
+    orderChats: Map<String, OrderChatThread> = emptyMap(),
+    onOpenChat: (Order) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -626,7 +630,9 @@ fun OrdersScreen(
                         onHandedToRider = { orderToHandToRider = order },
                         onEditOrder = { onEditOrderClick(order) },
                         onRequestRiderAgain = { onRequestRiderAgainClick(order) },
-                        currentTime = currentTime
+                        currentTime = currentTime,
+                        orderChats = orderChats,
+                        onOpenChat = onOpenChat
                     )
                 }
             }
@@ -692,7 +698,9 @@ fun OrderCard(
     onHandedToRider: () -> Unit = {},
     onEditOrder: () -> Unit = {},
     onRequestRiderAgain: () -> Unit = {},
-    currentTime: Long = System.currentTimeMillis()
+    currentTime: Long = System.currentTimeMillis(),
+    orderChats: Map<String, OrderChatThread> = emptyMap(),
+    onOpenChat: (Order) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1009,22 +1017,34 @@ fun OrderCard(
                         }
                     }
 
-                    if (order.customerPhone.isNotBlank()) {
-                        IconButton(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:${order.customerPhone}")
-                                }
-                                context.startActivity(intent)
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "Call Customer",
-                                tint = StatusOpenGreen,
-                                modifier = Modifier.size(20.dp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (order.isChatVisible(currentTime)) {
+                            val thread = orderChats[order.id]
+                            val hasUnread = thread?.isUnreadForMerchant() == true
+                            CustomerChatButton(
+                                hasUnread = hasUnread,
+                                onClick = { onOpenChat(order) },
+                                orderId = order.id
                             )
+                        }
+
+                        if (order.customerPhone.isNotBlank()) {
+                            IconButton(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                                        data = Uri.parse("tel:${order.customerPhone}")
+                                    }
+                                    context.startActivity(intent)
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "Call Customer",
+                                    tint = StatusOpenGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }

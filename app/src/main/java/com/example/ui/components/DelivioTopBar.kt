@@ -37,6 +37,7 @@ fun DelivioTopBar(
     onToggleOpen: () -> Unit,
     onOpenDrawer: () -> Unit = {},
     badgeCount: Int = 0,
+    hasUnreadChat: Boolean = false,
     currentTime: Long = System.currentTimeMillis(),
     isServiceLocked: Boolean = false,
     serviceLockMessage: String? = null,
@@ -181,6 +182,22 @@ fun DelivioTopBar(
                         Icon(
                             imageVector = Icons.Default.Menu,
                             contentDescription = "Open Menu Drawer",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                } else if (hasUnreadChat) {
+                    BadgedBox(
+                        badge = {
+                            Badge(
+                                containerColor = Color(0xFFE11D48),
+                                modifier = Modifier.size(8.dp)
+                            )
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Open Menu Drawer (New message)",
                             tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(26.dp)
                         )

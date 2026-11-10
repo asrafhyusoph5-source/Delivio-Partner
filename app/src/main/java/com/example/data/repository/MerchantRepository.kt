@@ -25,6 +25,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import java.util.Date
 import java.util.UUID
 
 class MerchantRepository private constructor(context: Context) {
@@ -174,6 +184,7 @@ class MerchantRepository private constructor(context: Context) {
     private var receiptSettingsListener: ListenerRegistration? = null
     private var vouchersListener: ListenerRegistration? = null
     private var redemptionsListener: ListenerRegistration? = null
+    private var orderChatsListener: ListenerRegistration? = null
     private var bestSellersJob: Job? = null
 
     // Merchant Vouchers & Redemptions State
@@ -182,6 +193,13 @@ class MerchantRepository private constructor(context: Context) {
 
     private val _redemptions = MutableStateFlow<List<PromoRedemption>>(emptyList())
     val redemptions: StateFlow<List<PromoRedemption>> = _redemptions.asStateFlow()
+
+    // Customer Order Chats State: mapped by orderId -> OrderChatThread
+    private val _orderChats = MutableStateFlow<Map<String, OrderChatThread>>(emptyMap())
+    val orderChats: StateFlow<Map<String, OrderChatThread>> = _orderChats.asStateFlow()
+
+    private val _newIncomingMessageEvent = MutableSharedFlow<OrderChatThread>(extraBufferCapacity = 10)
+    val newIncomingMessageEvent: Flow<OrderChatThread> = _newIncomingMessageEvent.asSharedFlow()
 
     private var rawVouchers: List<MerchantVoucher> = emptyList()
 
@@ -1176,7 +1194,8 @@ class MerchantRepository private constructor(context: Context) {
                             promo = promoObj,
                             customerId = customerIdVal,
                             rejectedAt = rejectedAtVal,
-                            statusHistory = rawHistory
+                            statusHistory = rawHistory,
+                            updatedAt = FormatUtils.parseTimestamp(doc.get("updatedAt")) ?: 0L
                         )
                         list.add(order)
                     }
@@ -1607,6 +1626,54 @@ class MerchantRepository private constructor(context: Context) {
                     computeCombinedVouchers()
                 }
             }
+
+        // 17. Order Chats: orderChats where merchantId == mId and channel == "merchant"
+        orderChatsListener?.remove()
+        orderChatsListener = db.collection("orderChats")
+            .whereEqualTo("merchantId", mId)
+            .whereEqualTo("channel", "merchant")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Order chats listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val map = mutableMapOf<String, OrderChatThread>()
+                    val previousMap = _orderChats.value
+                    snapshot.documents.forEach { doc ->
+                        val oId = doc.getString("orderId") ?: ""
+                        val cId = doc.id
+                        val thread = OrderChatThread(
+                            chatId = cId,
+                            orderId = oId,
+                            orderNumber = doc.getString("orderNumber") ?: "",
+                            channel = doc.getString("channel") ?: "merchant",
+                            customerId = doc.getString("customerId") ?: "",
+                            customerName = doc.getString("customerName") ?: "",
+                            merchantId = doc.getString("merchantId") ?: "",
+                            merchantName = doc.getString("merchantName") ?: "",
+                            riderId = doc.getString("riderId") ?: "",
+                            riderName = doc.getString("riderName") ?: "",
+                            createdAt = FormatUtils.parseTimestamp(doc.get("createdAt")) ?: 0L,
+                            lastMessageAt = FormatUtils.parseTimestamp(doc.get("lastMessageAt")) ?: 0L,
+                            lastMessageText = doc.getString("lastMessageText") ?: "",
+                            lastSenderRole = doc.getString("lastSenderRole") ?: "",
+                            customerReadAt = FormatUtils.parseTimestamp(doc.get("customerReadAt")),
+                            partnerReadAt = FormatUtils.parseTimestamp(doc.get("partnerReadAt")),
+                            expireAt = FormatUtils.parseTimestamp(doc.get("expireAt"))
+                        )
+                        if (oId.isNotBlank()) {
+                            map[oId] = thread
+                        }
+                        val prev = previousMap[oId]
+                        if (thread.isUnreadForMerchant() && (prev == null || thread.lastMessageAt > prev.lastMessageAt)) {
+                            _newIncomingMessageEvent.tryEmit(thread)
+                        }
+                    }
+                    _orderChats.value = map
+                    triggerExpiredChatCleanup(force = false)
+                }
+            }
     }
 
     fun ensureCategoriesConfigured(customMid: String? = null) {
@@ -1733,6 +1800,9 @@ class MerchantRepository private constructor(context: Context) {
         vouchersListener = null
         redemptionsListener?.remove()
         redemptionsListener = null
+        orderChatsListener?.remove()
+        orderChatsListener = null
+        _orderChats.value = emptyMap()
         bestSellersJob?.cancel()
         bestSellersJob = null
         rawOrders = emptyList()
@@ -4520,6 +4590,306 @@ class MerchantRepository private constructor(context: Context) {
                         onResult(false, indexLink)
                     }
             }
+    }
+
+    fun listenToChatMessages(chatId: String): Flow<List<ChatMessage>> = callbackFlow {
+        val db = firestore ?: run {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val registration = db.collection("orderChats").document(chatId).collection("chatMessages")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Chat messages error: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val nowMs = System.currentTimeMillis()
+                    val msgs = snapshot.documents.mapNotNull { doc ->
+                        val expireAt = FormatUtils.parseTimestamp(doc.get("expireAt"))
+                        if (expireAt != null && expireAt > 0L && expireAt < nowMs) {
+                            null
+                        } else {
+                            ChatMessage(
+                                id = doc.id,
+                                senderId = doc.getString("senderId") ?: "",
+                                senderRole = doc.getString("senderRole") ?: "merchant",
+                                type = doc.getString("type") ?: "text",
+                                text = doc.getString("text") ?: "",
+                                image = doc.getString("image"),
+                                source = doc.getString("source"),
+                                createdAt = FormatUtils.parseTimestamp(doc.get("createdAt")) ?: 0L,
+                                expireAt = expireAt
+                            )
+                        }
+                    }.sortedBy { it.createdAt }
+                    trySend(msgs)
+                }
+            }
+        awaitClose { registration.remove() }
+    }
+
+    fun sendCustomerMessage(
+        order: Order,
+        text: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            onResult(false, "Message cannot be empty")
+            return
+        }
+        if (trimmed.length > 1000) {
+            onResult(false, "Message too long (max 1000 characters)")
+            return
+        }
+        val db = firestore ?: run {
+            onResult(false, "Database unavailable")
+            return
+        }
+        val mId = _merchantId.value ?: run {
+            onResult(false, "Merchant not logged in")
+            return
+        }
+
+        val chatId = "${order.id}_merchant"
+        val threadRef = db.collection("orderChats").document(chatId)
+
+        threadRef.get().addOnSuccessListener { threadDoc ->
+            val batch = db.batch()
+            val nowMs = System.currentTimeMillis()
+            val expireAtTimestamp = Timestamp(Date(nowMs + 10 * 86400000L))
+
+            if (!threadDoc.exists()) {
+                val firstName = order.customerName.trim().split(" ").firstOrNull()?.ifBlank { "Customer" } ?: "Customer"
+                val ordNum = if (order.orderNumber.isNotBlank()) order.orderNumber else order.formattedOrderNumber
+                val threadData = hashMapOf<String, Any?>(
+                    "orderId" to order.id,
+                    "orderNumber" to ordNum,
+                    "channel" to "merchant",
+                    "customerId" to order.effectiveCustomerId,
+                    "customerName" to firstName,
+                    "merchantId" to mId,
+                    "merchantName" to (_settings.value.storeName.ifBlank { "Store" }),
+                    "riderId" to order.riderId,
+                    "riderName" to order.riderName,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "lastMessageAt" to FieldValue.serverTimestamp(),
+                    "lastMessageText" to trimmed.take(80),
+                    "lastSenderRole" to "merchant",
+                    "partnerReadAt" to FieldValue.serverTimestamp(),
+                    "expireAt" to expireAtTimestamp
+                )
+                batch.set(threadRef, threadData)
+            } else {
+                batch.update(
+                    threadRef,
+                    mapOf(
+                        "lastMessageAt" to FieldValue.serverTimestamp(),
+                        "lastMessageText" to trimmed.take(80),
+                        "lastSenderRole" to "merchant",
+                        "partnerReadAt" to FieldValue.serverTimestamp(),
+                        "expireAt" to expireAtTimestamp
+                    )
+                )
+            }
+
+            val msgRef = threadRef.collection("chatMessages").document()
+            val msgData = hashMapOf(
+                "senderId" to mId,
+                "senderRole" to "merchant",
+                "type" to "text",
+                "text" to trimmed,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "expireAt" to expireAtTimestamp
+            )
+            batch.set(msgRef, msgData)
+
+            batch.commit()
+                .addOnSuccessListener { onResult(true, null) }
+                .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to send message") }
+        }.addOnFailureListener { ex ->
+            onResult(false, ex.localizedMessage ?: "Failed to check chat thread")
+        }
+    }
+
+    fun markChatAsRead(orderId: String) {
+        val db = firestore ?: return
+        val chatId = "${orderId}_merchant"
+        val threadRef = db.collection("orderChats").document(chatId)
+        threadRef.get().addOnSuccessListener { doc ->
+            if (doc.exists()) {
+                threadRef.update("partnerReadAt", FieldValue.serverTimestamp())
+                    .addOnFailureListener { ex ->
+                        Log.w("MerchantRepo", "Failed to mark chat as read: ${ex.message}")
+                    }
+            }
+        }
+    }
+
+    private var lastChatCleanupTimestamp = 0L
+
+    private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitTask(): T =
+        suspendCancellableCoroutine { continuation ->
+            addOnSuccessListener { result ->
+                if (continuation.isActive) continuation.resume(result)
+            }
+            addOnFailureListener { exception ->
+                if (continuation.isActive) continuation.resumeWithException(exception)
+            }
+            addOnCanceledListener {
+                if (continuation.isActive) continuation.cancel()
+            }
+        }
+
+    fun triggerExpiredChatCleanup(force: Boolean = false, onComplete: ((Int) -> Unit)? = null) {
+        val now = System.currentTimeMillis()
+        if (!force && (now - lastChatCleanupTimestamp < 30 * 60 * 1000L)) {
+            onComplete?.invoke(0)
+            return
+        }
+        lastChatCleanupTimestamp = now
+
+        val mId = _merchantId.value ?: run {
+            onComplete?.invoke(0)
+            return
+        }
+        val db = firestore ?: run {
+            onComplete?.invoke(0)
+            return
+        }
+
+        scope.launch(Dispatchers.IO) {
+            var totalDeleted = 0
+            try {
+                val nowTimestamp = Timestamp(Date(now))
+                val isAdmin = _currentUser.value?.role.equals("admin", true)
+
+                // 1. Gather threads belonging to the signed-in merchant
+                val currentThreads = _orderChats.value.values.filter {
+                    it.merchantId == mId && it.channel == "merchant"
+                }
+
+                val threadsToProcess = if (currentThreads.isNotEmpty()) {
+                    currentThreads
+                } else {
+                    try {
+                        val snapshot = db.collection("orderChats")
+                            .whereEqualTo("merchantId", mId)
+                            .whereEqualTo("channel", "merchant")
+                            .get()
+                            .awaitTask()
+                        snapshot.documents.mapNotNull { doc ->
+                            val ordId = doc.getString("orderId") ?: ""
+                            val merchant = doc.getString("merchantId") ?: ""
+                            val channel = doc.getString("channel") ?: "merchant"
+                            if (merchant == mId && channel == "merchant") {
+                                OrderChatThread(
+                                    chatId = doc.id,
+                                    orderId = ordId,
+                                    merchantId = merchant,
+                                    channel = channel,
+                                    expireAt = FormatUtils.parseTimestamp(doc.get("expireAt"))
+                                )
+                            } else null
+                        }
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                }
+
+                // Process only threads that belong to the signed-in user
+                for (thread in threadsToProcess) {
+                    if (thread.merchantId != mId) continue
+
+                    try {
+                        // Query its chatMessages where expireAt < now (limit 100)
+                        val msgSnapshot = db.collection("orderChats")
+                            .document(thread.chatId)
+                            .collection("chatMessages")
+                            .whereLessThan("expireAt", nowTimestamp)
+                            .limit(100)
+                            .get()
+                            .awaitTask()
+
+                        val isThreadExpired = thread.expireAt != null && thread.expireAt > 0L && thread.expireAt < now
+                        val hasExpiredMessages = !msgSnapshot.isEmpty
+
+                        if (hasExpiredMessages || isThreadExpired) {
+                            val batch = db.batch()
+                            var batchItems = 0
+
+                            for (msgDoc in msgSnapshot.documents) {
+                                batch.delete(msgDoc.reference)
+                                batchItems++
+                            }
+
+                            // Delete the thread itself if its own expireAt < now
+                            if (isThreadExpired) {
+                                val threadRef = db.collection("orderChats").document(thread.chatId)
+                                batch.delete(threadRef)
+                                batchItems++
+                            }
+
+                            if (batchItems > 0) {
+                                batch.commit().awaitTask()
+                                totalDeleted += batchItems
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Silent ignore
+                    }
+                }
+
+                // If ADMIN: platform-wide cleanup up to 300 documents per session
+                if (isAdmin) {
+                    try {
+                        val expiredThreads = db.collection("orderChats")
+                            .whereLessThan("expireAt", nowTimestamp)
+                            .limit(50)
+                            .get()
+                            .awaitTask()
+
+                        var adminCount = 0
+                        val adminBatch = db.batch()
+
+                        for (doc in expiredThreads.documents) {
+                            if (adminCount >= 300) break
+                            adminBatch.delete(doc.reference)
+                            adminCount++
+
+                            try {
+                                val subMsgs = doc.reference.collection("chatMessages")
+                                    .limit(50)
+                                    .get()
+                                    .awaitTask()
+                                for (subDoc in subMsgs.documents) {
+                                    if (adminCount >= 300) break
+                                    adminBatch.delete(subDoc.reference)
+                                    adminCount++
+                                }
+                            } catch (e: Exception) {
+                                // Silent
+                            }
+                        }
+
+                        if (adminCount > 0) {
+                            adminBatch.commit().awaitTask()
+                            totalDeleted += adminCount
+                        }
+                    } catch (e: Exception) {
+                        // Silent
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore any errors silently
+            } finally {
+                withContext(Dispatchers.Main) {
+                    onComplete?.invoke(totalDeleted)
+                }
+            }
+        }
     }
 
     companion object {
