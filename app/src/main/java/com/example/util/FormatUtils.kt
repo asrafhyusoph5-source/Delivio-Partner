@@ -71,4 +71,21 @@ object FormatUtils {
             else -> null
         }
     }
+
+    fun formatDateOnly(timestamp: Long): String {
+        val sdf = SimpleDateFormat("MMM d, yyyy", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Manila")
+        }
+        return sdf.format(Date(timestamp))
+    }
+
+    fun parseTimestamp(value: Any?): Long? {
+        return when (value) {
+            is com.google.firebase.Timestamp -> value.toDate().time
+            is Number -> value.toLong()
+            is String -> value.trim().toLongOrNull()
+            is Date -> value.time
+            else -> null
+        }
+    }
 }

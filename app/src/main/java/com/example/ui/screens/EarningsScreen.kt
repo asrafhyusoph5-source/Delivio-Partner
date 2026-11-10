@@ -71,9 +71,9 @@ fun EarningsScreen(
         }
     }
 
-    // 3. EARNINGS: Count only the merchant's items subtotal for each Delivered order, not the delivery fee.
-    // Commission is calculated on that subtotal using merchants.commissionRate, with net earnings = subtotal - commission.
-    val itemsSubtotal = filteredDeliveredOrders.sumOf { it.subtotal }
+    // 3. EARNINGS: Count net sales (subtotal minus merchant-funded voucher discount) for each Delivered order, not the delivery fee.
+    // Commission is calculated on that net sales using merchants.commissionRate, with net earnings = netSales - commission.
+    val itemsSubtotal = filteredDeliveredOrders.sumOf { it.netSales }
     val commissionRate = settings.commissionRate
     val commissionFee = itemsSubtotal * commissionRate
     val netEarnings = itemsSubtotal - commissionFee
@@ -244,7 +244,7 @@ fun EarningsScreen(
         val transactionOrders = filteredDeliveredOrders.ifEmpty { deliveredOrders }.ifEmpty { orders }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             transactionOrders.take(10).forEach { order ->
-                val orderSubtotal = order.subtotal
+                val orderSubtotal = order.netSales
                 val orderCommission = orderSubtotal * commissionRate
                 val orderNet = orderSubtotal - orderCommission
                 Card(

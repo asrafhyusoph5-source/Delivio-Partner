@@ -133,10 +133,15 @@ object ReceiptPrinterHelper {
             sb.appendLine(sep)
         }
 
-        val subtotalToDisplay = if (calculatedSubtotal > 0.0) calculatedSubtotal else order.subtotal
-        val subtotalStr = FormatUtils.formatCurrency(subtotalToDisplay)
-        sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
-        // REMOVED TOTAL LINE completely as instructed
+        if (copyConfig.showItemPrices) {
+            val subtotalToDisplay = if (calculatedSubtotal > 0.0) calculatedSubtotal else order.subtotal
+            val subtotalStr = FormatUtils.formatCurrency(subtotalToDisplay)
+            sb.appendLine(formatTwoColumns("Subtotal", subtotalStr, cols))
+            if (order.promo != null && order.promo.discount > 0.0) {
+                val discountStr = "-₱${FormatUtils.formatCurrency(order.promo.discount)}"
+                sb.appendLine(formatTwoColumns("Voucher (${order.promo.code})", discountStr, cols))
+            }
+        }
 
         if (design.footerText.isNotBlank()) {
             sb.appendLine(sep)

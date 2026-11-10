@@ -22,16 +22,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.AddressLocation
 import com.example.data.model.MerchantSettings
 import com.example.data.model.ServiceRate
 import com.example.data.repository.MerchantRepository
+import com.example.ui.screens.MapPickerScreen
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
@@ -384,7 +388,7 @@ fun ManualRiderBookingSheet(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Small Map Preview (Disallows parent scrolling during touch interaction)
+                        // Small Map Preview (Non-interactive preview with transparent clickable overlay)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -395,24 +399,11 @@ fun ManualRiderBookingSheet(
                                 factory = { ctx ->
                                     MapView(ctx).apply {
                                         setTileSource(TileSourceFactory.MAPNIK)
-                                        setMultiTouchControls(true)
+                                        setMultiTouchControls(false)
                                         isTilesScaledToDpi = true
                                         controller.setZoom(16.0)
                                         val p = GeoPoint(dropoffLat, dropoffLng)
                                         controller.setCenter(p)
-
-                                        // Disallow parent verticalScroll intercepting touches on small map
-                                        setOnTouchListener { v, event ->
-                                            when (event.action) {
-                                                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                                                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                                                }
-                                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                                    v.parent?.requestDisallowInterceptTouchEvent(false)
-                                                }
-                                            }
-                                            false
-                                        }
 
                                         val marker = Marker(this).apply {
                                             id = "dropoff_preview_pin"
@@ -433,7 +424,15 @@ fun ManualRiderBookingSheet(
                                 modifier = Modifier.fillMaxSize()
                             )
 
-                            // Tap to Expand overlay button
+                            // Transparent clickable overlay that opens the full-screen picker (tap anywhere)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable { showFullScreenPicker = true }
+                                    .testTag("dropoff_map_preview_overlay")
+                            )
+
+                            // Tap to Expand overlay button (also opens picker)
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -671,19 +670,25 @@ fun ManualRiderBookingSheet(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                // Form has extra bottom padding (navigation bar height + 96dp) so last field is never hidden
+                val density = LocalDensity.current
+                val navBarBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+                Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
             }
 
             // 6. BOTTOM BAR WITH "BOOK RIDER" BUTTON
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp,
-                shadowElevation = 8.dp
+                shadowElevation = 8.dp,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp)
+                        .padding(top = 12.dp, bottom = 16.dp)
                 ) {
                     Button(
                         onClick = {
@@ -738,21 +743,30 @@ fun ManualRiderBookingSheet(
 
     // Full Screen Location Picker Modal
     if (showFullScreenPicker) {
-        FullScreenLocationPicker(
-            initialLat = dropoffLat,
-            initialLng = dropoffLng,
-            initialAddress = deliveryAddress,
-            onConfirmLocation = { lat, lng, addr, area ->
-                dropoffLat = lat
-                dropoffLng = lng
-                hasDropoffPin = true
-                deliveryAddress = addr
-                dropoffArea = area
-                showFullScreenPicker = false
-            },
-            onDismiss = {
-                showFullScreenPicker = false
-            }
-        )
+        Dialog(
+            onDismissRequest = { showFullScreenPicker = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = true
+            )
+        ) {
+            MapPickerScreen(
+                title = "Set Drop-off Location",
+                initialLat = dropoffLat,
+                initialLng = dropoffLng,
+                initialAddress = deliveryAddress,
+                onConfirmLocation = { lat, lng, addr, area ->
+                    dropoffLat = lat
+                    dropoffLng = lng
+                    hasDropoffPin = true
+                    deliveryAddress = addr
+                    dropoffArea = area
+                    showFullScreenPicker = false
+                },
+                onBack = {
+                    showFullScreenPicker = false
+                }
+            )
+        }
     }
 }

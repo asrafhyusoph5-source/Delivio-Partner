@@ -39,6 +39,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val menuItems = repository.menuItems
     val payouts = repository.payouts
     val promos = repository.promos
+    val vouchers = repository.vouchers
+    val redemptions = repository.redemptions
     val staff = repository.staff
     val changeRequests = repository.changeRequests
     val walletTransactions = repository.walletTransactions
@@ -99,8 +101,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         repository.refreshInboxVisibility()
     }
 
-    // Navigation and Tab States
-    private val _currentTab = MutableStateFlow(MerchantTab.DASHBOARD)
+    // Navigation and Tab States: Start screen is Orders
+    private val _currentTab = MutableStateFlow(MerchantTab.ORDERS)
     val currentTab: StateFlow<MerchantTab> = _currentTab.asStateFlow()
 
     private val _selectedOrderDetailId = MutableStateFlow<String?>(null)
@@ -328,6 +330,120 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _showCashOutComingSoon.value = false
     }
 
+    // --- Vouchers Navigation & Actions ---
+    private val _showVouchersScreen = MutableStateFlow(false)
+    val showVouchersScreen: StateFlow<Boolean> = _showVouchersScreen.asStateFlow()
+
+    private val _editingVoucher = MutableStateFlow<MerchantVoucher?>(null)
+    val editingVoucher: StateFlow<MerchantVoucher?> = _editingVoucher.asStateFlow()
+
+    private val _isNewVoucher = MutableStateFlow(false)
+    val isNewVoucher: StateFlow<Boolean> = _isNewVoucher.asStateFlow()
+
+    private val _showReportsScreen = MutableStateFlow(false)
+    val showReportsScreen: StateFlow<Boolean> = _showReportsScreen.asStateFlow()
+
+    fun openReports() {
+        _showReportsScreen.value = true
+    }
+
+    fun closeReports() {
+        _showReportsScreen.value = false
+    }
+
+    fun checkCustomerHasPriorDeliveredOrder(
+        customerId: String,
+        periodStartMs: Long,
+        onResult: (hasPriorDelivered: Boolean, missingIndexLink: String?) -> Unit
+    ) {
+        val mId = repository.merchantId.value ?: ""
+        repository.checkCustomerHasPriorDeliveredOrder(mId, customerId, periodStartMs, onResult)
+    }
+
+    fun openVouchers() {
+        _showVouchersScreen.value = true
+    }
+
+    fun closeVouchers() {
+        _showVouchersScreen.value = false
+        _editingVoucher.value = null
+        _isNewVoucher.value = false
+    }
+
+    fun openCreateVoucher() {
+        _isNewVoucher.value = true
+        val isFood = settings.value.businessType == BusinessType.FOOD ||
+                settings.value.type.contains("food", ignoreCase = true)
+        val defaultService = if (isFood) "food" else "convenience"
+        val mId = repository.merchantId.value ?: ""
+        _editingVoucher.value = MerchantVoucher(
+            code = "",
+            source = "merchant",
+            fundedBy = "merchant",
+            merchantId = mId,
+            title = "",
+            type = "percent",
+            value = 10.0,
+            maxDiscount = null,
+            minSubtotal = 0.0,
+            appliesTo = "store",
+            itemIds = emptyList<String>(),
+            fulfillment = "both",
+            services = listOf(defaultService),
+            startsAt = null,
+            expiresAt = null,
+            usageLimit = null,
+            perUserLimit = 1,
+            usedCount = 0,
+            active = true,
+            visibility = "public"
+        )
+    }
+
+    fun openEditVoucher(voucher: MerchantVoucher) {
+        _isNewVoucher.value = false
+        _editingVoucher.value = voucher
+    }
+
+    fun closeEditVoucher() {
+        _editingVoucher.value = null
+        _isNewVoucher.value = false
+    }
+
+    fun checkPromoCodeExists(code: String, onResult: (Boolean, String?) -> Unit) {
+        repository.checkPromoCodeExists(code, onResult)
+    }
+
+    fun saveVoucher(voucher: MerchantVoucher, isNew: Boolean, onResult: (Boolean, String?) -> Unit) {
+        repository.saveVoucher(voucher, isNew) { success, err ->
+            if (success) {
+                closeEditVoucher()
+                showSnackbar(if (isNew) "Voucher created successfully" else "Voucher updated successfully")
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun toggleVoucherActive(code: String, active: Boolean) {
+        repository.toggleVoucherActive(code, active) { success, err ->
+            if (success) {
+                showSnackbar(if (active) "Voucher activated" else "Voucher deactivated")
+            } else {
+                showSnackbar(err ?: "Failed to update voucher status")
+            }
+        }
+    }
+
+    fun deleteVoucher(code: String, onResult: (Boolean, String?) -> Unit) {
+        repository.deleteVoucher(code) { success, err ->
+            if (success) {
+                closeEditVoucher()
+                showSnackbar("Voucher deleted")
+            }
+            onResult(success, err)
+        }
+    }
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
@@ -539,6 +655,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
             storeName, phone, minOrder, defaultPrep,
             sound, vibration, paperSize, autoPrint
         )
+        showSnackbar("Saved")
     }
 
     // --- Order Controls ---

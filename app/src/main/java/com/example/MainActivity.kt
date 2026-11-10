@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -14,14 +15,18 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.OrderStatus
 import com.example.ui.components.*
 import com.example.ui.screens.*
 import com.example.ui.theme.DelivioPartnerTheme
-import com.example.data.model.OrderStatus
 import com.example.viewmodel.MerchantTab
 import com.example.viewmodel.MerchantViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -135,6 +140,11 @@ class MainActivity : ComponentActivity() {
             val editingShopMenu by viewModel.editingShopMenu.collectAsStateWithLifecycle()
             val isNewShopMenu by viewModel.isNewShopMenu.collectAsStateWithLifecycle()
             val selectedMenuIdFilter by viewModel.selectedMenuIdFilter.collectAsStateWithLifecycle()
+            val vouchers by viewModel.vouchers.collectAsStateWithLifecycle()
+            val showVouchersScreen by viewModel.showVouchersScreen.collectAsStateWithLifecycle()
+            val showReportsScreen by viewModel.showReportsScreen.collectAsStateWithLifecycle()
+            val editingVoucher by viewModel.editingVoucher.collectAsStateWithLifecycle()
+            val isNewVoucher by viewModel.isNewVoucher.collectAsStateWithLifecycle()
 
             val isOwner = currentUser?.role != "staff"
             val userRole = currentUser?.role?.lowercase() ?: "merchant"
@@ -142,6 +152,9 @@ class MainActivity : ComponentActivity() {
             val canAccessReviews = userRole in listOf("merchant", "owner", "partner", "manager")
 
             var isRegistering by remember { mutableStateOf(false) }
+            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+            val coroutineScope = rememberCoroutineScope()
+            var showHelpDialog by remember { mutableStateOf(false) }
 
             DelivioPartnerTheme(
                 themeAccentHex = settings.themeAccentHex,
@@ -226,8 +239,24 @@ class MainActivity : ComponentActivity() {
                     SettingsScreen(
                         settings = settings,
                         staff = staff,
+                        changeRequests = changeRequests,
+                        onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
+                        onRequestAdminChange = { kind, requestedValue, reason ->
+                            viewModel.submitChangeRequest(kind, requestedValue, reason) { success, err ->
+                                if (success) viewModel.showSnackbar("Change request submitted")
+                                else viewModel.showSnackbar(err ?: "Failed to submit change request")
+                            }
+                        },
+                        onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
+                            viewModel.updateStoreSettings(
+                                storeName, phone, minOrder, prep,
+                                sound, vibration, paper, autoPrint
+                            )
+                        },
+                        onOpenPrinter = { viewModel.openPrinterScreen() },
                         onOpenMapLocation = { viewModel.openMapLocation() },
                         onOpenStaffDialog = { viewModel.openStaffDialog() },
+                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
                         onBack = { viewModel.closeSettings() }
                     )
                 } else if (showPrinterScreen) {
@@ -249,13 +278,7 @@ class MainActivity : ComponentActivity() {
                         onBack = { viewModel.closeStoreProfile() },
                         onOpenColorPicker = { viewModel.openColorPicker() },
                         onToggleDarkMode = { viewModel.toggleDarkMode(it) },
-                        onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
-                        onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
-                            viewModel.updateStoreSettings(
-                                storeName, phone, minOrder, prep,
-                                sound, vibration, paper, autoPrint
-                            )
-                        }
+                        onOpenMapLocation = { viewModel.openMapLocation() }
                     )
                 } else if (showReviewsScreen) {
                     // Full-screen Ratings & Comments route (Customers & Riders)
@@ -333,6 +356,46 @@ class MainActivity : ComponentActivity() {
                             viewModel.deleteSubcategory(id, onComplete)
                         }
                     )
+                } else if (editingVoucher != null) {
+                    // Full-screen Create / Edit Voucher route
+                    VoucherEditScreen(
+                        voucher = editingVoucher!!,
+                        isNew = isNewVoucher,
+                        availableProducts = menuItems.filter { it.businessType == settings.businessType },
+                        onCheckCodeExists = { code, cb -> viewModel.checkPromoCodeExists(code, cb) },
+                        onSave = { v, isNew, cb -> viewModel.saveVoucher(v, isNew, cb) },
+                        onDelete = { code, cb -> viewModel.deleteVoucher(code, cb) },
+                        onToggleActive = { code, active -> viewModel.toggleVoucherActive(code, active) },
+                        onBack = { viewModel.closeEditVoucher() }
+                    )
+                } else if (showVouchersScreen) {
+                    // Full-screen Vouchers List route
+                    VouchersScreen(
+                        vouchers = vouchers,
+                        onCreateVoucher = { viewModel.openCreateVoucher() },
+                        onEditVoucher = { viewModel.openEditVoucher(it) },
+                        onToggleActive = { code, active -> viewModel.toggleVoucherActive(code, active) },
+                        onBack = { viewModel.closeVouchers() }
+                    )
+                } else if (showReportsScreen) {
+                    // Full-screen Reports route
+                    ReportsScreen(
+                        settings = settings,
+                        orders = orders,
+                        menuItems = menuItems,
+                        reviews = reviews,
+                        vouchers = vouchers,
+                        redemptions = emptyList(),
+                        averageRating = averageRating,
+                        reviewsCount = reviewsCount,
+                        currentTime = currentTime,
+                        onCheckCustomerPriorDelivered = { customerId, periodStartMs, onResult ->
+                            viewModel.checkCustomerHasPriorDeliveredOrder(customerId, periodStartMs, onResult)
+                        },
+                        onOpenReviews = { viewModel.openReviews() },
+                        onCreateVoucher = { viewModel.openCreateVoucher() },
+                        onBack = { viewModel.closeReports() }
+                    )
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -355,179 +418,275 @@ class MainActivity : ComponentActivity() {
                         viewModel.closeOrderDetail()
                     }
                 } else {
-                    // Main Merchant Dashboard & Tabs
-                    Scaffold(
-                        topBar = {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                DelivioTopBar(
-                                    settings = settings,
-                                    onToggleOpen = { viewModel.toggleStoreOpen() },
-                                    currentTime = currentTime,
-                                    isServiceLocked = isServiceLocked,
-                                    serviceLockMessage = serviceLockMessage
-                                )
-                                OfflineBanner(isOnline = isOnline)
-                            }
-                        },
-                        bottomBar = {
-                            DelivioBottomBar(
-                                selectedTab = currentTab,
-                                newOrdersBadgeCount = newOrdersCount,
-                                onTabSelected = { viewModel.selectTab(it) }
-                            )
-                        },
-                        containerColor = MaterialTheme.colorScheme.background
-                    ) { innerPadding ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(innerPadding)
-                        ) {
-                            when (currentTab) {
-                                MerchantTab.ORDERS -> {
-                                    OrdersScreen(
-                                        orders = orders,
-                                        activeFilter = orderStatusFilter,
-                                        onFilterChanged = { viewModel.setOrderStatusFilter(it) },
-                                        fulfillmentFilter = fulfillmentFilter,
-                                        onFulfillmentFilterChanged = { viewModel.setFulfillmentFilter(it) },
-                                        onOrderClick = { viewModel.openOrderDetail(it.id) },
-                                        onAcceptClick = { viewModel.openPrepTimePicker(it) },
-                                        onRejectClick = { viewModel.openRejectDialog(it) },
-                                        onSetReadyClick = { viewModel.setOrderReady(it.id) },
-                                        onRequestRiderClick = { viewModel.openRequestRider(it) },
-                                        onPrintReceiptClick = { viewModel.openReceiptPreview(it) },
-                                        onMarkPickedUpClick = { viewModel.markOrderPickedUp(it.id) },
-                                        onCancelOrderClick = { viewModel.cancelOrder(it.id, "Merchant cancelled scheduled order") },
-                                        onEditOrderClick = { viewModel.openEditOrder(it) },
-                                        onRequestRiderAgainClick = { viewModel.requestRiderAgain(it.id) },
-                                        currentTime = currentTime
-                                    )
-                                }
+                    // Back navigation behavior:
+                    // 1. If right drawer is open, Back closes the drawer first
+                    BackHandler(enabled = drawerState.isOpen) {
+                        coroutineScope.launch { drawerState.close() }
+                    }
 
-                                MerchantTab.MENU -> {
-                                    LaunchedEffect(Unit) {
-                                        viewModel.onMenuOpened()
-                                    }
-                                    MenuScreen(
+                    // 2. Back from any secondary screen returns to Orders; Back on Orders exits
+                    BackHandler(enabled = !drawerState.isOpen && currentTab != MerchantTab.ORDERS) {
+                        viewModel.selectTab(MerchantTab.ORDERS)
+                    }
+
+                    // Right-sliding Navigation Drawer
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                        ModalNavigationDrawer(
+                            drawerState = drawerState,
+                            drawerContent = {
+                                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                    MerchantRightDrawer(
                                         settings = settings,
-                                        categories = categories,
-                                        subcategories = subcategories,
-                                        menus = menus,
-                                        menuItems = menuItems,
-                                        promos = promos,
-                                        businessType = settings.businessType,
                                         currentTime = currentTime,
                                         isServiceLocked = isServiceLocked,
-                                        serviceLockMessage = serviceLockMessage,
-                                        searchQuery = menuSearchQuery,
-                                        onSearchQueryChange = { viewModel.setMenuSearchQuery(it) },
-                                        stockFilter = menuStockFilter,
-                                        onStockFilterChange = { viewModel.setMenuStockFilter(it) },
-                                        selectedCategoryId = selectedCategoryId,
-                                        onCategorySelect = { viewModel.selectMenuCategory(it) },
-                                        selectedSubcategoryId = selectedSubcategoryId,
-                                        onSubcategorySelect = { viewModel.setMenuSubcategoryFilter(it) },
-                                        selectedMenuIdFilter = selectedMenuIdFilter,
-                                        onMenuFilterChange = { viewModel.setMenuIdFilter(it) },
-                                        isMultiSelectMode = isMultiSelectMode,
-                                        selectedItemIds = selectedItemIds,
-                                        onToggleMultiSelect = { viewModel.toggleMultiSelectMode() },
-                                        onToggleItemSelection = { viewModel.toggleItemSelection(it) },
-                                        onBulkMarkInStock = { viewModel.bulkMarkInStock() },
-                                        onBulkMarkSoldOut = { viewModel.bulkMarkSoldOut() },
-                                        onBulkPriceAdjust = { percent, fixed -> viewModel.bulkAdjustPrice(percent, fixed) },
-                                        onToggleItemAvailability = { viewModel.toggleItemAvailability(it) },
-                                        onAddItem = { viewModel.openAddMenuItem(selectedCategoryId) },
-                                        onEditItem = { viewModel.openEditMenuItem(it) },
-                                        onDuplicateItem = { viewModel.duplicateMenuItem(it) },
-                                        onMoveItemToMenu = { item, menuId -> viewModel.bulkMoveItemsToMenu(setOf(item.id), menuId) { _, _, _ -> } },
-                                        onDeleteItem = { viewModel.deleteMenuItem(it) },
-                                        onOpenMenuManagement = { viewModel.openMenuManagement() }
-                                    )
-                                }
-
-                                MerchantTab.DASHBOARD -> {
-                                    val soldOutCount = menuItems.count { it.businessType == settings.businessType && !it.inStock }
-                                    val lowStockCount = menuItems.count {
-                                        it.businessType == settings.businessType && it.trackStock && it.stockCount <= it.lowStockAt
-                                    }
-
-                                    DashboardScreen(
-                                        settings = settings,
-                                        orders = orders,
-                                        onToggleOpen = { viewModel.toggleStoreOpen() },
-                                        onPauseClick = { viewModel.openPauseSheet() },
-                                        onResumeClick = { viewModel.resumeOrders() },
-                                        onOrderClick = { viewModel.openOrderDetail(it.id) },
-                                        onViewAllOrders = { viewModel.selectTab(MerchantTab.ORDERS) },
-                                        soldOutItemsCount = soldOutCount,
-                                        lowStockCount = lowStockCount,
-                                        currentTime = currentTime,
-                                        isServiceLocked = isServiceLocked,
-                                        serviceLockMessage = serviceLockMessage
-                                    )
-                                }
-
-                                MerchantTab.EARNINGS -> {
-                                    EarningsScreen(
-                                        settings = settings,
-                                        orders = orders,
-                                        payouts = payouts,
-                                        period = earningsPeriod,
-                                        onPeriodChange = { viewModel.setEarningsPeriod(it) },
-                                        onRequestPayoutClick = { viewModel.openPayoutDialog() },
-                                        onEditBankDetailsClick = { viewModel.openBankDetailsDialog() }
-                                    )
-                                }
-
-                                MerchantTab.PROFILE -> {
-                                    ProfileScreen(
-                                        settings = settings,
-                                        staff = staff,
-                                        changeRequests = changeRequests,
-                                        onRequestAdminChange = { kind, requestedValue, reason ->
-                                            viewModel.submitChangeRequest(kind, requestedValue, reason) { success, err ->
-                                                if (success) {
-                                                    viewModel.showSnackbar("Change request submitted to admin")
-                                                } else {
-                                                    viewModel.showSnackbar(err ?: "Failed to submit change request")
-                                                }
-                                            }
+                                        unreadInboxCount = unreadInboxCount,
+                                        newOrdersCount = newOrdersCount,
+                                        averageRating = averageRating,
+                                        reviewsCount = reviewsCount,
+                                        walletBalance = if (!settings.linkedCustomerUid.isNullOrBlank() && sharedWalletBalance != null) sharedWalletBalance!! else settings.walletBalance,
+                                        onToggleOpen = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.toggleStoreOpen()
                                         },
-                                        onOpenStoreProfile = { viewModel.openStoreProfile() },
-                                        onUpdateMerchantProfile = { ownerName, phone, logoUrl ->
-                                            viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
+                                        onOpenReviews = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openReviews()
                                         },
-                                        onRequestRiderManual = {
+                                        onNavigateOrders = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.selectTab(MerchantTab.ORDERS)
+                                        },
+                                        onNavigateMenu = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.selectTab(MerchantTab.MENU)
+                                        },
+                                        onNavigateDashboard = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.selectTab(MerchantTab.DASHBOARD)
+                                        },
+                                        onNavigateEarnings = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.selectTab(MerchantTab.EARNINGS)
+                                        },
+                                        onOpenReports = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openReports()
+                                        },
+                                        onOpenWallet = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openWalletScreen()
+                                        },
+                                        onOpenInbox = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openInbox()
+                                        },
+                                        onOpenVouchers = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openVouchers()
+                                        },
+                                        onRequestRider = {
+                                            coroutineScope.launch { drawerState.close() }
                                             viewModel.openManualBookingForm()
                                         },
-                                        onOpenColorPicker = { viewModel.openColorPicker() },
-                                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
-                                        onOpenMapLocation = { viewModel.openMapLocation() },
-                                        onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
-                                        onOpenStaffDialog = { viewModel.openStaffDialog() },
-                                        onOpenSettings = { viewModel.openSettings() },
-                                        onOpenPrinter = { viewModel.openPrinterScreen() },
-                                        onLogout = { viewModel.logout() },
-                                        isOwner = isOwner,
-                                        canAccessInbox = canAccessInbox,
-                                        unreadInboxCount = unreadInboxCount,
-                                        onOpenInbox = { viewModel.openInbox() },
-                                        canAccessReviews = canAccessReviews,
-                                        reviewsCount = reviewsCount,
-                                        averageRating = averageRating,
-                                        onOpenReviews = { viewModel.openReviews() },
-                                        walletBalance = if (!settings.linkedCustomerUid.isNullOrBlank() && sharedWalletBalance != null) sharedWalletBalance!! else settings.walletBalance,
-                                        isSharedWallet = !settings.linkedCustomerUid.isNullOrBlank(),
-                                        onOpenWallet = { viewModel.openWalletScreen() },
-                                        onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
-                                            viewModel.updateStoreSettings(
-                                                storeName, phone, minOrder, prep,
-                                                sound, vibration, paper, autoPrint
-                                            )
+                                        onOpenStoreProfile = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openStoreProfile()
+                                        },
+                                        onOpenSettings = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openSettings()
+                                        },
+                                        onOpenHelp = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            showHelpDialog = true
+                                        },
+                                        onLogout = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.logout()
                                         }
                                     )
+                                }
+                            }
+                        ) {
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Scaffold(
+                                    topBar = {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            DelivioTopBar(
+                                                settings = settings,
+                                                onToggleOpen = { viewModel.toggleStoreOpen() },
+                                                onOpenDrawer = {
+                                                    coroutineScope.launch {
+                                                        if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                                                    }
+                                                },
+                                                badgeCount = newOrdersCount + unreadInboxCount,
+                                                currentTime = currentTime,
+                                                isServiceLocked = isServiceLocked,
+                                                serviceLockMessage = serviceLockMessage
+                                            )
+                                            OfflineBanner(isOnline = isOnline)
+                                        }
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.background
+                                ) { innerPadding ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(innerPadding)
+                                    ) {
+                                        when (currentTab) {
+                                            MerchantTab.ORDERS -> {
+                                                OrdersScreen(
+                                                    orders = orders,
+                                                    activeFilter = orderStatusFilter,
+                                                    onFilterChanged = { viewModel.setOrderStatusFilter(it) },
+                                                    fulfillmentFilter = fulfillmentFilter,
+                                                    onFulfillmentFilterChanged = { viewModel.setFulfillmentFilter(it) },
+                                                    onOrderClick = { viewModel.openOrderDetail(it.id) },
+                                                    onAcceptClick = { viewModel.openPrepTimePicker(it) },
+                                                    onRejectClick = { viewModel.openRejectDialog(it) },
+                                                    onSetReadyClick = { viewModel.setOrderReady(it.id) },
+                                                    onRequestRiderClick = { viewModel.openRequestRider(it) },
+                                                    onPrintReceiptClick = { viewModel.openReceiptPreview(it) },
+                                                    onMarkPickedUpClick = { viewModel.markOrderPickedUp(it.id) },
+                                                    onHandedToRiderClick = { viewModel.markOrderPickedUp(it.id) },
+                                                    onCancelOrderClick = { viewModel.cancelOrder(it.id, "Merchant cancelled scheduled order") },
+                                                    onEditOrderClick = { viewModel.openEditOrder(it) },
+                                                    onRequestRiderAgainClick = { viewModel.requestRiderAgain(it.id) },
+                                                    currentTime = currentTime
+                                                )
+                                            }
+
+                                            MerchantTab.MENU -> {
+                                                LaunchedEffect(Unit) {
+                                                    viewModel.onMenuOpened()
+                                                }
+                                                MenuScreen(
+                                                    settings = settings,
+                                                    categories = categories,
+                                                    subcategories = subcategories,
+                                                    menus = menus,
+                                                    menuItems = menuItems,
+                                                    promos = promos,
+                                                    businessType = settings.businessType,
+                                                    currentTime = currentTime,
+                                                    isServiceLocked = isServiceLocked,
+                                                    serviceLockMessage = serviceLockMessage,
+                                                    searchQuery = menuSearchQuery,
+                                                    onSearchQueryChange = { viewModel.setMenuSearchQuery(it) },
+                                                    stockFilter = menuStockFilter,
+                                                    onStockFilterChange = { viewModel.setMenuStockFilter(it) },
+                                                    selectedCategoryId = selectedCategoryId,
+                                                    onCategorySelect = { viewModel.selectMenuCategory(it) },
+                                                    selectedSubcategoryId = selectedSubcategoryId,
+                                                    onSubcategorySelect = { viewModel.setMenuSubcategoryFilter(it) },
+                                                    selectedMenuIdFilter = selectedMenuIdFilter,
+                                                    onMenuFilterChange = { viewModel.setMenuIdFilter(it) },
+                                                    isMultiSelectMode = isMultiSelectMode,
+                                                    selectedItemIds = selectedItemIds,
+                                                    onToggleMultiSelect = { viewModel.toggleMultiSelectMode() },
+                                                    onToggleItemSelection = { viewModel.toggleItemSelection(it) },
+                                                    onBulkMarkInStock = { viewModel.bulkMarkInStock() },
+                                                    onBulkMarkSoldOut = { viewModel.bulkMarkSoldOut() },
+                                                    onBulkPriceAdjust = { percent, fixed -> viewModel.bulkAdjustPrice(percent, fixed) },
+                                                    onToggleItemAvailability = { viewModel.toggleItemAvailability(it) },
+                                                    onAddItem = { viewModel.openAddMenuItem(selectedCategoryId) },
+                                                    onEditItem = { viewModel.openEditMenuItem(it) },
+                                                    onDuplicateItem = { viewModel.duplicateMenuItem(it) },
+                                                    onMoveItemToMenu = { item, menuId -> viewModel.bulkMoveItemsToMenu(setOf(item.id), menuId) { _, _, _ -> } },
+                                                    onDeleteItem = { viewModel.deleteMenuItem(it) },
+                                                    onOpenMenuManagement = { viewModel.openMenuManagement() }
+                                                )
+                                            }
+
+                                            MerchantTab.DASHBOARD -> {
+                                                val soldOutCount = menuItems.count { it.businessType == settings.businessType && !it.inStock }
+                                                val lowStockCount = menuItems.count {
+                                                    it.businessType == settings.businessType && it.trackStock && it.stockCount <= it.lowStockAt
+                                                }
+
+                                                DashboardScreen(
+                                                    settings = settings,
+                                                    orders = orders,
+                                                    onToggleOpen = { viewModel.toggleStoreOpen() },
+                                                    onPauseClick = { viewModel.openPauseSheet() },
+                                                    onResumeClick = { viewModel.resumeOrders() },
+                                                    onOrderClick = { viewModel.openOrderDetail(it.id) },
+                                                    onViewAllOrders = { viewModel.selectTab(MerchantTab.ORDERS) },
+                                                    soldOutItemsCount = soldOutCount,
+                                                    lowStockCount = lowStockCount,
+                                                    currentTime = currentTime,
+                                                    isServiceLocked = isServiceLocked,
+                                                    serviceLockMessage = serviceLockMessage,
+                                                    averageRating = averageRating,
+                                                    reviewsCount = reviewsCount,
+                                                    onOpenReports = { viewModel.openReports() }
+                                                )
+                                            }
+
+                                            MerchantTab.EARNINGS -> {
+                                                EarningsScreen(
+                                                    settings = settings,
+                                                    orders = orders,
+                                                    payouts = payouts,
+                                                    period = earningsPeriod,
+                                                    onPeriodChange = { viewModel.setEarningsPeriod(it) },
+                                                    onRequestPayoutClick = { viewModel.openPayoutDialog() },
+                                                    onEditBankDetailsClick = { viewModel.openBankDetailsDialog() }
+                                                )
+                                            }
+
+                                            MerchantTab.PROFILE -> {
+                                                ProfileScreen(
+                                                    settings = settings,
+                                                    staff = staff,
+                                                    changeRequests = changeRequests,
+                                                    onRequestAdminChange = { kind, requestedValue, reason ->
+                                                        viewModel.submitChangeRequest(kind, requestedValue, reason) { success, err ->
+                                                            if (success) {
+                                                                viewModel.showSnackbar("Change request submitted to admin")
+                                                            } else {
+                                                                viewModel.showSnackbar(err ?: "Failed to submit change request")
+                                                            }
+                                                        }
+                                                    },
+                                                    onOpenStoreProfile = { viewModel.openStoreProfile() },
+                                                    onUpdateMerchantProfile = { ownerName, phone, logoUrl ->
+                                                        viewModel.updateMerchantProfile(ownerName, phone, logoUrl)
+                                                    },
+                                                    onRequestRiderManual = {
+                                                        viewModel.openManualBookingForm()
+                                                    },
+                                                    onOpenColorPicker = { viewModel.openColorPicker() },
+                                                    onToggleDarkMode = { viewModel.toggleDarkMode(it) },
+                                                    onOpenMapLocation = { viewModel.openMapLocation() },
+                                                    onOpenBusinessHours = { viewModel.openBusinessHoursDialog() },
+                                                    onOpenStaffDialog = { viewModel.openStaffDialog() },
+                                                    onOpenSettings = { viewModel.openSettings() },
+                                                    onOpenPrinter = { viewModel.openPrinterScreen() },
+                                                    onLogout = { viewModel.logout() },
+                                                    isOwner = isOwner,
+                                                    canAccessInbox = canAccessInbox,
+                                                    unreadInboxCount = unreadInboxCount,
+                                                    onOpenInbox = { viewModel.openInbox() },
+                                                    canAccessReviews = canAccessReviews,
+                                                    reviewsCount = reviewsCount,
+                                                    averageRating = averageRating,
+                                                    onOpenReviews = { viewModel.openReviews() },
+                                                    walletBalance = if (!settings.linkedCustomerUid.isNullOrBlank() && sharedWalletBalance != null) sharedWalletBalance!! else settings.walletBalance,
+                                                    isSharedWallet = !settings.linkedCustomerUid.isNullOrBlank(),
+                                                    onOpenWallet = { viewModel.openWalletScreen() },
+                                                    onUpdateStoreSettings = { storeName, phone, minOrder, prep, sound, vibration, paper, autoPrint ->
+                                                        viewModel.updateStoreSettings(
+                                                            storeName, phone, minOrder, prep,
+                                                            sound, vibration, paper, autoPrint
+                                                        )
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -876,6 +1035,34 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+
+
+                // 21. Help and Support Dialog
+                if (showHelpDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showHelpDialog = false },
+                        title = { Text("Help & Support", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Need assistance with your Delivio merchant account, order issues, or payouts?")
+                                Text("• Merchant Hotline: (02) 8888-3354", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                Text("• Partner Support: partner-support@delivio.ph", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                Text("• Operating Hours: 24/7 Operations", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = { showHelpDialog = false },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = com.example.ui.theme.DelivioYellow,
+                                    contentColor = androidx.compose.ui.graphics.Color(0xFF1A1A1A)
+                                )
+                            ) {
+                                Text("Close", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            }
+                        }
+                    )
                 }
             }
         }

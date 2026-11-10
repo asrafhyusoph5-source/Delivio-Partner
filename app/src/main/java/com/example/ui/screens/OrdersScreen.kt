@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -186,19 +187,36 @@ fun OrdersScreen(
     onCancelOrderClick: (Order) -> Unit = {},
     onEditOrderClick: (Order) -> Unit = {},
     onRequestRiderAgainClick: (Order) -> Unit = {},
+    onHandedToRiderClick: (Order) -> Unit = {},
     currentTime: Long = System.currentTimeMillis(),
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    val filterTabs = listOf("New", "Preparing", "Ready", "Completed", "Cancelled")
+    val density = LocalDensity.current
+    val navBarBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+
+    val filterTabs = listOf("New", "Preparing", "Ready", "Completed")
     val fulfillmentOptions = listOf("Delivery", "Pick Up")
 
+    var searchQuery by remember { mutableStateOf("") }
     var orderToPickUp by remember { mutableStateOf<Order?>(null) }
     var orderToCancel by remember { mutableStateOf<Order?>(null) }
+    var orderToHandToRider by remember { mutableStateOf<Order?>(null) }
 
-    // Never list orders with isSplitChild
-    val activeOrders = remember(orders) {
-        orders.filter { !it.isSplitChild }
+    // Never list orders with isSplitChild; ignore scheduled orders until released
+    val activeOrders = remember(orders, currentTime) {
+        orders.filter { order ->
+            !order.isSplitChild && order.isScheduledDue(currentTime)
+        }
+    }
+
+    // Counts for summary strip and badges (ignoring hidden orders)
+    val newCount = remember(activeOrders) { activeOrders.count { it.status == OrderStatus.PLACED_ORDER } }
+    val preparingCount = remember(activeOrders) { activeOrders.count { it.status == OrderStatus.PREPARING } }
+    val readyCount = remember(activeOrders) {
+        activeOrders.count {
+            it.status == OrderStatus.READY || it.status == OrderStatus.RIDER_ON_THE_WAY || it.status == OrderStatus.ON_ANOTHER_DELIVERY
+        }
     }
 
     // Filter orders based on active status tab
@@ -215,22 +233,36 @@ fun OrdersScreen(
         }
     }
 
-    // Helper to filter by fulfillment: Delivery or Pick Up
+    // Filter by fulfillment (Delivery or Pick Up)
     fun filterByFulfillment(list: List<Order>, filter: String): List<Order> {
         return when (filter) {
             "Pick Up" -> list.filter { it.isPickUp }
-            else -> list.filter { !it.isPickUp }
+            "Delivery" -> list.filter { !it.isPickUp }
+            else -> list
         }
     }
 
-    val displayFilteredOrders = remember(statusFilteredOrders, fulfillmentFilter) {
-        filterByFulfillment(statusFilteredOrders, fulfillmentFilter)
+    // Filter by fulfillment, search by order number, and sort oldest first
+    val displayFilteredOrders = remember(statusFilteredOrders, fulfillmentFilter, searchQuery) {
+        val byFulfillment = filterByFulfillment(statusFilteredOrders, fulfillmentFilter)
+        val searched = if (searchQuery.isNotBlank()) {
+            val q = searchQuery.trim().lowercase().removePrefix("#")
+            byFulfillment.filter { ord ->
+                ord.formattedOrderNumber.lowercase().removePrefix("#").contains(q) ||
+                ord.orderNumber.lowercase().contains(q) ||
+                ord.customerName.lowercase().contains(q)
+            }
+        } else {
+            byFulfillment
+        }
+        // Sort oldest first
+        searched.sortedBy { ord -> ord.placedAtTimestamp }
     }
 
     if (orderToPickUp != null) {
         AlertDialog(
             onDismissRequest = { orderToPickUp = null },
-            title = { Text("Mark Order as Picked Up?") },
+            title = { Text("Mark Order as Picked Up?", fontWeight = FontWeight.Bold) },
             text = {
                 Text("Confirm that customer \"${orderToPickUp?.customerName}\" has picked up order ${orderToPickUp?.formattedOrderNumber}. This will complete the order.")
             },
@@ -254,10 +286,44 @@ fun OrdersScreen(
         )
     }
 
+    if (orderToHandToRider != null) {
+        val riderName = orderToHandToRider?.riderName?.ifBlank { "the delivery rider" } ?: "the delivery rider"
+        AlertDialog(
+            onDismissRequest = { orderToHandToRider = null },
+            title = { Text("Handed to Rider?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Confirm that you have handed order ${orderToHandToRider?.formattedOrderNumber} to $riderName.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = orderToHandToRider
+                        orderToHandToRider = null
+                        target?.let {
+                            onHandedToRiderClick(it)
+                            onMarkPickedUpClick(it)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = customColors.accent,
+                        contentColor = customColors.onAccent
+                    )
+                ) {
+                    Text("Confirm Handover")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { orderToHandToRider = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (orderToCancel != null) {
         AlertDialog(
             onDismissRequest = { orderToCancel = null },
-            title = { Text("Cancel Scheduled Order?") },
+            title = { Text("Cancel Scheduled Order?", fontWeight = FontWeight.Bold) },
             text = {
                 Text("Are you sure you want to cancel scheduled order ${orderToCancel?.formattedOrderNumber}?")
             },
@@ -282,21 +348,120 @@ fun OrdersScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // 1. Status Segmented Filter Tabs (Horizontal Scrollable)
+        // ==============================================================
+        // 1. SUMMARY STRIP: New, Preparing, Ready
+        // ==============================================================
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
+            shadowElevation = 2.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .testTag("orders_summary_strip")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp, horizontal = 12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SummaryStripItem(
+                    label = "New",
+                    count = newCount,
+                    isSelected = activeFilter == "New",
+                    accentColor = Color(0xFF3B82F6),
+                    onClick = { onFilterChanged("New") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                VerticalDivider(
+                    modifier = Modifier.height(32.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
+
+                SummaryStripItem(
+                    label = "Preparing",
+                    count = preparingCount,
+                    isSelected = activeFilter == "Preparing",
+                    accentColor = Color(0xFFF59E0B),
+                    onClick = { onFilterChanged("Preparing") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                VerticalDivider(
+                    modifier = Modifier.height(32.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
+
+                SummaryStripItem(
+                    label = "Ready",
+                    count = readyCount,
+                    isSelected = activeFilter == "Ready",
+                    accentColor = Color(0xFF10B981),
+                    onClick = { onFilterChanged("Ready") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        // ==============================================================
+        // 2. SEARCH BY ORDER NUMBER
+        // ==============================================================
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search by order #...", fontSize = 13.sp) },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotBlank()) {
+                    IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Clear,
+                            contentDescription = "Clear",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .testTag("orders_search_input")
+        )
+
+        // ==============================================================
+        // 3. STATUS CHIPS: New, Preparing, Ready, Completed
+        // ==============================================================
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             filterTabs.forEach { tabName ->
                 val count = when (tabName) {
-                    "New" -> activeOrders.count { it.status == OrderStatus.PLACED_ORDER }
-                    "Preparing" -> activeOrders.count { it.status == OrderStatus.PREPARING }
-                    "Ready" -> activeOrders.count { it.status == OrderStatus.READY || it.status == OrderStatus.RIDER_ON_THE_WAY || it.status == OrderStatus.ON_ANOTHER_DELIVERY }
+                    "New" -> newCount
+                    "Preparing" -> preparingCount
+                    "Ready" -> readyCount
                     "Completed" -> activeOrders.count { it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED }
-                    "Cancelled" -> activeOrders.count { it.status == OrderStatus.CANCELLED || it.status == OrderStatus.REJECTED }
                     else -> 0
                 }
                 val isSelected = activeFilter == tabName
@@ -306,7 +471,11 @@ fun OrdersScreen(
                     onClick = { onFilterChanged(tabName) },
                     label = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(tabName, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
+                            Text(
+                                text = tabName,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
                             if (count > 0) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
@@ -337,7 +506,9 @@ fun OrdersScreen(
             }
         }
 
-        // 2. Fulfillment Filter Chips: "Delivery" and "Pick Up" with counts
+        // ==============================================================
+        // 4. FULFILLMENT TOGGLE: Delivery and Pick Up
+        // ==============================================================
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -382,7 +553,9 @@ fun OrdersScreen(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Orders List
+        // ==============================================================
+        // 5. ORDERS LIST (Oldest first)
+        // ==============================================================
         val isListEmpty = displayFilteredOrders.isEmpty()
 
         if (isListEmpty) {
@@ -401,19 +574,22 @@ fun OrdersScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "No $fulfillmentFilter Orders",
+                        text = if (searchQuery.isNotBlank()) "No orders match \"$searchQuery\"" else "No $fulfillmentFilter Orders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Orders in this stage will appear here automatically.",
+                        text = if (searchQuery.isNotBlank()) "Try checking the order number or clear the search." else "Orders in this stage will appear here automatically.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                     OutlinedButton(
-                        onClick = { onFilterChanged("All") },
+                        onClick = {
+                            if (searchQuery.isNotBlank()) searchQuery = ""
+                            else onFilterChanged("New")
+                        },
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .heightIn(min = 48.dp)
@@ -421,7 +597,7 @@ fun OrdersScreen(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("View All Orders", fontWeight = FontWeight.Bold)
+                        Text(if (searchQuery.isNotBlank()) "Clear Search" else "View New Orders", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -431,7 +607,7 @@ fun OrdersScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
+                contentPadding = PaddingValues(top = 4.dp, bottom = navBarBottomDp + 96.dp)
             ) {
                 items(displayFilteredOrders, key = { it.id }) { order ->
                     OrderCard(
@@ -447,12 +623,53 @@ fun OrdersScreen(
                         onCancelRiderRequest = { onCancelRiderRequestClick(order) },
                         onRetryRiderRequest = { onRetryRiderRequestClick(order) },
                         onMarkPickedUp = { orderToPickUp = order },
+                        onHandedToRider = { orderToHandToRider = order },
                         onEditOrder = { onEditOrderClick(order) },
                         onRequestRiderAgain = { onRequestRiderAgainClick(order) },
                         currentTime = currentTime
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SummaryStripItem(
+    label: String,
+    count: Int,
+    isSelected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val customColors = LocalDelivioColors.current
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) customColors.accentTint else Color.Transparent,
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .testTag("summary_strip_${label.lowercase()}")
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = "$count",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = if (isSelected) customColors.accent else if (count > 0) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -472,6 +689,7 @@ fun OrderCard(
     onCancelRiderRequest: () -> Unit = {},
     onRetryRiderRequest: () -> Unit = {},
     onMarkPickedUp: () -> Unit = {},
+    onHandedToRider: () -> Unit = {},
     onEditOrder: () -> Unit = {},
     onRequestRiderAgain: () -> Unit = {},
     currentTime: Long = System.currentTimeMillis()
@@ -487,7 +705,44 @@ fun OrderCard(
         else -> Color(0xFF2563EB) // Blue
     }
 
+    var showItemDetails by remember { mutableStateOf(false) }
     var showOriginalItems by remember { mutableStateOf(false) }
+
+    // Elapsed time calculation: turns amber at >= 15 min, red at >= 30 min
+    val elapsedMillis = (currentTime - order.placedAtTimestamp).coerceAtLeast(0L)
+    val elapsedMinutes = elapsedMillis / 60000L
+    val timeAgoStr = FormatUtils.formatTimeAgo(order.placedAtTimestamp)
+    val isWaitingLong = elapsedMinutes >= 15
+    val isOverdue = elapsedMinutes >= 30
+
+    // Customer first name
+    val customerFirstName = order.customerName.trim().split(" ").firstOrNull()?.ifBlank { "Customer" } ?: "Customer"
+
+    // Item summary string
+    val itemSummary = if (order.items.isNotEmpty()) {
+        order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }
+    } else {
+        "No items listed"
+    }
+
+    // Payment chip info
+    val paymentMethod = order.paymentMethod.lowercase()
+    val isCash = paymentMethod.contains("cash") || paymentMethod.contains("cod") || order.paymentMethod.equals("COD", ignoreCase = true)
+    val isWallet = paymentMethod.contains("wallet")
+    val (paymentBg, paymentColor, paymentLabel) = when {
+        order.isPickUp && isCash -> {
+            Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Cash: Pay at pickup")
+        }
+        isCash -> {
+            Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Cash")
+        }
+        isWallet -> {
+            Triple(Color(0xFFEDE9FE), Color(0xFF6D28D9), "Wallet")
+        }
+        else -> {
+            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Online")
+        }
+    }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -527,191 +782,211 @@ fun OrderCard(
                     .weight(1f)
                     .padding(14.dp)
             ) {
-                // Card Header: Order Number, Large Fulfillment Chip, Edited badge, Status Badge
+                // ==============================================================
+                // 1. CARD HEADER: #number, time ago (amber >= 15m, red >= 30m), status badge
+                // ==============================================================
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        Text(
-                            text = order.formattedOrderNumber,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 16.sp
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        FulfillmentChip(order = order)
+                    Text(
+                        text = order.formattedOrderNumber,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
 
-                        if (order.isScheduled) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            ScheduledChip(order = order)
-                        }
-
-                        // Delivery option chip on each Delivery order card
-                        if (!order.isPickUp) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            DeliveryOptionChip(deliveryOption = order.deliveryOption)
-                        }
-
-                        if (order.isEdited) {
-                            Spacer(modifier = Modifier.width(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Time ago badge
+                        if (isOverdue) {
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFFFEF3C7)
-                            ) {
-                                Text(
-                                    text = "Edited",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFFB45309),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-
-                        if (order.serviceType.equals("request_rider", ignoreCase = true)) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = customColors.accentTint
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFEE2E2),
+                                modifier = Modifier.padding(end = 6.dp)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.TwoWheeler,
+                                        imageVector = Icons.Default.Warning,
                                         contentDescription = null,
-                                        tint = customColors.accent,
+                                        tint = Color(0xFFDC2626),
                                         modifier = Modifier.size(12.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "Request a Rider",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = customColors.accent
+                                        text = timeAgoStr,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFDC2626)
                                     )
                                 }
                             }
-                        }
-
-                        if (order.isTestOrder) {
-                            Spacer(modifier = Modifier.width(6.dp))
+                        } else if (isWaitingLong) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFEF3C7),
+                                modifier = Modifier.padding(end = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Timer,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = timeAgoStr,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFD97706)
+                                    )
+                                }
+                            }
+                        } else {
                             Text(
-                                text = "TEST",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = customColors.accent,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(customColors.accentTint)
-                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                text = timeAgoStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 6.dp)
                             )
                         }
-                    }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = FormatUtils.formatTimeAgo(order.placedAtTimestamp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
                         OrderStatusBadge(status = order.status, isPickUp = order.isPickUp)
                     }
                 }
 
-                // Parent order split notice
-                if (order.splitOut) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ==============================================================
+                // 2. CHIPS ROW: Fulfillment, Scheduled, Payment, Delivery Option
+                // ==============================================================
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FulfillmentChip(order = order)
+
+                    if (order.isScheduled) {
+                        ScheduledChip(order = order)
+                    }
+
+                    // Payment Chip: Cash, Online, Wallet
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFEFF6FF),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                        modifier = Modifier.fillMaxWidth().testTag("card_split_parent_banner")
+                        color = paymentBg,
+                        modifier = Modifier.testTag("payment_chip_${order.id}")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.AltRoute,
+                                imageVector = when (paymentMethod) {
+                                    "cash" -> Icons.Default.Payments
+                                    "wallet" -> Icons.Default.AccountBalanceWallet
+                                    else -> Icons.Default.CreditCard
+                                },
                                 contentDescription = null,
-                                tint = Color(0xFF1D4ED8),
-                                modifier = Modifier.size(16.dp)
+                                tint = paymentColor,
+                                modifier = Modifier.size(13.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Part of this order is handed to a second rider",
-                                fontSize = 12.sp,
+                                text = paymentLabel,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1D4ED8)
+                                color = paymentColor
                             )
                         }
                     }
-                }
 
-                // Batch hold notice for Standard and Saver delivery orders
-                if (!order.isPickUp && order.isRiderBatchHoldActive(currentTime)) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFF0FDF4),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBBF7D0)),
-                        modifier = Modifier.fillMaxWidth().testTag("card_rider_batch_hold_banner")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    // Delivery option chip on Delivery orders
+                    if (!order.isPickUp) {
+                        DeliveryOptionChip(deliveryOption = order.deliveryOption)
+                    }
+
+                    if (order.isEdited) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFFFEF3C7)
                         ) {
-                            Icon(
-                                imageVector = if (order.deliveryOptionDisplay == "Saver") Icons.Default.Timer else Icons.Default.Info,
-                                contentDescription = null,
-                                tint = Color(0xFF15803D),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = order.riderBatchHoldMessage(currentTime),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF15803D)
+                                text = "Edited",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFB45309),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
+                    }
+
+                    if (order.isTestOrder) {
+                        Text(
+                            text = "TEST",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = customColors.accent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(customColors.accentTint)
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Customer Name & Contact
+                // ==============================================================
+                // 3. CUSTOMER INFO: Customer First Name prominent + Phone Dial
+                // ==============================================================
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = order.customerName,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = customerFirstName,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (order.customerName.isNotBlank() && !order.customerName.equals(customerFirstName, ignoreCase = true)) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "(${order.customerName})",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(2.dp))
+
                         if (order.isPickUp) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = Icons.Default.ShoppingBag,
                                     contentDescription = null,
                                     tint = Color(0xFF047857),
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Customer will pick up",
+                                    text = "Customer will pick up at store",
                                     style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Medium,
                                     color = Color(0xFF047857)
                                 )
                             }
@@ -721,11 +996,11 @@ fun OrderCard(
                                     imageVector = Icons.Default.LocationOn,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = order.deliveryAddress.formatted,
+                                    text = order.deliveryAddress.formatted.ifBlank { "Delivery address" },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1
@@ -734,184 +1009,157 @@ fun OrderCard(
                         }
                     }
 
-                    // Customer Phone Call button
-                    IconButton(
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_DIAL).apply {
-                                data = Uri.parse("tel:${order.customerPhone}")
-                            }
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.size(36.dp)
+                    if (order.customerPhone.isNotBlank()) {
+                        IconButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_DIAL).apply {
+                                    data = Uri.parse("tel:${order.customerPhone}")
+                                }
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = "Call Customer",
+                                tint = StatusOpenGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ==============================================================
+                // 4. RIDER STATE ("Waiting for rider", "Rider arriving")
+                // ==============================================================
+                if (!order.isPickUp) {
+                    val assignedRiderName = order.riderName.ifBlank { rider?.name ?: "" }
+                    val hasRider = assignedRiderName.isNotBlank() || rider != null || order.riderId.isNotBlank()
+                    val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+                        order.riderRequest?.status?.equals("On another delivery", ignoreCase = true) == true ||
+                        order.riderRequest?.status?.equals("on_another_delivery", ignoreCase = true) == true
+
+                    val (riderBadgeBg, riderBadgeColor, riderStateLabel) = when {
+                        !hasRider -> {
+                            Triple(Color(0xFFEFF6FF), Color(0xFF1D4ED8), "Waiting for rider")
+                        }
+                        isOnAnotherDelivery -> {
+                            Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Rider is delivering another order first")
+                        }
+                        order.status == OrderStatus.RIDER_ON_THE_WAY || order.status == OrderStatus.READY -> {
+                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Rider arriving${if (assignedRiderName.isNotBlank()) " ($assignedRiderName)" else ""}")
+                        }
+                        else -> {
+                            Triple(Color(0xFFDBEAFE), Color(0xFF1E40AF), "Rider assigned • $assignedRiderName")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = riderBadgeBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, riderBadgeColor.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth().testTag("rider_state_strip_${order.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Phone,
-                            contentDescription = "Call Customer",
-                            tint = StatusOpenGreen,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    imageVector = if (!hasRider) Icons.Default.Schedule else Icons.AutoMirrored.Filled.DirectionsBike,
+                                    contentDescription = null,
+                                    tint = riderBadgeColor,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = riderStateLabel,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = riderBadgeColor
+                                )
+                            }
+
+                            val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
+                            if (hasRider && rPhone.isNotBlank()) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "Call Rider",
+                                    tint = StatusOpenGreen,
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clickable {
+                                            val intent = Intent(Intent.ACTION_DIAL).apply {
+                                                data = Uri.parse("tel:$rPhone")
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                )
+                            }
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Current Items List Summary
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                        .padding(10.dp)
+                // ==============================================================
+                // 5. ITEM SUMMARY & TOTAL
+                // ==============================================================
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "${order.totalItemCount} Items Ordered:",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    order.items.forEach { item ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "${item.quantity}x ${item.name}${if (item.selectedSize != null) " (${item.selectedSize})" else ""}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = FormatUtils.formatCurrency(item.lineTotal),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            item.selections.forEach { sel ->
-                                val selPriceStr = if (sel.price > 0.0) " (+₱${FormatUtils.formatCurrency(sel.price)})" else ""
-                                Text(
-                                    text = "   + ${sel.choiceName}$selPriceStr",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    // If order was edited, show original items expansion
-                    if (order.isEdited && order.originalItems.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
-                        Spacer(modifier = Modifier.height(4.dp))
+                    Column(modifier = Modifier.padding(10.dp)) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showOriginalItems = !showOriginalItems }
-                                .padding(vertical = 2.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (showOriginalItems) "Hide original items" else "View original items (${order.originalItems.size} items)",
+                                text = "${order.totalItemCount} Items",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Text(
+                                text = "Subtotal: ${FormatUtils.formatCurrency(order.subtotal)}",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                color = customColors.accent
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = itemSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = if (showItemDetails) 100 else 2
+                        )
+
+                        if (order.items.size > 2) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (showItemDetails) "Show less" else "Show details...",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFB45309)
-                            )
-                            Icon(
-                                imageVector = if (showOriginalItems) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                tint = Color(0xFFB45309),
-                                modifier = Modifier.size(16.dp)
+                                color = customColors.accent,
+                                modifier = Modifier
+                                    .clickable { showItemDetails = !showItemDetails }
+                                    .padding(vertical = 2.dp)
                             )
                         }
-
-                        if (showOriginalItems) {
-                            Column(modifier = Modifier.padding(top = 4.dp)) {
-                                if (order.editNote != null && order.editNote.isNotBlank()) {
-                                    Text(
-                                        text = "Reason: ${order.editNote}",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                }
-                                order.originalItems.forEach { origItem ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = "${origItem.quantity}x ${origItem.name}",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Text(
-                                            text = FormatUtils.formatCurrency(origItem.lineTotal),
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                if (order.originalTotal != null && order.originalTotal > 0.0) {
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Original Total: ${FormatUtils.formatCurrency(order.originalTotal)}",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Order Price Breakdown
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Subtotal",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = FormatUtils.formatCurrency(order.subtotal),
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 16.sp,
-                            color = customColors.accent
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = order.effectivePaymentLabel,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
                 }
 
                 // Prep Countdown Timer if Preparing
                 if (order.status == OrderStatus.PREPARING && order.prepEndTime != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -945,254 +1193,14 @@ fun OrderCard(
                     }
                 }
 
-                // RIDER SECTION (Delivery and Scheduled only; NEVER Pick Up)
-                if (!order.isPickUp) {
-                    val assignedRiderName = order.riderName.ifBlank { rider?.name ?: "" }
-                    val hasRiderAccepted = assignedRiderName.isNotBlank() || rider != null || order.riderId.isNotBlank()
-                    val canShowRiderSection = order.status == OrderStatus.PREPARING ||
-                            order.status == OrderStatus.READY ||
-                            order.status == OrderStatus.RIDER_ON_THE_WAY
-
-                    if (canShowRiderSection) {
-                        if (!hasRiderAccepted) {
-                            // Preparing tab shows "Searching for rider..." while riderId is null
-                            val requestedAt = order.riderRequest?.requestedAt
-                            val isNoRiderYet = order.isNoRiderYet(currentTime)
-
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Card(
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isNoRiderYet) StatusWarningAmber.copy(alpha = 0.15f)
-                                    else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    if (isNoRiderYet) StatusWarningAmber else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.fillMaxWidth().testTag("searching_for_rider_card")
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            if (isNoRiderYet) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = null,
-                                                    tint = StatusWarningAmber,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = "No rider yet",
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    fontSize = 13.sp,
-                                                    color = StatusWarningAmber
-                                                )
-                                            } else {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(16.dp),
-                                                    strokeWidth = 2.dp,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = "Searching for rider...",
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    fontSize = 13.sp,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        }
-                                        if (requestedAt != null) {
-                                            Text(
-                                                text = FormatUtils.formatTimeAgo(requestedAt),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-
-                                    if (order.isRiderBatchHoldActive(currentTime)) {
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = order.riderBatchHoldMessage(currentTime),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-
-                                    if (order.canRequestRiderAgain(currentTime)) {
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Button(
-                                            onClick = onRequestRiderAgain,
-                                            shape = RoundedCornerShape(8.dp),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = customColors.accent,
-                                                contentColor = customColors.onAccent
-                                            ),
-                                            modifier = Modifier.fillMaxWidth().height(36.dp).testTag("card_request_rider_again_btn")
-                                        ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Request rider again", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            // Rider has accepted: show rider details, vehicle & plate, call icon, live status
-                            val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
-                            val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
-                                order.riderRequest?.status?.equals("On another delivery", ignoreCase = true) == true ||
-                                order.riderRequest?.status?.equals("on_another_delivery", ignoreCase = true) == true
-                            val currentRiderStatus = order.riderRequest?.status ?: when {
-                                isOnAnotherDelivery -> "On another delivery"
-                                order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
-                                else -> "Rider assigned"
-                            }
-                            val vehicleAndPlate = order.riderVehicle?.ifBlank { null }
-                                ?: rider?.vehiclePlate?.ifBlank { null }
-                                ?: "Motorcycle"
-
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Card(
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = customColors.accentTint.copy(alpha = 0.5f)),
-                                modifier = Modifier.fillMaxWidth().testTag("rider_assigned_card")
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .clip(CircleShape)
-                                                    .background(customColors.accent),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.AutoMirrored.Filled.DirectionsBike,
-                                                    contentDescription = "Delivery Rider",
-                                                    tint = customColors.onAccent,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
-                                                Text(
-                                                    text = assignedRiderName.ifBlank { "Delivery Rider" },
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 13.sp
-                                                )
-                                                Text(
-                                                    text = vehicleAndPlate,
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Text(
-                                                    text = "Status: $currentRiderStatus",
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = customColors.accent
-                                                )
-                                                if (isOnAnotherDelivery) {
-                                                    Spacer(modifier = Modifier.height(2.dp))
-                                                    Text(
-                                                        text = "Rider is delivering another order first",
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                            }
-                                        }
-
-                                        if (rPhone.isNotBlank()) {
-                                            IconButton(
-                                                onClick = {
-                                                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                                                        data = Uri.parse("tel:$rPhone")
-                                                    }
-                                                    context.startActivity(intent)
-                                                },
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .clip(CircleShape)
-                                                    .background(StatusOpenGreen)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Phone,
-                                                    contentDescription = "Call Rider",
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    // If rider released or can request again
-                                    if (order.canRequestRiderAgain(currentTime)) {
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        OutlinedButton(
-                                            onClick = onRequestRiderAgain,
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.fillMaxWidth().height(36.dp).testTag("card_request_rider_again_btn")
-                                        ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Request rider again", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Pick Up Ready Banner
-                    if (order.status == OrderStatus.READY) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(StatusOpenGreen.copy(alpha = 0.12f))
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ShoppingBag,
-                                contentDescription = null,
-                                tint = StatusOpenGreen,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Ready for Pick Up • Customer will pick up",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = StatusOpenGreen
-                            )
-                        }
-                    }
-                }
-
-                // Action Buttons
+                // ==============================================================
+                // 6. ACTION BUTTONS: One large primary action within thumb reach
+                // ==============================================================
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(10.dp))
 
                 if (isUpcomingScheduled) {
-                    // Upcoming scheduled orders allow Reject and Cancel only
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1222,6 +1230,7 @@ fun OrderCard(
                 } else {
                     when (order.status) {
                         OrderStatus.PLACED_ORDER -> {
+                            // Large Accept and secondary Reject
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1231,13 +1240,14 @@ fun OrderCard(
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onReject()
                                     },
-                                    shape = RoundedCornerShape(16.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         contentColor = MaterialTheme.colorScheme.error
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(52.dp)
+                                        .testTag("card_reject_order_btn")
                                 ) {
                                     Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -1249,117 +1259,116 @@ fun OrderCard(
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onAccept()
                                     },
-                                    shape = RoundedCornerShape(16.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = customColors.accent,
                                         contentColor = customColors.onAccent
                                     ),
                                     modifier = Modifier
-                                        .weight(1.5f)
+                                        .weight(1.8f)
                                         .height(52.dp)
                                         .testTag("card_accept_order_btn")
                                 ) {
                                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Accept Order", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                                    Text("Accept Order", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
                                 }
                             }
                         }
 
                         OrderStatus.PREPARING -> {
+                            // Large Mark Ready and secondary Edit Order
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                // "Edit order" button on Preparing cards (hidden after one edit)
                                 if (!order.isEdited) {
                                     OutlinedButton(
                                         onClick = onEditOrder,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f).height(44.dp).testTag("card_edit_order_btn")
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f).height(50.dp).testTag("card_edit_order_btn")
                                     ) {
-                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Edit order", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                        Text("Edit order", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     }
                                 }
 
-                                // Mark Ready button (works with or without a rider)
                                 Button(
                                     onClick = onSetReady,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = customColors.accent,
                                         contentColor = customColors.onAccent
                                     ),
-                                    modifier = Modifier.weight(1.2f).height(44.dp).testTag("card_set_ready_btn")
+                                    modifier = Modifier.weight(1.5f).height(50.dp).testTag("card_set_ready_btn")
                                 ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Mark Ready", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Mark Ready", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                                 }
                             }
                         }
 
                         OrderStatus.READY -> {
                             if (order.isPickUp) {
+                                // Large Handed to customer (Mark Picked Up) and secondary Receipt
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Button(
                                         onClick = onMarkPickedUp,
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = RoundedCornerShape(14.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = StatusOpenGreen,
                                             contentColor = Color.White
                                         ),
-                                        modifier = Modifier.weight(1.4f).height(44.dp).testTag("card_mark_picked_up_btn")
+                                        modifier = Modifier.weight(1.8f).height(50.dp).testTag("card_mark_picked_up_btn")
                                     ) {
-                                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Mark as Picked Up", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Handed to Customer", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                                     }
 
                                     OutlinedButton(
                                         onClick = onPrintReceipt,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f).height(44.dp).testTag("card_print_receipt_btn")
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f).height(50.dp).testTag("card_print_receipt_btn")
                                     ) {
                                         Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Receipt", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                        Text("Receipt", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     }
                                 }
                             } else {
+                                // Large Handed to rider and secondary Receipt / Request rider again
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    if (order.canRequestRiderAgain(currentTime)) {
-                                        OutlinedButton(
-                                            onClick = onRequestRiderAgain,
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier.weight(1.2f).height(44.dp).testTag("card_request_rider_again_btn")
-                                        ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Request rider again", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-
                                     Button(
-                                        onClick = onPrintReceipt,
-                                        shape = RoundedCornerShape(12.dp),
+                                        onClick = onHandedToRider,
+                                        shape = RoundedCornerShape(14.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = customColors.accent,
                                             contentColor = customColors.onAccent
                                         ),
-                                        modifier = Modifier.weight(1f).height(44.dp).testTag("card_print_receipt_btn")
+                                        modifier = Modifier.weight(1.8f).height(50.dp).testTag("card_handed_to_rider_btn")
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Handed to Rider", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = onPrintReceipt,
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f).height(50.dp).testTag("card_print_receipt_btn")
                                     ) {
                                         Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text("Receipt", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     }
                                 }
                             }
@@ -1368,12 +1377,12 @@ fun OrderCard(
                         OrderStatus.RIDER_ON_THE_WAY, OrderStatus.DELIVERED, OrderStatus.COMPLETED -> {
                             OutlinedButton(
                                 onClick = onPrintReceipt,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(44.dp)
+                                    .height(48.dp)
                             ) {
-                                Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("View & Print Receipt", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                             }

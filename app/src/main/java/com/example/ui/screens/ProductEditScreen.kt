@@ -310,7 +310,8 @@ fun ProductEditScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(16.dp)
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 12.dp, bottom = 16.dp)
                 ) {
                     // Summary line appears above Save button ONLY after a failed attempt or tap
                     if (hasTappedSaveOnce && !canSave) {
@@ -1231,7 +1232,10 @@ fun ProductEditScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            // Extra bottom padding (navigation bar height + 96 dp) so last item scrolls fully above bottom bar
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val navBarBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+            Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
         }
     }
 

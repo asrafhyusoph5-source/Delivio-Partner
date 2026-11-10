@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +22,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,6 +35,9 @@ import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlin.math.roundToInt
 
 @Composable
 fun DashboardScreen(
@@ -48,10 +53,24 @@ fun DashboardScreen(
     currentTime: Long = System.currentTimeMillis(),
     isServiceLocked: Boolean = false,
     serviceLockMessage: String? = null,
+    averageRating: Double = 5.0,
+    reviewsCount: Int = 0,
+    onOpenReports: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
     val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
+
+    val tz = remember(settings.timezone) {
+        TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
+    }
+    val (todayStartMs, todayEndMs) = remember(currentTime, tz) {
+        val cal = Calendar.getInstance(tz).apply { timeInMillis = currentTime }
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        val start = cal.timeInMillis
+        cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59); cal.set(Calendar.MILLISECOND, 999)
+        start to cal.timeInMillis
+    }
 
     val activeOrders = orders.filter {
         it.status == OrderStatus.PLACED_ORDER ||
@@ -61,10 +80,122 @@ fun DashboardScreen(
                 it.status == OrderStatus.ON_ANOTHER_DELIVERY
     }
 
+    // Filter today's product orders (excluding rider requests, split children, and scheduled orders not yet released)
+    val todayOrders = remember(orders, todayStartMs, todayEndMs, currentTime) {
+        orders.filter { ord ->
+            !ord.isSplitChild &&
+            !ord.serviceType.equals("request_rider", ignoreCase = true) &&
+            ord.isScheduledDue(currentTime) &&
+            ord.placedAtTimestamp in todayStartMs..todayEndMs
+        }
+    }
+
+    val todayDeliveredOrders = remember(todayOrders) {
+        todayOrders.filter { it.isDeliveredOrCompleted }
+    }
+    val todayDeliveredNet = remember(todayDeliveredOrders) {
+        todayDeliveredOrders.sumOf { it.netSales }
+    }
+    val todayDeliveredSubtotal = remember(todayDeliveredOrders) {
+        todayDeliveredOrders.sumOf { it.subtotal }
+    }
+
+    // Avg Prep Time = average of (readyAt minus acceptedAt) in minutes for today's orders
+    val todayPrepTimes = remember(todayOrders) {
+        todayOrders.mapNotNull { it.prepDurationMinutes }
+    }
+    val avgPrepTimeMinutes = remember(todayPrepTimes) {
+        if (todayPrepTimes.isNotEmpty()) todayPrepTimes.average().roundToInt() else null
+    }
+    val targetPrepTime = settings.defaultPrepTime + 10
+
+    // Accept Rate = accepted / (accepted + rejected by the shop + expired with no response)
+    // Customer cancellations are excluded.
+    val acceptStats = remember(todayOrders) {
+        val accepted = todayOrders.count {
+            it.status == OrderStatus.PREPARING ||
+            it.status == OrderStatus.READY ||
+            it.status == OrderStatus.RIDER_ON_THE_WAY ||
+            it.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+            it.status == OrderStatus.DELIVERED ||
+            it.status == OrderStatus.COMPLETED ||
+            it.acceptedAt != null
+        }
+        val rejected = todayOrders.count { it.status == OrderStatus.REJECTED }
+        val expired = todayOrders.count {
+            it.status == OrderStatus.CANCELLED && (
+                it.cancelReason?.contains("expired", ignoreCase = true) == true ||
+                it.cancelReason?.contains("timeout", ignoreCase = true) == true
+            )
+        }
+        val total = accepted + rejected + expired
+        val rate = if (total > 0) ((accepted.toDouble() / total) * 100).roundToInt() else null
+        Triple(rate, accepted, total)
+    }
+    val (acceptRatePercent, acceptedOrdersCount, responseTotalOrders) = acceptStats
+
+    // Today's Hourly breakdown for Orders by Hour Chart
+    val todayHourlyData = remember(todayOrders, tz) {
+        val counts = IntArray(24) { 0 }
+        val cal = Calendar.getInstance(tz)
+        todayOrders.forEach { ord ->
+            cal.timeInMillis = ord.placedAtTimestamp
+            val h = cal.get(Calendar.HOUR_OF_DAY)
+            if (h in 0..23) counts[h]++
+        }
+        (0..23).map { h ->
+            val ampm = if (h >= 12) "PM" else "AM"
+            val h12 = when {
+                h == 0 -> 12
+                h > 12 -> h - 12
+                else -> h
+            }
+            Triple(h, "$h12$ampm", counts[h])
+        }
+    }
+    val peakHour = remember(todayHourlyData) {
+        todayHourlyData.maxByOrNull { it.third }?.takeIf { it.third > 0 }
+    }
+
+    // Real 7-day revenue trend
+    val sevenDaysData = remember(orders, currentTime, tz) {
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = tz }
+        val dayNameFmt = SimpleDateFormat("EEE", Locale.US).apply { timeZone = tz }
+        val dayDisplayFmt = SimpleDateFormat("MMM d", Locale.US).apply { timeZone = tz }
+
+        val startCal = Calendar.getInstance(tz).apply {
+            timeInMillis = currentTime
+            add(Calendar.DAY_OF_YEAR, -6)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }
+
+        val past7Orders = orders.filter { ord ->
+            !ord.isSplitChild &&
+            !ord.serviceType.equals("request_rider", ignoreCase = true) &&
+            ord.isDeliveredOrCompleted &&
+            ord.placedAtTimestamp >= startCal.timeInMillis &&
+            ord.placedAtTimestamp <= currentTime
+        }
+
+        val grouped = past7Orders.groupBy { dayFmt.format(Date(it.placedAtTimestamp)) }
+
+        val daysList = mutableListOf<Triple<String, String, Double>>()
+        val curIter = Calendar.getInstance(tz).apply { timeInMillis = startCal.timeInMillis }
+        for (i in 0..6) {
+            val key = dayFmt.format(curIter.time)
+            val dayName = dayNameFmt.format(curIter.time)
+            val disp = dayDisplayFmt.format(curIter.time)
+            val rev = grouped[key]?.sumOf { it.netSales } ?: 0.0
+            daysList.add(Triple(dayName, disp, rev))
+            curIter.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        daysList
+    }
+
     val deliveredOrders = orders.filter {
         (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) && !it.serviceType.equals("request_rider", ignoreCase = true)
     }
-    val deliveredSubtotal = deliveredOrders.sumOf { it.subtotal }
+    val deliveredSubtotal = deliveredOrders.sumOf { it.netSales }
     val commissionAmount = deliveredSubtotal * settings.commissionRate
     val netEarnings = deliveredSubtotal - commissionAmount
 
@@ -292,16 +423,16 @@ fun DashboardScreen(
         ) {
             KpiCard(
                 title = "Total Orders",
-                value = (orders.size).toString(),
-                subtitle = "${deliveredOrders.size} delivered",
+                value = todayOrders.size.toString(),
+                subtitle = "${todayDeliveredOrders.size} delivered",
                 iconVector = Icons.Default.LocalMall,
                 modifier = Modifier.weight(1f)
             )
 
             KpiCard(
                 title = "Net Earnings",
-                value = FormatUtils.formatCurrency(netEarnings),
-                subtitle = "Subtotal: ${FormatUtils.formatCurrency(deliveredSubtotal)}",
+                value = "₱${FormatUtils.formatCurrency(todayDeliveredNet)}",
+                subtitle = "Subtotal: ₱${FormatUtils.formatCurrency(todayDeliveredSubtotal)}",
                 iconVector = Icons.Default.Payments,
                 modifier = Modifier.weight(1f)
             )
@@ -313,19 +444,54 @@ fun DashboardScreen(
         ) {
             KpiCard(
                 title = "Avg Prep Time",
-                value = "${settings.defaultPrepTime} mins",
-                subtitle = "Target: <20m",
+                value = if (avgPrepTimeMinutes != null) "${avgPrepTimeMinutes}m" else "No data yet",
+                subtitle = "Target: <${targetPrepTime}m",
                 iconVector = Icons.Default.Timer,
                 modifier = Modifier.weight(1f)
             )
 
             KpiCard(
                 title = "Accept Rate",
-                value = "98.4%",
-                subtitle = "Store Rating: 4.9★",
+                value = if (acceptRatePercent != null) "$acceptRatePercent%" else "No orders yet",
+                subtitle = if (responseTotalOrders > 0) "$acceptedOrdersCount of $responseTotalOrders orders" else "No orders yet",
                 iconVector = Icons.Default.Star,
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        // Store rating line
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = null,
+                        tint = Color(0xFFFFB300),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (reviewsCount > 0) "Store Rating: ${String.format(Locale.US, "%.1f", averageRating)}★ ($reviewsCount reviews)" else "Store Rating: No ratings yet",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                TextButton(onClick = onOpenReports) {
+                    Text("Full reports", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+            }
         }
 
         if (deliveryExpenses > 0.0 || requestRiderOrders.isNotEmpty()) {
@@ -434,8 +600,8 @@ fun DashboardScreen(
                     }
                 }
 
-                // Strictly subtotal sum (NEVER show fees, tip, VAT, delivery fee, or grand total with fees)
-                val totalGrossSubtotal = filteredSalesOrders.sumOf { it.subtotal }
+                // Strictly subtotal sum minus merchant-funded voucher discount (Net Sales)
+                val totalGrossSubtotal = filteredSalesOrders.sumOf { it.netSales }
                 val totalOrdersCount = filteredSalesOrders.size
                 val totalItemsCount = filteredSalesOrders.sumOf { it.totalItemCount }
                 val avgOrderValue = if (totalOrdersCount > 0) totalGrossSubtotal / totalOrdersCount else 0.0
@@ -456,7 +622,7 @@ fun DashboardScreen(
                                 dateStr = dateKey,
                                 displayDate = disp,
                                 orderCount = dayOrders.size,
-                                subtotal = dayOrders.sumOf { it.subtotal }
+                                subtotal = dayOrders.sumOf { it.netSales }
                             )
                         }
                         .sortedByDescending { it.dateStr }
@@ -777,7 +943,8 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text("Orders by Hour Today", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        Text("Peak hours: 12:00 PM & 7:00 PM", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val peakText = if (peakHour != null) "Peak: ${peakHour.second} (${peakHour.third} orders)" else "No peak hour yet"
+                        Text(peakText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("Hourly", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = customColors.accent)
                 }
@@ -785,18 +952,13 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Canvas Bar Chart: Orders by hour
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp)
-                ) {
-                    OrdersByHourChart(accentColor = customColors.accent)
-                }
+                OrdersByHourChart(hours = todayHourlyData, accentColor = customColors.accent)
 
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(14.dp))
 
+                val total7DaysRevenue = remember(sevenDaysData) { sevenDaysData.sumOf { it.third } }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -804,7 +966,7 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text("Revenue Last 7 Days", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        Text("Net: ${FormatUtils.formatCurrency(netEarnings)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Net: ₱${FormatUtils.formatCurrency(total7DaysRevenue)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("Daily", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = customColors.accent)
                 }
@@ -812,14 +974,32 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Canvas Bar Chart: 7-day revenue trend
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp)
-                ) {
-                    Revenue7DaysChart(accentColor = customColors.accent)
-                }
+                Revenue7DaysChart(days = sevenDaysData, accentColor = customColors.accent)
             }
+        }
+
+        // Open full reports button
+        Button(
+            onClick = onOpenReports,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().testTag("view_full_reports_btn")
+        ) {
+            Icon(
+                imageVector = Icons.Default.BarChart,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open Detailed Reports & Analytics", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.weight(1f))
+            Icon(
+                imageVector = Icons.Default.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
         }
 
         // LIVE ACTIVE ORDERS SECTION
@@ -944,92 +1124,245 @@ fun KpiCard(
 }
 
 @Composable
-fun OrdersByHourChart(accentColor: Color) {
-    val barValues = listOf(3f, 8f, 16f, 9f, 6f, 19f, 12f)
-    val labels = listOf("10AM", "12PM", "2PM", "4PM", "6PM", "8PM", "10PM")
-    val maxVal = 20f
+fun OrdersByHourChart(
+    hours: List<Triple<Int, String, Int>>,
+    accentColor: Color
+) {
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    val maxVal = remember(hours) { (hours.maxOfOrNull { it.third.toFloat() } ?: 1f).coerceAtLeast(1f) }
+    val allZero = remember(hours) { hours.all { it.third == 0 } }
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val width = size.width
-        val height = size.height
-        val barWidth = width / (barValues.size * 2)
-
-        barValues.forEachIndexed { index, value ->
-            val barHeight = (value / maxVal) * (height - 30f)
-            val x = (index * 2 + 0.5f) * barWidth
-            val y = height - barHeight - 20f
-
-            // Draw bar
-            drawRoundRect(
-                color = accentColor,
-                topLeft = Offset(x, y),
-                size = Size(barWidth, barHeight),
-                cornerRadius = CornerRadius(6f, 6f)
-            )
-
-            // Draw baseline
-            drawLine(
-                color = Color.LightGray.copy(alpha = 0.5f),
-                start = Offset(0f, height - 20f),
-                end = Offset(width, height - 20f),
-                strokeWidth = 2f
-            )
+    if (allZero) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(110.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.AccessTime,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "No orders received today yet",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
+        return
     }
 
-    // Time labels below
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 92.dp),
-        horizontalArrangement = Arrangement.SpaceAround
-    ) {
-        labels.forEach { label ->
-            Text(label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        selectedIndex?.let { idx ->
+            if (idx in hours.indices) {
+                val item = hours[idx]
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "${item.third} ${if (item.third == 1) "order" else "orders"} at ${item.second}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .pointerInput(hours) {
+                    detectTapGestures { offset ->
+                        val count = hours.size.coerceAtLeast(1)
+                        val slotWidth = size.width / count
+                        val tapped = (offset.x / slotWidth).toInt().coerceIn(0, hours.size - 1)
+                        selectedIndex = tapped
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val count = hours.size
+                if (count == 0) return@Canvas
+                val slotWidth = size.width / count
+                val barWidth = (slotWidth * 0.7f).coerceAtMost(20.dp.toPx())
+
+                hours.forEachIndexed { i, item ->
+                    val normHeight = (item.third.toFloat() / maxVal) * (size.height - 8.dp.toPx())
+                    val barHeight = normHeight.coerceAtLeast(if (item.third > 0) 4.dp.toPx() else 1.dp.toPx())
+                    val x = (i * slotWidth) + ((slotWidth - barWidth) / 2)
+                    val y = size.height - barHeight
+
+                    val isSelected = selectedIndex == i
+                    drawRoundRect(
+                        color = if (isSelected) Color(0xFF1A1A1A) else if (item.third == maxVal.toInt() && maxVal > 0) accentColor else accentColor.copy(alpha = 0.65f),
+                        topLeft = Offset(x, y),
+                        size = Size(barWidth, barHeight),
+                        cornerRadius = CornerRadius(4f, 4f)
+                    )
+                }
+
+                // Baseline
+                drawLine(
+                    color = Color.LightGray.copy(alpha = 0.5f),
+                    start = Offset(0f, size.height),
+                    end = Offset(size.width, size.height),
+                    strokeWidth = 2f
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Labels strictly below baseline
+        Row(modifier = Modifier.fillMaxWidth()) {
+            hours.forEachIndexed { idx, item ->
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    if (idx % 4 == 0) {
+                        Text(
+                            text = item.second,
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-fun Revenue7DaysChart(accentColor: Color) {
-    val revenueValues = listOf(320f, 410f, 290f, 480f, 520f, 610f, 450f)
-    val dayLabels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    val maxVal = 700f
+fun Revenue7DaysChart(
+    days: List<Triple<String, String, Double>>,
+    accentColor: Color
+) {
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    val maxVal = remember(days) { (days.maxOfOrNull { it.third.toFloat() } ?: 1f).coerceAtLeast(1f) }
+    val allZero = remember(days) { days.all { it.third == 0.0 } }
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val width = size.width
-        val height = size.height
-        val barWidth = width / (revenueValues.size * 2)
-
-        revenueValues.forEachIndexed { index, value ->
-            val barHeight = (value / maxVal) * (height - 30f)
-            val x = (index * 2 + 0.5f) * barWidth
-            val y = height - barHeight - 20f
-
-            drawRoundRect(
-                color = if (index == 5) accentColor else accentColor.copy(alpha = 0.5f),
-                topLeft = Offset(x, y),
-                size = Size(barWidth, barHeight),
-                cornerRadius = CornerRadius(6f, 6f)
-            )
-
-            drawLine(
-                color = Color.LightGray.copy(alpha = 0.5f),
-                start = Offset(0f, height - 20f),
-                end = Offset(width, height - 20f),
-                strokeWidth = 2f
-            )
+    if (allZero) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(110.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.Payments,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "No sales recorded in the last 7 days",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
+        return
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 92.dp),
-        horizontalArrangement = Arrangement.SpaceAround
-    ) {
-        dayLabels.forEach { day ->
-            Text(day, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        selectedIndex?.let { idx ->
+            if (idx in days.indices) {
+                val item = days[idx]
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "₱${FormatUtils.formatCurrency(item.third)} on ${item.first}, ${item.second}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .pointerInput(days) {
+                    detectTapGestures { offset ->
+                        val count = days.size.coerceAtLeast(1)
+                        val slotWidth = size.width / count
+                        val tapped = (offset.x / slotWidth).toInt().coerceIn(0, days.size - 1)
+                        selectedIndex = tapped
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val count = days.size
+                if (count == 0) return@Canvas
+                val slotWidth = size.width / count
+                val barWidth = (slotWidth * 0.65f).coerceAtMost(32.dp.toPx())
+
+                days.forEachIndexed { i, item ->
+                    val normHeight = ((item.third.toFloat()) / maxVal) * (size.height - 8.dp.toPx())
+                    val barHeight = normHeight.coerceAtLeast(if (item.third > 0.0) 6.dp.toPx() else 2.dp.toPx())
+                    val x = (i * slotWidth) + ((slotWidth - barWidth) / 2)
+                    val y = size.height - barHeight
+
+                    val isSelected = selectedIndex == i
+                    drawRoundRect(
+                        color = if (isSelected) Color(0xFF1A1A1A) else if (i == count - 1) accentColor else accentColor.copy(alpha = 0.6f),
+                        topLeft = Offset(x, y),
+                        size = Size(barWidth, barHeight),
+                        cornerRadius = CornerRadius(6f, 6f)
+                    )
+                }
+
+                // Baseline
+                drawLine(
+                    color = Color.LightGray.copy(alpha = 0.5f),
+                    start = Offset(0f, size.height),
+                    end = Offset(size.width, size.height),
+                    strokeWidth = 2f
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Labels strictly below baseline
+        Row(modifier = Modifier.fillMaxWidth()) {
+            days.forEach { item ->
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = item.first,
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }

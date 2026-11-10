@@ -172,7 +172,18 @@ class MerchantRepository private constructor(context: Context) {
     private var reviewsListener: ListenerRegistration? = null
     private var riderReviewsListener: ListenerRegistration? = null
     private var receiptSettingsListener: ListenerRegistration? = null
+    private var vouchersListener: ListenerRegistration? = null
+    private var redemptionsListener: ListenerRegistration? = null
     private var bestSellersJob: Job? = null
+
+    // Merchant Vouchers & Redemptions State
+    private val _vouchers = MutableStateFlow<List<MerchantVoucher>>(emptyList())
+    val vouchers: StateFlow<List<MerchantVoucher>> = _vouchers.asStateFlow()
+
+    private val _redemptions = MutableStateFlow<List<PromoRedemption>>(emptyList())
+    val redemptions: StateFlow<List<PromoRedemption>> = _redemptions.asStateFlow()
+
+    private var rawVouchers: List<MerchantVoucher> = emptyList()
 
     // Live Receipt Design from settings/receipt
     private val _receiptDesign = MutableStateFlow(ReceiptDesign())
@@ -1027,13 +1038,26 @@ class MerchantRepository private constructor(context: Context) {
                             else -> true
                         }
 
+                        val rawHistory = (doc.get("statusHistory") as? List<*>)?.mapNotNull { it as? Map<String, Any?> } ?: emptyList()
+                        fun extractHistoryTimestamp(vararg targetStatuses: String): Long? {
+                            for (entry in rawHistory) {
+                                val s = (entry["status"] as? String)?.lowercase() ?: ""
+                                if (targetStatuses.any { it.equals(s, ignoreCase = true) }) {
+                                    val t = FormatUtils.parseTimestamp(entry["at"])
+                                        ?: FormatUtils.parseTimestamp(entry["timestamp"])
+                                    if (t != null) return t
+                                }
+                            }
+                            return null
+                        }
+
                         val acceptedAtVal: Long? = when (val a = doc.get("acceptedAt")) {
                             is Timestamp -> a.toDate().time
                             is java.util.Date -> a.time
                             is Number -> a.toLong()
                             is String -> a.toLongOrNull()
                             else -> null
-                        }
+                        } ?: extractHistoryTimestamp("preparing", PlatformOrderStatuses.PREPARING)
 
                         val readyAtVal: Long? = when (val r = doc.get("readyAt")) {
                             is Timestamp -> r.toDate().time
@@ -1041,7 +1065,19 @@ class MerchantRepository private constructor(context: Context) {
                             is Number -> r.toLong()
                             is String -> r.toLongOrNull()
                             else -> null
-                        }
+                        } ?: extractHistoryTimestamp("ready", PlatformOrderStatuses.READY)
+
+                        val rejectedAtVal: Long? = FormatUtils.parseTimestamp(doc.get("rejectedAt"))
+                            ?: extractHistoryTimestamp("rejected", PlatformOrderStatuses.REJECTED)
+
+                        val customerIdVal = (doc.getString("customerId")
+                            ?: doc.getString("customerUid")
+                            ?: doc.getString("userId")
+                            ?: ((doc.get("customer") as? Map<*, *>)?.get("id") as? String)
+                            ?: ((doc.get("customer") as? Map<*, *>)?.get("uid") as? String)
+                            ?: doc.getString("customerPhone")
+                            ?: doc.getString("customerName")
+                            ?: "").trim()
 
                         val delOptRaw = (doc.getString("deliveryOption")
                             ?: ((doc.get("delivery") as? Map<*, *>)?.get("option") as? String)
@@ -1066,6 +1102,22 @@ class MerchantRepository private constructor(context: Context) {
                             "#$clean"
                         } else {
                             "#" + (if (doc.id.length >= 6) doc.id.takeLast(6).uppercase() else doc.id.uppercase())
+                        }
+
+                        val promoMap = (doc.get("promo") as? Map<*, *>) ?: (feesRawMap["promo"] as? Map<*, *>)
+                        val promoObj = promoMap?.let { p ->
+                            val pCode = (p["code"] as? String) ?: ""
+                            val pDiscount = FormatUtils.parseDouble(p["discount"]) ?: 0.0
+                            val pFundedBy = (p["fundedBy"] as? String) ?: "merchant"
+                            val pMerchantId = (p["merchantId"] as? String) ?: ""
+                            if (pCode.isNotBlank() && pDiscount > 0.0) {
+                                OrderPromo(
+                                    code = pCode,
+                                    discount = pDiscount,
+                                    fundedBy = pFundedBy,
+                                    merchantId = pMerchantId
+                                )
+                            } else null
                         }
 
                         val order = Order(
@@ -1120,7 +1172,11 @@ class MerchantRepository private constructor(context: Context) {
                             deliveryOption = delOptVal,
                             dispatchHoldMinutes = dispatchHoldMinutesVal,
                             isSplitChild = false,
-                            splitOut = hasSplitOut
+                            splitOut = hasSplitOut,
+                            promo = promoObj,
+                            customerId = customerIdVal,
+                            rejectedAt = rejectedAtVal,
+                            statusHistory = rawHistory
                         )
                         list.add(order)
                     }
@@ -1522,6 +1578,35 @@ class MerchantRepository private constructor(context: Context) {
 
         // 14. Best Sellers: on start and every 6 hours
         startBestSellersPeriodic(mId)
+
+        // 15. Promo Codes (Merchant Vouchers): promoCodes where merchantId == mId
+        vouchersListener = db.collection("promoCodes")
+            .whereEqualTo("merchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Promo codes query error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    rawVouchers = snapshot.documents.map { parseMerchantVoucher(it) }
+                    computeCombinedVouchers()
+                }
+            }
+
+        // 16. Promo Redemptions: promoRedemptions where merchantId == mId
+        redemptionsListener = db.collection("promoRedemptions")
+            .whereEqualTo("merchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Promo redemptions query error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.map { parsePromoRedemption(it) }
+                    _redemptions.value = list
+                    computeCombinedVouchers()
+                }
+            }
     }
 
     fun ensureCategoriesConfigured(customMid: String? = null) {
@@ -1644,10 +1729,105 @@ class MerchantRepository private constructor(context: Context) {
         riderReviewsListener = null
         receiptSettingsListener?.remove()
         receiptSettingsListener = null
+        vouchersListener?.remove()
+        vouchersListener = null
+        redemptionsListener?.remove()
+        redemptionsListener = null
         bestSellersJob?.cancel()
         bestSellersJob = null
         rawOrders = emptyList()
+        rawVouchers = emptyList()
+        _vouchers.value = emptyList()
+        _redemptions.value = emptyList()
         alertedOrderIds.clear()
+    }
+
+    private fun computeCombinedVouchers() {
+        val reds = _redemptions.value
+        val enriched = rawVouchers.map { v ->
+            val matching = reds.filter { it.promoCode.equals(v.code, ignoreCase = true) }
+            val totalDiscount = matching.sumOf { it.discount }
+            val redCount = matching.size
+            val ordCount = matching.map { it.orderId }.filter { it.isNotBlank() }.distinct().size
+            v.copy(
+                totalDiscountGiven = totalDiscount,
+                redemptionsCount = redCount,
+                ordersCount = ordCount,
+                usedCount = if (redCount > v.usedCount) redCount else v.usedCount
+            )
+        }.sortedByDescending { it.createdAt }
+        _vouchers.value = enriched
+    }
+
+    private fun parseMerchantVoucher(doc: DocumentSnapshot): MerchantVoucher {
+        val code = doc.id.uppercase()
+        val source = doc.getString("source") ?: "merchant"
+        val fundedBy = doc.getString("fundedBy") ?: "merchant"
+        val merchantId = doc.getString("merchantId") ?: ""
+        val title = doc.getString("title") ?: ""
+        val type = doc.getString("type") ?: "percent"
+        val value = FormatUtils.parseDouble(doc.get("value")) ?: 0.0
+        val maxDiscount = FormatUtils.parseDouble(doc.get("maxDiscount"))
+        val minSubtotal = FormatUtils.parseDouble(doc.get("minSubtotal")) ?: 0.0
+        val appliesTo = doc.getString("appliesTo") ?: "store"
+        val itemIds = (doc.get("itemIds") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+        val fulfillment = doc.getString("fulfillment") ?: "both"
+        val services = (doc.get("services") as? List<*>)?.mapNotNull { it?.toString() } ?: listOf("food")
+        val startsAt = FormatUtils.parseTimestamp(doc.get("startsAt"))
+        val expiresAt = FormatUtils.parseTimestamp(doc.get("expiresAt"))
+        val usageLimit = FormatUtils.parseInt(doc.get("usageLimit"))
+        val perUserLimit = FormatUtils.parseInt(doc.get("perUserLimit")) ?: 1
+        val usedCount = FormatUtils.parseInt(doc.get("usedCount")) ?: 0
+        val active = doc.getBoolean("active") ?: true
+        val visibility = doc.getString("visibility") ?: "public"
+        val createdAt = FormatUtils.parseTimestamp(doc.get("createdAt")) ?: System.currentTimeMillis()
+        val updatedAt = FormatUtils.parseTimestamp(doc.get("updatedAt")) ?: System.currentTimeMillis()
+
+        return MerchantVoucher(
+            code = code,
+            source = source,
+            fundedBy = fundedBy,
+            merchantId = merchantId,
+            title = title,
+            type = type,
+            value = value,
+            maxDiscount = maxDiscount,
+            minSubtotal = minSubtotal,
+            appliesTo = appliesTo,
+            itemIds = itemIds,
+            fulfillment = fulfillment,
+            services = services,
+            startsAt = startsAt,
+            expiresAt = expiresAt,
+            usageLimit = usageLimit,
+            perUserLimit = perUserLimit,
+            usedCount = usedCount,
+            active = active,
+            visibility = visibility,
+            createdAt = createdAt,
+            updatedAt = updatedAt
+        )
+    }
+
+    private fun parsePromoRedemption(doc: DocumentSnapshot): PromoRedemption {
+        val id = doc.id
+        val promoCode = (doc.getString("promoCode") ?: doc.getString("code") ?: "").uppercase()
+        val discount = FormatUtils.parseDouble(doc.get("discount")) ?: 0.0
+        val orderId = doc.getString("orderId") ?: ""
+        val merchantId = doc.getString("merchantId") ?: ""
+        val customerUid = doc.getString("customerUid") ?: doc.getString("userId") ?: ""
+        val redeemedAt = FormatUtils.parseTimestamp(doc.get("redeemedAt"))
+            ?: FormatUtils.parseTimestamp(doc.get("createdAt"))
+            ?: System.currentTimeMillis()
+        return PromoRedemption(
+            id = id,
+            promoCode = promoCode,
+            discount = discount,
+            orderId = orderId,
+            merchantId = merchantId,
+            customerUid = customerUid,
+            redeemedAt = redeemedAt
+        )
     }
 
     private fun parseReceiptDesign(doc: DocumentSnapshot?): ReceiptDesign {
@@ -2467,6 +2647,7 @@ class MerchantRepository private constructor(context: Context) {
         val data = mapOf(
             "status" to PlatformOrderStatuses.REJECTED,
             "rejectReason" to reason.trim(),
+            "rejectedAt" to FieldValue.serverTimestamp(),
             "statusHistory" to FieldValue.arrayUnion(
                 mapOf(
                     "status" to PlatformOrderStatuses.REJECTED,
@@ -2581,6 +2762,7 @@ class MerchantRepository private constructor(context: Context) {
 
         val updateData = mutableMapOf<String, Any>(
             "status" to PlatformOrderStatuses.READY,
+            "readyAt" to FieldValue.serverTimestamp(),
             "statusHistory" to FieldValue.arrayUnion(
                 mapOf(
                     "status" to PlatformOrderStatuses.READY,
@@ -4095,6 +4277,249 @@ class MerchantRepository private constructor(context: Context) {
         db.collection("changeRequests").document(reqId).set(data)
             .addOnSuccessListener { onResult(true, "Change request submitted to admin") }
             .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to submit request") }
+    }
+
+    // --- Merchant Vouchers (promoCodes/{CODE}) ---
+
+    fun checkPromoCodeExists(
+        code: String,
+        onResult: (exists: Boolean, error: String?) -> Unit
+    ) {
+        val db = firestore ?: return onResult(false, "Database unavailable")
+        val cleanCode = code.trim().uppercase()
+        if (cleanCode.length < 4 || cleanCode.length > 16) {
+            return onResult(false, "Code must be between 4 and 16 characters")
+        }
+        db.collection("promoCodes").document(cleanCode).get()
+            .addOnSuccessListener { doc ->
+                onResult(doc.exists(), null)
+            }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to verify promo code")
+            }
+    }
+
+    fun saveVoucher(
+        voucher: MerchantVoucher,
+        isNew: Boolean,
+        onResult: (success: Boolean, error: String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant")
+        val db = firestore ?: return onResult(false, "Database unavailable")
+        val cleanCode = voucher.code.trim().uppercase()
+        if (cleanCode.length < 4 || cleanCode.length > 16) {
+            return onResult(false, "Code must be between 4 and 16 characters")
+        }
+        if (voucher.title.trim().isBlank()) {
+            return onResult(false, "Title is required")
+        }
+        if (voucher.value <= 0) {
+            return onResult(false, "Discount value must be greater than 0")
+        }
+        if (voucher.type.equals("percent", ignoreCase = true) && voucher.value > 100) {
+            return onResult(false, "Percent discount cannot exceed 100%")
+        }
+
+        val isFood = _settings.value.businessType == BusinessType.FOOD ||
+                _settings.value.type.contains("food", ignoreCase = true)
+        val defaultService = if (isFood) "food" else "convenience"
+        val servicesList = if (voucher.services.isNotEmpty()) voucher.services else listOf(defaultService)
+
+        val docRef = db.collection("promoCodes").document(cleanCode)
+
+        fun writeVoucherData(targetUsedCount: Int, targetCreatedAt: Long) {
+            val data = hashMapOf<String, Any?>(
+                "source" to "merchant",
+                "fundedBy" to "merchant",
+                "merchantId" to mId,
+                "title" to voucher.title.trim(),
+                "type" to if (voucher.type.equals("fixed", ignoreCase = true)) "fixed" else "percent",
+                "value" to voucher.value,
+                "maxDiscount" to if (voucher.type.equals("percent", ignoreCase = true)) voucher.maxDiscount else null,
+                "minSubtotal" to voucher.minSubtotal.coerceAtLeast(0.0),
+                "appliesTo" to if (voucher.appliesTo.equals("items", ignoreCase = true)) "items" else "store",
+                "itemIds" to if (voucher.appliesTo.equals("items", ignoreCase = true)) voucher.itemIds else emptyList<String>(),
+                "fulfillment" to when (voucher.fulfillment.lowercase()) {
+                    "delivery" -> "delivery"
+                    "pickup" -> "pickup"
+                    else -> "both"
+                },
+                "services" to servicesList,
+                "startsAt" to voucher.startsAt,
+                "expiresAt" to voucher.expiresAt,
+                "usageLimit" to voucher.usageLimit,
+                "perUserLimit" to voucher.perUserLimit.coerceAtLeast(1),
+                "usedCount" to targetUsedCount,
+                "active" to voucher.active,
+                "visibility" to if (voucher.visibility.equals("private", ignoreCase = true)) "private" else "public",
+                "createdAt" to targetCreatedAt,
+                "updatedAt" to System.currentTimeMillis()
+            )
+
+            docRef.set(data, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onResult(true, null)
+                }
+                .addOnFailureListener { ex ->
+                    onResult(false, ex.localizedMessage ?: "Failed to save voucher")
+                }
+        }
+
+        if (isNew) {
+            // Confirm code uniqueness before saving
+            docRef.get().addOnSuccessListener { existingDoc ->
+                if (existingDoc.exists()) {
+                    onResult(false, "Voucher code '$cleanCode' already exists. Please choose a different code.")
+                } else {
+                    writeVoucherData(targetUsedCount = 0, targetCreatedAt = System.currentTimeMillis())
+                }
+            }.addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to verify code uniqueness")
+            }
+        } else {
+            // Keep existing usedCount and createdAt
+            docRef.get().addOnSuccessListener { existingDoc ->
+                val existingUsed = FormatUtils.parseInt(existingDoc.get("usedCount")) ?: voucher.usedCount
+                val existingCreated = FormatUtils.parseTimestamp(existingDoc.get("createdAt")) ?: voucher.createdAt
+                writeVoucherData(targetUsedCount = existingUsed, targetCreatedAt = existingCreated)
+            }.addOnFailureListener {
+                writeVoucherData(targetUsedCount = voucher.usedCount, targetCreatedAt = voucher.createdAt)
+            }
+        }
+    }
+
+    fun toggleVoucherActive(
+        code: String,
+        active: Boolean,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore ?: return onResult(false, "Database unavailable")
+        val cleanCode = code.trim().uppercase()
+        db.collection("promoCodes").document(cleanCode)
+            .update("active", active, "updatedAt", System.currentTimeMillis())
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to update voucher status") }
+    }
+
+    fun deleteVoucher(
+        code: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore ?: return onResult(false, "Database unavailable")
+        val cleanCode = code.trim().uppercase()
+        val docRef = db.collection("promoCodes").document(cleanCode)
+        docRef.get().addOnSuccessListener { doc ->
+            if (!doc.exists()) {
+                return@addOnSuccessListener onResult(true, null)
+            }
+            val usedCount = FormatUtils.parseInt(doc.get("usedCount")) ?: 0
+            if (usedCount > 0) {
+                return@addOnSuccessListener onResult(false, "Voucher has already been redeemed $usedCount times and cannot be deleted. Deactivate it instead.")
+            }
+            docRef.delete()
+                .addOnSuccessListener { onResult(true, null) }
+                .addOnFailureListener { ex -> onResult(false, ex.localizedMessage ?: "Failed to delete voucher") }
+        }.addOnFailureListener { ex ->
+            onResult(false, ex.localizedMessage ?: "Failed to check voucher before delete")
+        }
+    }
+
+    // Memory cache for historical customer status: key = "$merchantId:$customerId:$periodStartMs" -> Boolean
+    private val customerPriorDeliveredCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    fun checkCustomerHasPriorDeliveredOrder(
+        merchantId: String,
+        customerId: String,
+        periodStartMs: Long,
+        onResult: (hasPriorDelivered: Boolean, missingIndexLink: String?) -> Unit
+    ) {
+        if (customerId.isBlank()) {
+            onResult(false, null)
+            return
+        }
+
+        val cacheKey = "$merchantId:$customerId:$periodStartMs"
+        val cached = customerPriorDeliveredCache[cacheKey]
+        if (cached != null) {
+            onResult(cached, null)
+            return
+        }
+
+        // First check in-memory loaded orders if any order exists before periodStartMs
+        val localPrior = _orders.value.any { ord ->
+            ord.merchantId == merchantId &&
+            ord.effectiveCustomerId == customerId &&
+            ord.placedAtTimestamp < periodStartMs &&
+            ord.isDeliveredOrCompleted
+        }
+        if (localPrior) {
+            customerPriorDeliveredCache[cacheKey] = true
+            onResult(true, null)
+            return
+        }
+
+        val db = firestore
+        if (db == null) {
+            onResult(false, null)
+            return
+        }
+
+        // Query Firestore: orders where merchantId == shop and customerId == X and createdAt < periodStart, ordered by createdAt descending, limit 5
+        val periodDate = java.util.Date(periodStartMs)
+        val periodTimestamp = Timestamp(periodDate)
+
+        db.collection("orders")
+            .whereEqualTo("merchantId", merchantId)
+            .whereEqualTo("customerId", customerId)
+            .whereLessThan("createdAt", periodTimestamp)
+            .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+            .limit(5)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val hasDelivered = snapshot.documents.any { doc ->
+                    val statusStr = doc.getString("status") ?: ""
+                    statusStr.equals("Delivered", ignoreCase = true) ||
+                    statusStr.equals("Completed", ignoreCase = true) ||
+                    statusStr.equals(PlatformOrderStatuses.DELIVERED, ignoreCase = true) ||
+                    statusStr.equals(PlatformOrderStatuses.COMPLETED, ignoreCase = true)
+                }
+                customerPriorDeliveredCache[cacheKey] = hasDelivered
+                onResult(hasDelivered, null)
+            }
+            .addOnFailureListener { ex ->
+                val msg = ex.message ?: ""
+                var indexLink: String? = null
+                if (msg.contains("index", ignoreCase = true) || msg.contains("FAILED_PRECONDITION", ignoreCase = true)) {
+                    Log.w("MerchantRepo", "Firestore composite index missing: $msg")
+                    val match = Regex("""https://console\.firebase\.google\.com[^\s]+""").find(msg)
+                    indexLink = match?.value
+                }
+                // Fallback: query without inequality/orderBy to avoid index requirement
+                db.collection("orders")
+                    .whereEqualTo("merchantId", merchantId)
+                    .whereEqualTo("customerId", customerId)
+                    .limit(20)
+                    .get()
+                    .addOnSuccessListener { fallbackSnap ->
+                        val hasDelivered = fallbackSnap.documents.any { doc ->
+                            val createdMs = FormatUtils.parseTimestamp(doc.get("createdAt"))
+                                ?: FormatUtils.parseTimestamp(doc.get("placedAtTimestamp")) ?: 0L
+                            val statusStr = doc.getString("status") ?: ""
+                            createdMs < periodStartMs && (
+                                statusStr.equals("Delivered", ignoreCase = true) ||
+                                statusStr.equals("Completed", ignoreCase = true) ||
+                                statusStr.equals(PlatformOrderStatuses.DELIVERED, ignoreCase = true) ||
+                                statusStr.equals(PlatformOrderStatuses.COMPLETED, ignoreCase = true)
+                            )
+                        }
+                        customerPriorDeliveredCache[cacheKey] = hasDelivered
+                        onResult(hasDelivered, indexLink)
+                    }
+                    .addOnFailureListener {
+                        customerPriorDeliveredCache[cacheKey] = false
+                        onResult(false, indexLink)
+                    }
+            }
     }
 
     companion object {

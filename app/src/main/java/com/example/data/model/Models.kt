@@ -241,8 +241,29 @@ data class Order(
     val deliveryOption: String = "Priority",
     val dispatchHoldMinutes: Int = 0,
     val isSplitChild: Boolean = false,
-    val splitOut: Boolean = false
+    val splitOut: Boolean = false,
+    val promo: OrderPromo? = null,
+    val customerId: String = "",
+    val rejectedAt: Long? = null,
+    val statusHistory: List<Map<String, Any?>> = emptyList()
 ) {
+    val effectiveMerchantPromoDiscount: Double
+        get() = if (promo != null && promo.fundedBy.equals("merchant", ignoreCase = true)) promo.discount else 0.0
+
+    val netSales: Double
+        get() = (subtotal - effectiveMerchantPromoDiscount).coerceAtLeast(0.0)
+
+    val prepDurationMinutes: Double?
+        get() = if (readyAt != null && acceptedAt != null && readyAt >= acceptedAt) {
+            (readyAt - acceptedAt) / 60000.0
+        } else null
+
+    val isDeliveredOrCompleted: Boolean
+        get() = status == OrderStatus.DELIVERED || status == OrderStatus.COMPLETED
+
+    val effectiveCustomerId: String
+        get() = customerId.ifBlank { customerPhone.ifBlank { customerName.trim().lowercase() } }
+
     val effectiveMerchantNote: String
         get() {
             if (note.isNotBlank()) return note.trim()
@@ -754,6 +775,77 @@ data class PromoDeal(
     val endDate: String = "",
     val isActive: Boolean = true
 )
+
+data class OrderPromo(
+    val code: String = "",
+    val discount: Double = 0.0,
+    val fundedBy: String = "merchant",
+    val merchantId: String = ""
+)
+
+data class PromoRedemption(
+    val id: String = "",
+    val promoCode: String = "",
+    val discount: Double = 0.0,
+    val orderId: String = "",
+    val merchantId: String = "",
+    val customerUid: String = "",
+    val redeemedAt: Long = System.currentTimeMillis()
+)
+
+data class MerchantVoucher(
+    val code: String = "",
+    val source: String = "merchant",
+    val fundedBy: String = "merchant",
+    val merchantId: String = "",
+    val title: String = "",
+    val type: String = "percent", // "percent" | "fixed"
+    val value: Double = 10.0,
+    val maxDiscount: Double? = null,
+    val minSubtotal: Double = 0.0,
+    val appliesTo: String = "store", // "store" | "items"
+    val itemIds: List<String> = emptyList(),
+    val fulfillment: String = "both", // "both" | "delivery" | "pickup"
+    val services: List<String> = listOf("food"),
+    val startsAt: Long? = null,
+    val expiresAt: Long? = null,
+    val usageLimit: Int? = null,
+    val perUserLimit: Int = 1,
+    val usedCount: Int = 0,
+    val active: Boolean = true,
+    val visibility: String = "public", // "public" | "private"
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val totalDiscountGiven: Double = 0.0,
+    val redemptionsCount: Int = 0,
+    val ordersCount: Int = 0
+) {
+    val isPublic: Boolean get() = visibility.equals("public", ignoreCase = true)
+    val isExpired: Boolean get() = expiresAt != null && expiresAt > 0 && expiresAt <= System.currentTimeMillis()
+    val isEffectiveActive: Boolean get() = active && !isExpired
+
+    val discountDisplay: String
+        get() = if (type.equals("percent", ignoreCase = true)) {
+            val maxStr = if (maxDiscount != null && maxDiscount > 0.0) " (max ₱${com.example.util.FormatUtils.formatCurrency(maxDiscount)})" else ""
+            "${value.toInt()}% off$maxStr"
+        } else {
+            "₱${com.example.util.FormatUtils.formatCurrency(value)} off"
+        }
+
+    val usesDisplay: String
+        get() = if (usageLimit != null && usageLimit > 0) {
+            "$usedCount / $usageLimit"
+        } else {
+            "$usedCount used"
+        }
+
+    val expiryDisplay: String
+        get() = if (expiresAt != null && expiresAt > 0) {
+            "Expires ${com.example.util.FormatUtils.formatDateOnly(expiresAt)}"
+        } else {
+            "No expiry"
+        }
+}
 
 data class Payout(
     val id: String = "",

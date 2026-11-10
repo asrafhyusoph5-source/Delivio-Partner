@@ -173,7 +173,8 @@ fun OrderDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 12.dp, bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     when (order.status) {
@@ -947,6 +948,46 @@ fun OrderDetailScreen(
                         )
                     }
 
+                    if (order.promo != null && order.promo.discount > 0.0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Voucher (${order.promo.code})",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "-₱${FormatUtils.formatCurrency(order.promo.discount)}",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Net Sales",
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = FormatUtils.formatCurrency(order.netSales),
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = customColors.accent
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Payment Method", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -954,6 +995,11 @@ fun OrderDetailScreen(
                     }
                 }
             }
+
+            // Extra bottom padding (navigation bar height + 96 dp) so last card scrolls fully above bottom bar
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val navBarBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+            Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
         }
     }
 }
