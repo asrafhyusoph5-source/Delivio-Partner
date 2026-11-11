@@ -1228,14 +1228,23 @@ class MerchantRepository private constructor(context: Context) {
                                     id = (cMap["id"] as? String) ?: java.util.UUID.randomUUID().toString(),
                                     name = (cMap["name"] as? String) ?: "",
                                     price = FormatUtils.parseDouble(cMap["price"]) ?: 0.0,
-                                    available = (cMap["available"] as? Boolean) ?: (cMap["inStock"] as? Boolean) ?: true
+                                    available = (cMap["available"] as? Boolean) ?: (cMap["inStock"] as? Boolean) ?: true,
+                                    popular = (cMap["popular"] as? Boolean) ?: false
                                 )
                             }
+                            val rawCustom = sMap["customName"]?.toString()?.takeIf { it.isNotBlank() && it != "true" && it != "false" }
+                            val rawSubcatName = sMap["subcategoryName"]?.toString()?.takeIf { it.isNotBlank() }
+                            val resolvedName = ((sMap["name"] as? String)?.takeIf { it.isNotBlank() })
+                                ?: rawCustom
+                                ?: rawSubcatName
+                                ?: "Set ${sIdx + 1}"
+
                             ProductSet(
                                 id = (sMap["id"] as? String) ?: java.util.UUID.randomUUID().toString(),
-                                name = (sMap["name"] as? String) ?: "",
-                                subcategoryId = sMap["subcategoryId"] as? String,
-                                customName = (sMap["customName"] as? Boolean) ?: (sMap["subcategoryId"] == null && (sMap["name"] as? String)?.isNotBlank() == true),
+                                name = resolvedName,
+                                subcategoryId = null,
+                                subcategoryName = null,
+                                customName = resolvedName,
                                 required = (sMap["required"] as? Boolean) ?: true,
                                 minSelect = FormatUtils.parseInt(sMap["minSelect"]) ?: if ((sMap["required"] as? Boolean) == false) 0 else 1,
                                 maxSelect = FormatUtils.parseInt(sMap["maxSelect"]) ?: 1,
@@ -3692,11 +3701,13 @@ class MerchantRepository private constructor(context: Context) {
         }
 
         val setsList = item.sets.mapIndexed { idx, s ->
+            val typedName = s.name.trim()
             mutableMapOf<String, Any?>(
                 "id" to s.id.ifBlank { UUID.randomUUID().toString() },
-                "name" to s.name.trim(),
-                "subcategoryId" to s.subcategoryId,
-                "customName" to s.customName,
+                "name" to typedName,
+                "customName" to typedName,
+                "subcategoryId" to null,
+                "subcategoryName" to null,
                 "required" to s.required,
                 "minSelect" to if (s.required) s.minSelect.coerceIn(1, s.maxSelect) else 0,
                 "maxSelect" to s.maxSelect,
@@ -3706,7 +3717,8 @@ class MerchantRepository private constructor(context: Context) {
                         "id" to c.id.ifBlank { UUID.randomUUID().toString() },
                         "name" to c.name.trim(),
                         "price" to c.price,
-                        "available" to c.available
+                        "available" to c.available,
+                        "popular" to c.popular
                     )
                 }
             )

@@ -601,14 +601,16 @@ data class ProductSetChoice(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
     val price: Double = 0.0,
-    val available: Boolean = true
+    val available: Boolean = true,
+    val popular: Boolean = false
 )
 
 data class ProductSet(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
     val subcategoryId: String? = null,
-    val customName: Boolean = false,
+    val subcategoryName: String? = null,
+    val customName: String = "",
     val required: Boolean = true,
     val minSelect: Int = 1,
     val maxSelect: Int = 1,
