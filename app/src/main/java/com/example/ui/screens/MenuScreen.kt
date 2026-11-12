@@ -844,12 +844,25 @@ private fun ProductCard(
                     maxLines = 1
                 )
 
-                Text(
-                    text = FormatUtils.formatCurrency(item.price),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 14.sp,
-                    color = if (item.inStock) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = FormatUtils.formatCurrency(item.price),
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp,
+                        color = if (item.inStock) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (businessType == BusinessType.CONVENIENCE && item.itemSize.isNotBlank()) {
+                        Text(
+                            text = "/${item.itemSize.trim()}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 

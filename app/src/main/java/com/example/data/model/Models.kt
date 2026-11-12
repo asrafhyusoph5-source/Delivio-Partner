@@ -739,6 +739,99 @@ data class ShopMenu(
     }
 }
 
+data class ProductAvailability(
+    val days: List<String> = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun"),
+    val start: String = "00:00",
+    val end: String = "23:59",
+    val dateFrom: String? = null,
+    val dateTo: String? = null
+) {
+    fun isOvernight(): Boolean {
+        if (start.isBlank() || end.isBlank()) return false
+        val (sH, sM) = start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else return false }
+        val (eH, eM) = end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else return false }
+        return (eH * 60 + eM) < (sH * 60 + sM)
+    }
+
+    fun isAllDay(): Boolean {
+        return (start == "00:00" && (end == "23:59" || end == "24:00")) || (start.isBlank() && end.isBlank())
+    }
+
+    fun isAvailableNow(currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
+        if (days.isEmpty()) return false
+
+        val tz = try {
+            java.util.TimeZone.getTimeZone(timeZoneId)
+        } catch (_: Exception) {
+            java.util.TimeZone.getTimeZone("Asia/Manila")
+        }
+        val cal = java.util.Calendar.getInstance(tz).apply {
+            timeInMillis = currentTimeMillis
+        }
+
+        // Check date range limits if set
+        val todayStr = "%04d-%02d-%02d".format(
+            cal.get(java.util.Calendar.YEAR),
+            cal.get(java.util.Calendar.MONTH) + 1,
+            cal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+        if (!dateFrom.isNullOrBlank() && todayStr < dateFrom) return false
+        if (!dateTo.isNullOrBlank() && todayStr > dateTo) return false
+
+        fun dayToKey(calDay: Int): String = when (calDay) {
+            java.util.Calendar.MONDAY -> "mon"
+            java.util.Calendar.TUESDAY -> "tue"
+            java.util.Calendar.WEDNESDAY -> "wed"
+            java.util.Calendar.THURSDAY -> "thu"
+            java.util.Calendar.FRIDAY -> "fri"
+            java.util.Calendar.SATURDAY -> "sat"
+            java.util.Calendar.SUNDAY -> "sun"
+            else -> "mon"
+        }
+
+        val todayKey = dayToKey(cal.get(java.util.Calendar.DAY_OF_WEEK))
+        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+
+        val (sH, sM) = start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 0 to 0 }
+        val (eH, eM) = end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 23 to 59 }
+        val startMin = sH * 60 + sM
+        val endMin = eH * 60 + eM
+
+        return if (!isOvernight()) {
+            todayKey in days && currentMinutes in startMin..endMin
+        } else {
+            // Overnight: e.g. 20:00 to 04:00
+            val matchToday = todayKey in days && currentMinutes >= startMin
+            val calYesterday = (cal.clone() as java.util.Calendar).apply {
+                add(java.util.Calendar.DATE, -1)
+            }
+            val yesterdayKey = dayToKey(calYesterday.get(java.util.Calendar.DAY_OF_WEEK))
+            val matchYesterday = yesterdayKey in days && currentMinutes <= endMin
+            matchToday || matchYesterday
+        }
+    }
+
+    fun summary(): String {
+        val dayLabel = when {
+            days.size == 7 -> "Every day"
+            days.size == 5 && days.containsAll(listOf("mon", "tue", "wed", "thu", "fri")) -> "Weekdays"
+            days.size == 2 && days.containsAll(listOf("sat", "sun")) -> "Weekends"
+            days.isEmpty() -> "No days selected"
+            else -> days.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
+        }
+        val timeLabel = if (isAllDay()) "All day" else "${MenuSchedule.formatTime12h(start)} - ${MenuSchedule.formatTime12h(end)}"
+        val dateLabel = if (!dateFrom.isNullOrBlank() && !dateTo.isNullOrBlank()) {
+            ", $dateFrom to $dateTo"
+        } else if (!dateFrom.isNullOrBlank()) {
+            ", from $dateFrom"
+        } else if (!dateTo.isNullOrBlank()) {
+            ", until $dateTo"
+        } else ""
+
+        return "Available $dayLabel, $timeLabel$dateLabel"
+    }
+}
+
 data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
@@ -771,7 +864,11 @@ data class MenuItem(
     val trackStock: Boolean = false,
     val stockCount: Int = 50,
     val lowStockAt: Int = 5,
-    val discountPercentage: Double? = null
+    val discountPercentage: Double? = null,
+    // Item size (convenience shops only, e.g. "190ml", "225g")
+    val itemSize: String = "",
+    // Per-product custom availability schedule (days, hours, date window)
+    val availability: ProductAvailability? = null
 ) {
     val available: Boolean get() = inStock
 
@@ -787,6 +884,12 @@ data class MenuItem(
 
     fun isAvailableNow(allMenus: List<ShopMenu>, currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
         if (!inStock) return false
+
+        // Check product's own availability schedule if set
+        if (availability != null && !availability.isAvailableNow(currentTimeMillis, timeZoneId)) {
+            return false
+        }
+
         val effIds = getEffectiveMenuIds()
         val relevantMenus = allMenus.filter { it.id in effIds }
         if (relevantMenus.isEmpty()) {

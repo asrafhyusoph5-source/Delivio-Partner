@@ -101,7 +101,12 @@ fun MerchantRightDrawer(
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenStoreProfile() }
+                            .padding(6.dp)
+                            .testTag("drawer_header_profile_btn"),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Shop Logo
@@ -132,7 +137,25 @@ fun MerchantRightDrawer(
                                 overflow = TextOverflow.Ellipsis
                             )
 
-                            Spacer(modifier = Modifier.height(4.dp))
+                            // View store profile with chevron
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 1.dp, bottom = 3.dp)
+                            ) {
+                                Text(
+                                    text = "View store profile",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF4A4A4A)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = Color(0xFF4A4A4A),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
 
                             // FIVE STARS ONLY (Tapping opens Reviews)
                             val ratingLabel = if (reviewsCount > 0) {
@@ -402,15 +425,7 @@ fun MerchantRightDrawer(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
 
-                // Store Profile
-                DrawerListItem(
-                    icon = Icons.Default.Storefront,
-                    title = "Store Profile",
-                    onClick = onOpenStoreProfile,
-                    modifier = Modifier.testTag("drawer_item_store_profile")
-                )
 
                 // Settings
                 DrawerListItem(

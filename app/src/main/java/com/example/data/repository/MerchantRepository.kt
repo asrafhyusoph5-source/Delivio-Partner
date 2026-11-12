@@ -1255,6 +1255,23 @@ class MerchantRepository private constructor(context: Context) {
                         val rawMenuIds = (doc.get("menuIds") as? List<*>)?.mapNotNull { it?.toString() }?.filter { it.isNotBlank() }
                         val parsedMenuIds = if (!rawMenuIds.isNullOrEmpty()) rawMenuIds else listOf("main")
 
+                        val rawAvailMap = doc.get("availability") as? Map<*, *>
+                        val parsedAvail = if (rawAvailMap != null) {
+                            val daysList = (rawAvailMap["days"] as? List<*>)?.mapNotNull { it?.toString()?.lowercase() }
+                                ?: listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+                            val startStr = (rawAvailMap["start"] as? String) ?: "00:00"
+                            val endStr = (rawAvailMap["end"] as? String) ?: "23:59"
+                            val dateFromStr = rawAvailMap["dateFrom"] as? String
+                            val dateToStr = rawAvailMap["dateTo"] as? String
+                            ProductAvailability(
+                                days = daysList,
+                                start = startStr,
+                                end = endStr,
+                                dateFrom = dateFromStr,
+                                dateTo = dateToStr
+                            )
+                        } else null
+
                         MenuItem(
                             id = doc.id,
                             merchantId = mId,
@@ -1278,7 +1295,9 @@ class MerchantRepository private constructor(context: Context) {
                             unit = doc.getString("unit") ?: "1 pc",
                             trackStock = doc.getBoolean("trackStock") ?: false,
                             stockCount = doc.getLong("stockCount")?.toInt() ?: 50,
-                            lowStockAt = doc.getLong("lowStockAt")?.toInt() ?: doc.getLong("lowStockAlertThreshold")?.toInt() ?: 5
+                            lowStockAt = doc.getLong("lowStockAt")?.toInt() ?: doc.getLong("lowStockAlertThreshold")?.toInt() ?: 5,
+                            itemSize = doc.getString("itemSize") ?: "",
+                            availability = parsedAvail
                         )
                     }
                     _menuItems.value = items
@@ -3748,6 +3767,16 @@ class MerchantRepository private constructor(context: Context) {
             "trackStock" to item.trackStock,
             "stockCount" to item.stockCount,
             "lowStockAt" to item.lowStockAt,
+            "itemSize" to item.itemSize.trim(),
+            "availability" to item.availability?.let { avail ->
+                mapOf(
+                    "days" to avail.days,
+                    "start" to avail.start,
+                    "end" to avail.end,
+                    "dateFrom" to avail.dateFrom,
+                    "dateTo" to avail.dateTo
+                )
+            },
             "hasSets" to item.sets.isNotEmpty(),
             "sets" to setsList
         )

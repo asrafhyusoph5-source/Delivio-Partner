@@ -71,6 +71,7 @@ private class EditableSet(
     var minSelect by mutableIntStateOf(initialMinSelect)
     var maxSelect by mutableIntStateOf(initialMaxSelect)
     var wasTouched by mutableStateOf(false)
+    var showAdvancedMin by mutableStateOf(false)
     val choices = mutableStateListOf<EditableChoice>().apply { addAll(initialChoices) }
 }
 
@@ -122,6 +123,7 @@ fun ProductEditScreen(
     // 1. Basic info
     var name by remember { mutableStateOf(item.name) }
     var priceText by remember { mutableStateOf(if (item.price > 0.0) item.price.toString() else "0") }
+    var itemSizeText by remember { mutableStateOf(item.itemSize) }
     var selectedCategoryName by remember { mutableStateOf(initialCatName) }
     var selectedCategoryId by remember {
         mutableStateOf(
@@ -151,12 +153,32 @@ fun ProductEditScreen(
     // 3. Description
     var description by remember { mutableStateOf(item.description) }
 
-    // 4. Menus
+    // 4. Menus & Availability
     val initialSelectedMenuIds = remember(item) {
         val eff = item.getEffectiveMenuIds()
         eff.toSet().ifEmpty { setOf("main") }
     }
     var selectedMenuIds by remember { mutableStateOf(initialSelectedMenuIds) }
+
+    // Availability: Always available (null) vs Set days and times
+    val initialAvailability = item.availability
+    var availabilityMode by remember { mutableStateOf(if (initialAvailability != null) "custom" else "always") }
+    var availDays by remember {
+        mutableStateOf(
+            initialAvailability?.days?.toSet() ?: setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        )
+    }
+    var availStartTime24 by remember { mutableStateOf(initialAvailability?.start ?: "00:00") }
+    var availEndTime24 by remember { mutableStateOf(initialAvailability?.end ?: "23:59") }
+    var limitToDates by remember {
+        mutableStateOf(!initialAvailability?.dateFrom.isNullOrBlank() || !initialAvailability?.dateTo.isNullOrBlank())
+    }
+    var availDateFrom by remember { mutableStateOf(initialAvailability?.dateFrom ?: "") }
+    var availDateTo by remember { mutableStateOf(initialAvailability?.dateTo ?: "") }
+    var showTimePickerForAvailStart by remember { mutableStateOf(false) }
+    var showTimePickerForAvailEnd by remember { mutableStateOf(false) }
+    var showDatePickerForFrom by remember { mutableStateOf(false) }
+    var showDatePickerForTo by remember { mutableStateOf(false) }
 
     // 5. Options (Sets)
     val setsList = remember {
@@ -404,6 +426,16 @@ fun ProductEditScreen(
 
                                 val finalMenuIds = selectedMenuIds.ifEmpty { setOf("main") }.toList()
 
+                                val finalAvailability = if (availabilityMode == "custom") {
+                                    ProductAvailability(
+                                        days = availDays.toList(),
+                                        start = availStartTime24,
+                                        end = availEndTime24,
+                                        dateFrom = if (limitToDates && availDateFrom.isNotBlank()) availDateFrom else null,
+                                        dateTo = if (limitToDates && availDateTo.isNotBlank()) availDateTo else null
+                                    )
+                                } else null
+
                                 val updated = item.copy(
                                     name = name.trim().ifBlank { "Untitled Item" },
                                     description = description.trim(),
@@ -419,6 +451,8 @@ fun ProductEditScreen(
                                     sku = if (businessType == BusinessType.CONVENIENCE) sku.trim() else "",
                                     barcode = if (businessType == BusinessType.CONVENIENCE) barcode.trim() else "",
                                     unit = if (businessType == BusinessType.CONVENIENCE) unit.trim().ifBlank { "1 pc" } else "1 pc",
+                                    itemSize = if (businessType == BusinessType.CONVENIENCE) itemSizeText.trim() else "",
+                                    availability = finalAvailability,
                                     trackStock = trackStock,
                                     stockCount = parsedStock,
                                     lowStockAt = parsedThreshold,
@@ -470,7 +504,100 @@ fun ProductEditScreen(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // SECTION 1: Basic info
+            // SECTION 1: Photo (first, at the very top)
+            SectionCard(
+                title = "Photo",
+                helpText = "Upload a high quality HTTPS image URL for this dish or product.",
+                onHelpClick = { activeHelpDialogText = it }
+            ) {
+                // Large square preview at top (neutral icon placeholder when empty)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (imageUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = imageUrl.trim(),
+                            contentDescription = "Photo Preview",
+                            contentScale = ContentScale.Crop,
+                            onError = { imageLoadFailed = true },
+                            onSuccess = { imageLoadFailed = false },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (businessType == BusinessType.FOOD) Icons.Default.Restaurant else Icons.Default.ShoppingBag,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = "No photo yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Image URL field
+                OutlinedTextField(
+                    value = imageUrl,
+                    onValueChange = {
+                        imageUrl = it
+                        imageLoadFailed = false
+                    },
+                    label = { Text("Image URL (HTTPS)") },
+                    placeholder = { Text("https://example.com/item.jpg") },
+                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("menu_item_image_url_input")
+                )
+
+                // Small status chip (OK or Could not load)
+                if (imageUrl.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (imageLoadFailed) StatusClosedRed.copy(alpha = 0.15f) else StatusOpenGreen.copy(alpha = 0.15f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(if (imageLoadFailed) StatusClosedRed else StatusOpenGreen)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (imageLoadFailed) "Could not load" else "OK",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (imageLoadFailed) StatusClosedRed else StatusOpenGreen
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 2: Basic info
             SectionCard(
                 title = "Basic info",
                 helpText = "Product details that identify this item on your storefront: name, price, main category, and shop category class.",
@@ -540,6 +667,72 @@ fun ProductEditScreen(
                                             ?: catName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
                                         catExpanded = false
                                     }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Item size (CONVENIENCE SHOPS ONLY) directly under Price
+                if (businessType == BusinessType.CONVENIENCE) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = itemSizeText,
+                            onValueChange = { if (it.length <= 20) itemSizeText = it },
+                            label = { Text("Item size (optional)") },
+                            placeholder = { Text("e.g. 190ml, 225g, 12pcs") },
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("convenience_item_size_input")
+                        )
+
+                        // Small unit chips (ml, g, kg, L, pcs, pack)
+                        val unitChips = listOf("ml", "g", "kg", "L", "pcs", "pack")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            unitChips.forEach { u ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        val current = itemSizeText.trim()
+                                        val next = if (current.isEmpty()) u else "$current$u"
+                                        if (next.length <= 20) itemSizeText = next
+                                    },
+                                    label = { Text(u, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+
+                        // Live preview: "₱92.92 /225g"
+                        val priceNum = parsedPrice ?: 0.0
+                        val formattedPrice = FormatUtils.formatCurrency(priceNum)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(
+                                text = "Preview: ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = formattedPrice,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = customColors.accent
+                            )
+                            if (itemSizeText.isNotBlank()) {
+                                Text(
+                                    text = " /${itemSizeText.trim()}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -621,62 +814,6 @@ fun ProductEditScreen(
                 }
             }
 
-            // SECTION 2: Photo
-            SectionCard(
-                title = "Photo",
-                helpText = "Upload a high quality HTTPS image URL for this dish or product.",
-                onHelpClick = { activeHelpDialogText = it }
-            ) {
-                OutlinedTextField(
-                    value = imageUrl,
-                    onValueChange = {
-                        imageUrl = it
-                        imageLoadFailed = false
-                    },
-                    label = { Text("Image URL (HTTPS)") },
-                    placeholder = { Text("https://example.com/item.jpg") },
-                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("menu_item_image_url_input")
-                )
-
-                if (imageUrl.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .border(1.dp, customColors.accentTint, RoundedCornerShape(10.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AsyncImage(
-                                model = imageUrl.trim(),
-                                contentDescription = "Preview",
-                                contentScale = ContentScale.Crop,
-                                onError = { imageLoadFailed = true },
-                                onSuccess = { imageLoadFailed = false },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Live Preview", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                text = if (imageLoadFailed) "Status: Failed to load" else "Status: OK",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = if (imageLoadFailed) StatusClosedRed else StatusOpenGreen
-                            )
-                        }
-                    }
-                }
-            }
-
             // SECTION 3: Description
             SectionCard(
                 title = "Description",
@@ -695,10 +832,10 @@ fun ProductEditScreen(
                 )
             }
 
-            // SECTION 4: Menus
+            // SECTION 4: Menus and availability
             SectionCard(
-                title = "Menus",
-                helpText = "Choose which menus this product will belong to. Products can appear in multiple menus with different schedules.",
+                title = "Menus and availability",
+                helpText = "Choose which menus this product will belong to and set optional product-specific availability hours or date limits.",
                 onHelpClick = { activeHelpDialogText = it }
             ) {
                 Text(
@@ -740,6 +877,276 @@ fun ProductEditScreen(
                                 selectedLabelColor = customColors.accent
                             )
                         )
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Availability Segmented Choice: Always available vs Set days and times
+                Text(
+                    text = "Availability",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = availabilityMode == "always",
+                        onClick = { availabilityMode = "always" },
+                        label = { Text("Always available", fontWeight = if (availabilityMode == "always") FontWeight.Bold else FontWeight.Normal) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = customColors.accentTint,
+                            selectedLabelColor = customColors.accent
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = availabilityMode == "custom",
+                        onClick = { availabilityMode = "custom" },
+                        label = { Text("Set days and times", fontWeight = if (availabilityMode == "custom") FontWeight.Bold else FontWeight.Normal) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = customColors.accentTint,
+                            selectedLabelColor = customColors.accent
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                if (availabilityMode == "custom") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Choose when customers can order this product.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Quick Day Presets
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = availDays.size == 7,
+                                onClick = { availDays = setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun") },
+                                label = { Text("Every day", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = availDays == setOf("mon", "tue", "wed", "thu", "fri"),
+                                onClick = { availDays = setOf("mon", "tue", "wed", "thu", "fri") },
+                                label = { Text("Weekdays", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = availDays == setOf("sat", "sun"),
+                                onClick = { availDays = setOf("sat", "sun") },
+                                label = { Text("Weekends", fontSize = 11.sp) }
+                            )
+                        }
+
+                        // Mon to Sun Day chips
+                        val weekDays = listOf(
+                            "mon" to "Mon",
+                            "tue" to "Tue",
+                            "wed" to "Wed",
+                            "thu" to "Thu",
+                            "fri" to "Fri",
+                            "sat" to "Sat",
+                            "sun" to "Sun"
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            weekDays.forEach { (key, label) ->
+                                val isSelected = availDays.contains(key)
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        availDays = if (isSelected) {
+                                            val next = availDays - key
+                                            if (next.isEmpty()) setOf("mon") else next
+                                        } else {
+                                            availDays + key
+                                        }
+                                    },
+                                    label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = customColors.accent,
+                                        selectedLabelColor = customColors.onAccent
+                                    )
+                                )
+                            }
+                        }
+
+                        // Start time & End time (12-hour, 15-minute steps)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showTimePickerForAvailStart = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("Start time", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = MenuSchedule.formatTime12h(availStartTime24),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = customColors.accent
+                                    )
+                                }
+                            }
+
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showTimePickerForAvailEnd = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("End time", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = MenuSchedule.formatTime12h(availEndTime24),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = customColors.accent
+                                    )
+                                }
+                            }
+                        }
+
+                        // Overnight check & hint
+                        val isOvernightAvail = remember(availStartTime24, availEndTime24) {
+                            val (sH, sM) = availStartTime24.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 0 to 0 }
+                            val (eH, eM) = availEndTime24.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 23 to 59 }
+                            (eH * 60 + eM) < (sH * 60 + sM)
+                        }
+
+                        if (isOvernightAvail) {
+                            Surface(
+                                color = customColors.accentTint.copy(alpha = 0.35f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AccessTime,
+                                        contentDescription = null,
+                                        tint = customColors.accent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Overnight schedule: Ends after midnight on the following day.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = customColors.accent
+                                    )
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                        // Limit to dates switch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Limit to dates", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                Text("Set a seasonal or promotional date range", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(
+                                checked = limitToDates,
+                                onCheckedChange = { limitToDates = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = customColors.accent,
+                                    checkedTrackColor = customColors.accentTint
+                                )
+                            )
+                        }
+
+                        if (limitToDates) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedCard(
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).clickable { showDatePickerForFrom = true }
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("From date", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = availDateFrom.ifBlank { "YYYY-MM-DD" },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (availDateFrom.isNotBlank()) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (availDateFrom.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+
+                                OutlinedCard(
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).clickable { showDatePickerForTo = true }
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("To date", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = availDateTo.ifBlank { "YYYY-MM-DD" },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (availDateTo.isNotBlank()) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (availDateTo.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Summary line: e.g. "Available Mon-Fri, 6:00 AM - 10:00 AM, Nov 20 - Dec 31"
+                        val tempAvail = ProductAvailability(
+                            days = availDays.toList(),
+                            start = availStartTime24,
+                            end = availEndTime24,
+                            dateFrom = if (limitToDates && availDateFrom.isNotBlank()) availDateFrom else null,
+                            dateTo = if (limitToDates && availDateTo.isNotBlank()) availDateTo else null
+                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.EventAvailable, contentDescription = null, tint = customColors.accent, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = tempAvail.summary(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -915,195 +1322,253 @@ fun ProductEditScreen(
                                         modifier = Modifier.fillMaxWidth().testTag("set_name_input_$setIndex")
                                     )
 
-                                    // 3. Required switch with one-line explanation
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                    // 3. Compact Row: Required switch on left + rounded "Up to X" stepper on right
+                                    val maxChoicesCount = maxOf(1, pSet.choices.size)
+
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = "Required",
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Text(
-                                                text = if (pSet.required) "Customers must choose" else "Optional",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Switch(
-                                            checked = pSet.required,
-                                            onCheckedChange = { isReq ->
-                                                pSet.required = isReq
-                                                if (isReq) {
-                                                    pSet.minSelect = maxOf(1, pSet.minSelect)
-                                                    if (pSet.maxSelect < pSet.minSelect) pSet.maxSelect = pSet.minSelect
-                                                } else {
-                                                    pSet.minSelect = 0
-                                                }
-                                            },
-                                            colors = SwitchDefaults.colors(
-                                                checkedThumbColor = customColors.accent,
-                                                checkedTrackColor = customColors.accentTint
-                                            ),
-                                            modifier = Modifier.testTag("set_required_switch_$setIndex")
-                                        )
-                                    }
-
-                                    // Steppers: How many can customers pick?
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                                            .padding(12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Text(
-                                            text = "How many can customers pick?",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold
-                                        )
-
-                                        val maxChoicesCount = maxOf(1, pSet.choices.size)
-
-                                        // Minimum stepper (only active when Required is ON)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "Minimum choices",
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                Text(
-                                                    text = if (pSet.required) "At least 1 when required" else "0 (optional)",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-
-                                            if (pSet.required) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // Left: Required switch
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    modifier = Modifier.weight(1f)
                                                 ) {
-                                                    OutlinedIconButton(
-                                                        onClick = { if (pSet.minSelect > 1) pSet.minSelect -= 1 },
-                                                        enabled = pSet.minSelect > 1,
-                                                        modifier = Modifier.size(32.dp),
-                                                        shape = CircleShape
-                                                    ) {
-                                                        Icon(Icons.Default.Remove, contentDescription = "Decrease minimum", modifier = Modifier.size(16.dp))
-                                                    }
-                                                    Text(
-                                                        text = "${pSet.minSelect}",
-                                                        fontWeight = FontWeight.Bold,
-                                                        style = MaterialTheme.typography.titleMedium,
-                                                        modifier = Modifier.widthIn(min = 24.dp),
-                                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                                    Switch(
+                                                        checked = pSet.required,
+                                                        onCheckedChange = { isReq ->
+                                                            pSet.required = isReq
+                                                            if (isReq) {
+                                                                pSet.minSelect = maxOf(1, pSet.minSelect)
+                                                                if (pSet.maxSelect < pSet.minSelect) pSet.maxSelect = pSet.minSelect
+                                                            } else {
+                                                                pSet.minSelect = 0
+                                                            }
+                                                            // Close advanced min if equal to default
+                                                            if (pSet.minSelect == (if (isReq) 1 else 0)) {
+                                                                pSet.showAdvancedMin = false
+                                                            }
+                                                        },
+                                                        colors = SwitchDefaults.colors(
+                                                            checkedThumbColor = Color(0xFF1A1A1A),
+                                                            checkedTrackColor = customColors.accent,
+                                                            checkedBorderColor = Color(0xFF1A1A1A),
+                                                            uncheckedThumbColor = Color(0xFF757575),
+                                                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                                                        ),
+                                                        modifier = Modifier.testTag("set_required_switch_$setIndex")
                                                     )
-                                                    OutlinedIconButton(
-                                                        onClick = { if (pSet.minSelect < pSet.maxSelect) pSet.minSelect += 1 },
-                                                        enabled = pSet.minSelect < pSet.maxSelect,
-                                                        modifier = Modifier.size(32.dp),
-                                                        shape = CircleShape
-                                                    ) {
-                                                        Icon(Icons.Default.Add, contentDescription = "Increase minimum", modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = "Required",
+                                                            fontWeight = FontWeight.Bold,
+                                                            style = MaterialTheme.typography.bodyMedium
+                                                        )
+                                                        Text(
+                                                            text = if (pSet.required) "Must pick" else "Optional",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
                                                     }
                                                 }
-                                            } else {
+
+                                                // Right: Rounded stepper (minus, "Up to X", plus)
                                                 Surface(
+                                                    shape = RoundedCornerShape(20.dp),
                                                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                                    shape = RoundedCornerShape(8.dp)
+                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                    ) {
+                                                        val minAllowedMax = if (pSet.required) maxOf(1, pSet.minSelect) else 1
+                                                        IconButton(
+                                                            onClick = {
+                                                                if (pSet.maxSelect > minAllowedMax) {
+                                                                    pSet.maxSelect -= 1
+                                                                    if (pSet.minSelect > pSet.maxSelect) {
+                                                                        pSet.minSelect = pSet.maxSelect
+                                                                    }
+                                                                }
+                                                            },
+                                                            enabled = pSet.maxSelect > minAllowedMax,
+                                                            modifier = Modifier.size(28.dp).testTag("decrease_max_$setIndex")
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Remove,
+                                                                contentDescription = "Decrease max choices",
+                                                                tint = if (pSet.maxSelect > minAllowedMax) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                        }
+
+                                                        Text(
+                                                            text = "Up to ${pSet.maxSelect}",
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 13.sp,
+                                                            modifier = Modifier.padding(horizontal = 8.dp)
+                                                        )
+
+                                                        IconButton(
+                                                            onClick = {
+                                                                if (pSet.maxSelect < maxChoicesCount) {
+                                                                    pSet.maxSelect += 1
+                                                                }
+                                                            },
+                                                            enabled = pSet.maxSelect < maxChoicesCount,
+                                                            modifier = Modifier.size(28.dp).testTag("increase_max_$setIndex")
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Add,
+                                                                contentDescription = "Increase max choices",
+                                                                tint = if (pSet.maxSelect < maxChoicesCount) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // "Need a higher minimum?" tiny text button
+                                            val defaultMin = if (pSet.required) 1 else 0
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                TextButton(
+                                                    onClick = {
+                                                        pSet.showAdvancedMin = !pSet.showAdvancedMin
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                                                 ) {
                                                     Text(
-                                                        text = "0",
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                        text = if (pSet.showAdvancedMin) "Hide minimum choices" else "Need a higher minimum?",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+
+                                                if (pSet.minSelect > defaultMin && !pSet.showAdvancedMin) {
+                                                    Text(
+                                                        text = "Min: ${pSet.minSelect}",
+                                                        fontSize = 11.sp,
+                                                        color = customColors.accent,
+                                                        fontWeight = FontWeight.Bold
                                                     )
                                                 }
                                             }
-                                        }
 
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                            // Advanced minimum stepper (1 up to maximum)
+                                            if (pSet.showAdvancedMin) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = "Minimum required",
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                        Text(
+                                                            text = "Customers must select at least this many",
+                                                            fontSize = 10.sp,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
 
-                                        // Maximum stepper
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "Maximum choices",
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                Text(
-                                                    text = "At least ${if (pSet.required) pSet.minSelect else 1}, up to $maxChoicesCount choice(s)",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        val minFloor = if (pSet.required) 1 else 0
+                                                        OutlinedIconButton(
+                                                            onClick = {
+                                                                if (pSet.minSelect > minFloor) {
+                                                                    pSet.minSelect -= 1
+                                                                    if (pSet.minSelect == defaultMin) {
+                                                                        pSet.showAdvancedMin = false
+                                                                    }
+                                                                }
+                                                            },
+                                                            enabled = pSet.minSelect > minFloor,
+                                                            modifier = Modifier.size(26.dp),
+                                                            shape = CircleShape
+                                                        ) {
+                                                            Icon(Icons.Default.Remove, contentDescription = "Decrease min", modifier = Modifier.size(12.dp))
+                                                        }
+
+                                                        Text(
+                                                            text = "${pSet.minSelect}",
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 13.sp,
+                                                            modifier = Modifier.padding(horizontal = 8.dp)
+                                                        )
+
+                                                        OutlinedIconButton(
+                                                            onClick = {
+                                                                if (pSet.minSelect < pSet.maxSelect) {
+                                                                    pSet.minSelect += 1
+                                                                }
+                                                            },
+                                                            enabled = pSet.minSelect < pSet.maxSelect,
+                                                            modifier = Modifier.size(26.dp),
+                                                            shape = CircleShape
+                                                        ) {
+                                                            Icon(Icons.Default.Add, contentDescription = "Increase min", modifier = Modifier.size(12.dp))
+                                                        }
+                                                    }
+                                                }
                                             }
 
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                val minAllowedMax = if (pSet.required) maxOf(1, pSet.minSelect) else 1
-                                                OutlinedIconButton(
-                                                    onClick = { if (pSet.maxSelect > minAllowedMax) pSet.maxSelect -= 1 },
-                                                    enabled = pSet.maxSelect > minAllowedMax,
-                                                    modifier = Modifier.size(32.dp),
-                                                    shape = CircleShape
-                                                ) {
-                                                    Icon(Icons.Default.Remove, contentDescription = "Decrease maximum", modifier = Modifier.size(16.dp))
-                                                }
-                                                Text(
-                                                    text = "${pSet.maxSelect}",
-                                                    fontWeight = FontWeight.Bold,
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                    modifier = Modifier.widthIn(min = 24.dp),
-                                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                                )
-                                                OutlinedIconButton(
-                                                    onClick = { if (pSet.maxSelect < maxChoicesCount) pSet.maxSelect += 1 },
-                                                    enabled = pSet.maxSelect < maxChoicesCount,
-                                                    modifier = Modifier.size(32.dp),
-                                                    shape = CircleShape
-                                                ) {
-                                                    Icon(Icons.Default.Add, contentDescription = "Increase maximum", modifier = Modifier.size(16.dp))
-                                                }
+                                            // Live customer hint in pale yellow chip
+                                            val liveHint = when {
+                                                pSet.maxSelect <= 1 -> "Select one"
+                                                !pSet.required || pSet.minSelect == 0 || pSet.minSelect == 1 -> "Select up to ${pSet.maxSelect}"
+                                                pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
+                                                else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
                                             }
-                                        }
 
-                                        // Customer hint text live
-                                        val liveHint = when {
-                                            pSet.maxSelect <= 1 -> "Select one"
-                                            !pSet.required || pSet.minSelect == 0 -> "Select up to ${pSet.maxSelect}"
-                                            pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
-                                            else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
-                                        }
-                                        Surface(
-                                            color = customColors.accent.copy(alpha = 0.12f),
-                                            shape = RoundedCornerShape(6.dp)
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            Surface(
+                                                color = Color(0xFFFEF9C3), // Pale yellow
+                                                shape = RoundedCornerShape(8.dp),
+                                                border = BorderStroke(1.dp, Color(0xFFFDE047).copy(alpha = 0.6f)),
+                                                modifier = Modifier.fillMaxWidth()
                                             ) {
-                                                Text(
-                                                    text = "Customer sees: \"$liveHint\"",
-                                                    color = customColors.accent,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Info,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF854D0E),
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "Customers see: $liveHint",
+                                                        color = Color(0xFF854D0E),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1917,6 +2382,194 @@ fun ProductEditScreen(
             }
         )
     }
+    if (showTimePickerForAvailStart) {
+        TimePickerStepDialog(
+            initialTime24 = availStartTime24,
+            title = "Select Start Time",
+            onDismiss = { showTimePickerForAvailStart = false },
+            onTimeSelected = {
+                availStartTime24 = it
+                showTimePickerForAvailStart = false
+            }
+        )
+    }
+
+    if (showTimePickerForAvailEnd) {
+        TimePickerStepDialog(
+            initialTime24 = availEndTime24,
+            title = "Select End Time",
+            onDismiss = { showTimePickerForAvailEnd = false },
+            onTimeSelected = {
+                availEndTime24 = it
+                showTimePickerForAvailEnd = false
+            }
+        )
+    }
+
+    if (showDatePickerForFrom) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = try {
+                if (availDateFrom.isNotBlank()) {
+                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    }
+                    sdf.parse(availDateFrom)?.time
+                } else null
+            } catch (_: Exception) { null }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerForFrom = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                            timeInMillis = millis
+                        }
+                        val formatted = "%04d-%02d-%02d".format(
+                            cal.get(java.util.Calendar.YEAR),
+                            cal.get(java.util.Calendar.MONTH) + 1,
+                            cal.get(java.util.Calendar.DAY_OF_MONTH)
+                        )
+                        availDateFrom = formatted
+                        if (availDateTo.isNotBlank() && availDateTo < formatted) {
+                            availDateTo = formatted
+                        }
+                    }
+                    showDatePickerForFrom = false
+                }) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerForFrom = false }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    if (showDatePickerForTo) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = try {
+                if (availDateTo.isNotBlank()) {
+                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    }
+                    sdf.parse(availDateTo)?.time
+                } else null
+            } catch (_: Exception) { null }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerForTo = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                            timeInMillis = millis
+                        }
+                        val formatted = "%04d-%02d-%02d".format(
+                            cal.get(java.util.Calendar.YEAR),
+                            cal.get(java.util.Calendar.MONTH) + 1,
+                            cal.get(java.util.Calendar.DAY_OF_MONTH)
+                        )
+                        availDateTo = formatted
+                        if (availDateFrom.isNotBlank() && availDateFrom > formatted) {
+                            availDateFrom = formatted
+                        }
+                    }
+                    showDatePickerForTo = false
+                }) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerForTo = false }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickerStepDialog(
+    initialTime24: String,
+    title: String,
+    onDismiss: () -> Unit,
+    onTimeSelected: (String) -> Unit
+) {
+    val timeOptions = remember {
+        val list = mutableListOf<String>()
+        for (h in 0..23) {
+            for (m in listOf(0, 15, 30, 45)) {
+                list.add("%02d:%02d".format(h, m))
+            }
+        }
+        list.add("23:59")
+        list
+    }
+
+    var selectedTime by remember { mutableStateOf(initialTime24) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(timeOptions) { timeStr ->
+                        val isSelected = selectedTime == timeStr
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedTime = timeStr }
+                                .padding(vertical = 4.dp, horizontal = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = MenuSchedule.formatTime12h(timeStr),
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.AccessTime,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onTimeSelected(selectedTime) }) {
+                Text("Select")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
