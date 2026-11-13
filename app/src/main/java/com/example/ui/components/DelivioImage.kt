@@ -112,17 +112,14 @@ fun DelivioAsyncImage(
 @Composable
 fun MerchantAvatarImage(
     logoUrl: String?,
-    bannerUrl: String?,
     imageUrl: String?,
     modifier: Modifier = Modifier
 ) {
     val cleanLogo = logoUrl?.trim().orEmpty()
-    val cleanBanner = bannerUrl?.trim().orEmpty()
     val cleanImage = imageUrl?.trim().orEmpty()
 
     val chosenUrl = when {
         cleanLogo.isNotBlank() -> cleanLogo
-        cleanBanner.isNotBlank() -> cleanBanner
         cleanImage.isNotBlank() -> cleanImage
         else -> ""
     }
@@ -138,19 +135,16 @@ fun MerchantAvatarImage(
 fun MerchantLogoView(
     storeName: String,
     logoUrl: String?,
-    bannerUrl: String? = null,
     imageUrl: String? = null,
     modifier: Modifier = Modifier,
     shape: androidx.compose.ui.graphics.Shape = CircleShape,
     letterSize: androidx.compose.ui.unit.TextUnit = 16.sp
 ) {
     val cleanLogo = logoUrl?.trim().orEmpty()
-    val cleanBanner = bannerUrl?.trim().orEmpty()
     val cleanImage = imageUrl?.trim().orEmpty()
 
     val chosenUrl = when {
         cleanLogo.isNotBlank() -> cleanLogo
-        cleanBanner.isNotBlank() -> cleanBanner
         cleanImage.isNotBlank() -> cleanImage
         else -> ""
     }

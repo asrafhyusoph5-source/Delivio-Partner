@@ -40,8 +40,7 @@ import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.util.CurrencyConstants
-import com.example.util.FOOD_CATEGORIES
-import com.example.util.CONVENIENCE_CATEGORIES
+import com.example.util.MainCategoryConfig
 import com.example.util.FormatUtils
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -87,6 +86,7 @@ fun ProductEditScreen(
     menus: List<ShopMenu> = emptyList(),
     menuItems: List<MenuItem> = emptyList(),
     businessType: BusinessType,
+    mainCategories: List<MainCategoryOption> = MainCategoryConfig.getBuiltInDefaults(businessType),
     onSave: (MenuItem, onComplete: (Boolean, String?) -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -102,38 +102,76 @@ fun ProductEditScreen(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    val allowedCategories = remember(businessType) {
-        if (businessType == BusinessType.FOOD) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+    val activeMainCategories = remember(mainCategories) {
+        MainCategoryConfig.activeOrdered(mainCategories)
     }
 
-    val initialCatName = remember(item, categories, allowedCategories) {
-        val directName = item.categoryName
-        if (directName.isNotBlank() && allowedCategories.any { it.equals(directName, ignoreCase = true) }) {
-            allowedCategories.first { it.equals(directName, ignoreCase = true) }
-        } else {
-            val fromId = categories.find { it.id == item.categoryId }?.name ?: ""
-            if (fromId.isNotBlank() && allowedCategories.any { it.equals(fromId, ignoreCase = true) }) {
-                allowedCategories.first { it.equals(fromId, ignoreCase = true) }
-            } else if (isNew) {
-                allowedCategories.firstOrNull() ?: ""
-            } else {
-                ""
-            }
-        }
+    val initialResolvedCat = remember(item, categories, activeMainCategories) {
+        MainCategoryConfig.resolveItemCategory(
+            itemCategory = item.getEffectiveCategoryName(categories),
+            itemCategoryId = item.categoryId,
+            activeCategories = activeMainCategories,
+            legacyShopCategories = categories
+        )
     }
 
     // 1. Basic info
     var name by remember { mutableStateOf(item.name) }
     var priceText by remember { mutableStateOf(if (item.price > 0.0) item.price.toString() else "0") }
     var itemSizeText by remember { mutableStateOf(item.itemSize) }
-    var selectedCategoryName by remember { mutableStateOf(initialCatName) }
+    var selectedCategoryName by remember {
+        mutableStateOf(
+            when {
+                initialResolvedCat.matchedOption != null -> initialResolvedCat.matchedOption.name
+                initialResolvedCat.isLegacyUnmatched -> initialResolvedCat.storedCategoryName
+                isNew -> activeMainCategories.firstOrNull()?.name ?: ""
+                else -> ""
+            }
+        )
+    }
     var selectedCategoryId by remember {
         mutableStateOf(
-            if (initialCatName.isNotBlank()) {
-                categories.find { it.name.equals(initialCatName, ignoreCase = true) }?.id
-                    ?: initialCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
-            } else ""
+            when {
+                initialResolvedCat.matchedOption != null -> initialResolvedCat.matchedOption.id
+                initialResolvedCat.isLegacyUnmatched -> initialResolvedCat.storedCategoryId
+                isNew -> activeMainCategories.firstOrNull()?.id ?: ""
+                else -> ""
+            }
         )
+    }
+    var isLegacyUnmatched by remember { mutableStateOf(initialResolvedCat.isLegacyUnmatched) }
+    var legacyDisplayLabel by remember { mutableStateOf(initialResolvedCat.displayLabel) }
+    var hasPickedNewCategory by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeMainCategories) {
+        if (!hasPickedNewCategory) {
+            val resolved = MainCategoryConfig.resolveItemCategory(
+                itemCategory = item.getEffectiveCategoryName(categories),
+                itemCategoryId = item.categoryId,
+                activeCategories = activeMainCategories,
+                legacyShopCategories = categories
+            )
+            when {
+                resolved.matchedOption != null -> {
+                    selectedCategoryName = resolved.matchedOption.name
+                    selectedCategoryId = resolved.matchedOption.id
+                    isLegacyUnmatched = false
+                    legacyDisplayLabel = ""
+                }
+                resolved.isLegacyUnmatched -> {
+                    selectedCategoryName = resolved.storedCategoryName
+                    selectedCategoryId = resolved.storedCategoryId
+                    isLegacyUnmatched = true
+                    legacyDisplayLabel = resolved.displayLabel
+                }
+                isNew && selectedCategoryName.isBlank() -> {
+                    selectedCategoryName = activeMainCategories.firstOrNull()?.name ?: ""
+                    selectedCategoryId = activeMainCategories.firstOrNull()?.id ?: ""
+                    isLegacyUnmatched = false
+                    legacyDisplayLabel = ""
+                }
+            }
+        }
     }
 
     // Category Class
@@ -247,7 +285,10 @@ fun ProductEditScreen(
     val parsedPrice = priceText.toDoubleOrNull()
     val isPriceValid = parsedPrice != null && parsedPrice >= 0.0
     val isNameValid = name.isNotBlank()
-    val isCatMissing = selectedCategoryName.isBlank() || !allowedCategories.any { it.equals(selectedCategoryName, ignoreCase = true) }
+    val isCatMissing = !isLegacyUnmatched && (
+        selectedCategoryName.isBlank() ||
+            activeMainCategories.none { MainCategoryConfig.matchesOption(selectedCategoryName, selectedCategoryId, it) }
+        )
 
     val setErrors = remember(setsList.map { listOf(it.name, it.required.toString(), it.minSelect.toString(), it.maxSelect.toString(), it.choices.size.toString()) + it.choices.map { c -> "${c.name}:${c.priceText}:${c.available}:${c.popular}" } }) {
         val errors = mutableListOf<String>()
@@ -402,10 +443,19 @@ fun ProductEditScreen(
                                 val parsedStock = stockCountText.toIntOrNull() ?: item.stockCount
                                 val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAt
 
-                                val finalCatName = selectedCategoryName
-                                val finalCatId = selectedCategoryId.ifBlank {
-                                    categories.find { it.name.equals(finalCatName, ignoreCase = true) }?.id
-                                        ?: finalCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+                                val preserveLegacyUnchanged = isLegacyUnmatched && !hasPickedNewCategory
+                                val finalCatName = if (preserveLegacyUnchanged) {
+                                    item.category.ifBlank { item.categoryName }
+                                } else {
+                                    selectedCategoryName
+                                }
+                                val finalCatId = if (preserveLegacyUnchanged) {
+                                    item.categoryId
+                                } else {
+                                    selectedCategoryId.ifBlank {
+                                        activeMainCategories.firstOrNull { MainCategoryConfig.matchesOption(finalCatName, it) }?.id
+                                            ?: MainCategoryConfig.slugifyId(finalCatName)
+                                    }
                                 }
 
                                 val finalSets = setsList.mapIndexed { idx, s ->
@@ -449,7 +499,8 @@ fun ProductEditScreen(
                                     description = description.trim(),
                                     price = priceVal,
                                     categoryId = finalCatId,
-                                    categoryName = finalCatName,
+                                    category = finalCatName,
+                                    categoryName = if (preserveLegacyUnchanged) item.categoryName.ifBlank { finalCatName } else finalCatName,
                                     subcategoryId = selectedSubcategoryId.ifBlank { null },
                                     subcategoryName = selectedSubcategoryName.ifBlank { null },
                                     menuIds = finalMenuIds,
@@ -643,20 +694,31 @@ fun ProductEditScreen(
                     )
 
                     var catExpanded by remember { mutableStateOf(false) }
+                    val displayCategoryValue = when {
+                        isLegacyUnmatched && !hasPickedNewCategory -> legacyDisplayLabel
+                        selectedCategoryName.isNotBlank() -> selectedCategoryName
+                        else -> "Category *"
+                    }
                     ExposedDropdownMenuBox(
                         expanded = catExpanded,
                         onExpandedChange = { catExpanded = it },
                         modifier = Modifier.weight(1.3f)
                     ) {
                         OutlinedTextField(
-                            value = if (selectedCategoryName.isNotBlank()) selectedCategoryName else "Category *",
+                            value = displayCategoryValue,
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Main Category *") },
                             isError = hasTappedSaveOnce && isCatMissing,
-                            supportingText = if (hasTappedSaveOnce && isCatMissing) {
-                                { Text("Required", color = MaterialTheme.colorScheme.error) }
-                            } else null,
+                            supportingText = when {
+                                hasTappedSaveOnce && isCatMissing -> {
+                                    { Text("Required", color = MaterialTheme.colorScheme.error) }
+                                }
+                                isLegacyUnmatched && !hasPickedNewCategory -> {
+                                    { Text("Saved category is no longer active", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                }
+                                else -> null
+                            },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catExpanded) },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.menuAnchor().fillMaxWidth().testTag("menu_item_category_dropdown")
@@ -665,14 +727,17 @@ fun ProductEditScreen(
                             expanded = catExpanded,
                             onDismissRequest = { catExpanded = false }
                         ) {
-                            allowedCategories.forEach { catName ->
+                            activeMainCategories.forEach { catOption ->
+                                val isCurrentlySelected = !isLegacyUnmatched &&
+                                    MainCategoryConfig.matchesOption(selectedCategoryName, selectedCategoryId, catOption)
                                 DropdownMenuItem(
-                                    text = { Text(catName, fontWeight = if (selectedCategoryName.equals(catName, ignoreCase = true)) FontWeight.Bold else FontWeight.Normal) },
+                                    text = { Text(catOption.name, fontWeight = if (isCurrentlySelected) FontWeight.Bold else FontWeight.Normal) },
                                     onClick = {
-                                        selectedCategoryName = catName
-                                        val matchedDoc = categories.find { it.name.equals(catName, ignoreCase = true) }
-                                        selectedCategoryId = matchedDoc?.id
-                                            ?: catName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+                                        hasPickedNewCategory = true
+                                        isLegacyUnmatched = false
+                                        legacyDisplayLabel = ""
+                                        selectedCategoryName = catOption.name
+                                        selectedCategoryId = catOption.id
                                         catExpanded = false
                                     }
                                 )

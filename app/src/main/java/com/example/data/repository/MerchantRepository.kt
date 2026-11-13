@@ -13,8 +13,7 @@ import com.example.util.OutletsPinSessionManager
 import com.example.util.OutletsUtils
 import com.example.util.PinVerifyResult
 import com.example.util.PlatformOrderStatuses
-import com.example.util.FOOD_CATEGORIES
-import com.example.util.CONVENIENCE_CATEGORIES
+import com.example.util.MainCategoryConfig
 import com.example.util.SyncConflict
 import com.example.util.SyncField
 import com.example.util.SyncPlanPreview
@@ -146,6 +145,16 @@ class MerchantRepository private constructor(context: Context) {
     private val _categories = MutableStateFlow<List<MenuCategory>>(emptyList())
     val categories: StateFlow<List<MenuCategory>> = _categories.asStateFlow()
 
+    private val _mainCategoriesByType = MutableStateFlow(
+        MainCategoryConfig.fromJsonString(prefs.getString(PREF_MAIN_CATEGORIES_JSON, null))
+            ?: MainCategoryConfig.builtInDefaultStore()
+    )
+    val mainCategoriesByType: StateFlow<MainCategoriesStore> = _mainCategoriesByType.asStateFlow()
+
+    fun getActiveMainCategoriesFor(type: BusinessType = _settings.value.businessType): List<MainCategoryOption> {
+        return MainCategoryConfig.activeOrdered(_mainCategoriesByType.value.forType(type))
+    }
+
     private val _subcategories = MutableStateFlow<List<Subcategory>>(emptyList())
     val subcategories: StateFlow<List<Subcategory>> = _subcategories.asStateFlow()
 
@@ -196,6 +205,7 @@ class MerchantRepository private constructor(context: Context) {
     private var reviewsListener: ListenerRegistration? = null
     private var riderReviewsListener: ListenerRegistration? = null
     private var receiptSettingsListener: ListenerRegistration? = null
+    private var mainCategoriesListener: ListenerRegistration? = null
     private var vouchersListener: ListenerRegistration? = null
     private var redemptionsListener: ListenerRegistration? = null
     private var orderChatsListener: ListenerRegistration? = null
@@ -768,7 +778,6 @@ class MerchantRepository private constructor(context: Context) {
             themeAccentHex = snapshot.getString("themeAccentHex") ?: fallback.themeAccentHex,
             isDarkMode = snapshot.getBoolean("isDarkMode") ?: fallback.isDarkMode,
             logoUrl = snapshot.getString("logoUrl")?.trim() ?: "",
-            bannerUrl = snapshot.getString("bannerUrl")?.trim() ?: "",
             imageUrl = snapshot.getString("imageUrl")?.trim() ?: "",
             description = snapshot.getString("description")?.trim() ?: "",
             bankName = snapshot.getString("bankName") ?: "",
@@ -1207,11 +1216,16 @@ class MerchantRepository private constructor(context: Context) {
             ?.mapNotNull { it?.toString()?.trim()?.takeIf { t -> t.isNotBlank() } }
             ?: emptyList()
 
+        val rawCat = doc.getString("category")?.trim().orEmpty()
+        val rawCatName = doc.getString("categoryName")?.trim().orEmpty()
+        val resolvedRawCat = rawCat.ifBlank { rawCatName }
+
         return MenuItem(
             id = doc.id,
             merchantId = mId,
-            categoryId = doc.getString("categoryId") ?: "",
-            categoryName = doc.getString("categoryName") ?: "",
+            categoryId = doc.getString("categoryId")?.trim() ?: "",
+            category = resolvedRawCat,
+            categoryName = rawCatName.ifBlank { rawCat },
             subcategoryId = doc.getString("subcategoryId"),
             subcategoryName = doc.getString("subcategoryName"),
             menuIds = parsedMenuIds,
@@ -1749,6 +1763,30 @@ class MerchantRepository private constructor(context: Context) {
                 _receiptDesign.value = parseReceiptDesign(snapshot)
             }
 
+        // 13b. Main Categories listener: settings/mainCategories (live, cached, fallback to built-in defaults)
+        mainCategoriesListener = db.collection("settings").document("mainCategories")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Main categories listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val parsed = MainCategoryConfig.parseFromFirestoreMap(snapshot.data)
+                    if (parsed != null) {
+                        _mainCategoriesByType.value = parsed
+                        prefs.edit().putString(PREF_MAIN_CATEGORIES_JSON, MainCategoryConfig.toJsonString(parsed)).apply()
+                    } else {
+                        _mainCategoriesByType.value = MainCategoryConfig.builtInDefaultStore()
+                        prefs.edit().remove(PREF_MAIN_CATEGORIES_JSON).apply()
+                    }
+                } else {
+                    _mainCategoriesByType.value = MainCategoryConfig.builtInDefaultStore()
+                    prefs.edit().remove(PREF_MAIN_CATEGORIES_JSON).apply()
+                }
+                ensureCategoriesConfigured(mId)
+                syncCuisineTags(mId)
+            }
+
         // 14. Best Sellers: on start and every 6 hours
         startBestSellersPeriodic(mId)
 
@@ -1835,40 +1873,43 @@ class MerchantRepository private constructor(context: Context) {
         val db = firestore ?: return
         val isFood = _settings.value.businessType == BusinessType.FOOD ||
                 _settings.value.type.contains("food", ignoreCase = true)
-        val allowedList = if (isFood) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+        val targetType = if (isFood) BusinessType.FOOD else BusinessType.CONVENIENCE
+        val activeList = getActiveMainCategoriesFor(targetType)
 
         db.collection("merchants").document(mId).collection("categories").get()
             .addOnSuccessListener { snapshot ->
                 val existingDocs = snapshot.documents
-                // 1. Create or ensure each allowed category has one document (name, sortOrder, visible true)
-                allowedList.forEachIndexed { index, catName ->
-                    val existingDoc = existingDocs.find {
-                        it.getString("name")?.equals(catName, ignoreCase = true) == true
+                // 1. Create or ensure each active category has one document (name, sortOrder, visible true)
+                activeList.forEachIndexed { index, catOption ->
+                    val existingDoc = existingDocs.find { doc ->
+                        val docName = doc.getString("name")
+                        MainCategoryConfig.matchesOption(docName, doc.id, catOption)
                     }
                     val expectedOrder = index + 1
                     val docData = mapOf(
-                        "name" to catName,
+                        "name" to catOption.name,
                         "sortOrder" to expectedOrder,
                         "visible" to true,
                         "businessType" to if (isFood) "food" else "convenience"
                     )
                     if (existingDoc == null) {
-                        val docId = catName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+                        val docId = catOption.id.ifBlank { MainCategoryConfig.slugifyId(catOption.name) }
                         db.collection("merchants").document(mId).collection("categories").document(docId).set(docData)
                     } else {
                         val currentVisible = existingDoc.getBoolean("visible") ?: true
                         val currentOrder = existingDoc.getLong("sortOrder")?.toInt() ?: 0
-                        if (!currentVisible || currentOrder != expectedOrder) {
+                        val currentName = existingDoc.getString("name") ?: ""
+                        if (!currentVisible || currentOrder != expectedOrder || currentName != catOption.name) {
                             db.collection("merchants").document(mId).collection("categories").document(existingDoc.id)
-                                .update(mapOf("visible" to true, "sortOrder" to expectedOrder))
+                                .update(mapOf("name" to catOption.name, "visible" to true, "sortOrder" to expectedOrder))
                         }
                     }
                 }
 
-                // 2. Set visible false on old category documents that are not in the list
+                // 2. Set visible false on old category documents that are not in the active list
                 existingDocs.forEach { doc ->
                     val name = doc.getString("name") ?: ""
-                    val isAllowed = allowedList.any { it.equals(name, ignoreCase = true) }
+                    val isAllowed = activeList.any { MainCategoryConfig.matchesOption(name, doc.id, it) }
                     val currentVisible = doc.getBoolean("visible") ?: true
                     if (!isAllowed && currentVisible) {
                         db.collection("merchants").document(mId).collection("categories").document(doc.id)
@@ -1886,22 +1927,36 @@ class MerchantRepository private constructor(context: Context) {
         val db = firestore ?: return
         val items = customItems ?: _menuItems.value
         val cats = _categories.value
+        val activeMainCats = getActiveMainCategoriesFor(_settings.value.businessType)
+        val othersLabel = activeMainCats.firstOrNull { MainCategoryConfig.isOthersCategory(it) }?.name ?: "Others"
 
-        // distinct categoryName values of items where available == true, for both types
-        val cuisineTags = items
+        // Resolve distinct active category names of in-stock items (inactive/deleted map to Others)
+        val matchedSet = items
             .filter { it.inStock }
-            .map { item ->
-                val name = if (item.categoryName.isNotBlank()) {
-                    item.categoryName
-                } else {
-                    cats.find { it.id == item.categoryId }?.name ?: ""
+            .mapNotNull { item ->
+                val resolved = MainCategoryConfig.resolveItemCategory(
+                    itemCategory = item.getEffectiveCategoryName(cats),
+                    itemCategoryId = item.categoryId,
+                    activeCategories = activeMainCats,
+                    legacyShopCategories = cats
+                )
+                when {
+                    resolved.matchedOption != null -> resolved.matchedOption.name
+                    resolved.isLegacyUnmatched -> othersLabel
+                    else -> null
                 }
-                name.trim()
             }
-            .filter { it.isNotBlank() }
-            .distinct()
+            .toSet()
 
-        db.collection("merchants").document(mId).update("cuisineTags", cuisineTags)
+        val orderedTags = activeMainCats
+            .map { it.name }
+            .filter { it in matchedSet }
+            .toMutableList()
+        if (othersLabel in matchedSet && othersLabel !in orderedTags) {
+            orderedTags.add(othersLabel)
+        }
+
+        db.collection("merchants").document(mId).update("cuisineTags", orderedTags)
             .addOnFailureListener { ex ->
                 Log.w("MerchantRepo", "Failed to sync cuisineTags", ex)
             }
@@ -1950,6 +2005,8 @@ class MerchantRepository private constructor(context: Context) {
         riderReviewsListener = null
         receiptSettingsListener?.remove()
         receiptSettingsListener = null
+        mainCategoriesListener?.remove()
+        mainCategoriesListener = null
         vouchersListener?.remove()
         vouchersListener = null
         redemptionsListener?.remove()
@@ -3348,28 +3405,21 @@ class MerchantRepository private constructor(context: Context) {
             }
     }
 
-    fun updateStorePhotos(
+    fun updateStoreLogo(
         logoUrl: String,
-        bannerUrl: String,
         onResult: (Boolean, String?) -> Unit
     ) {
         val mId = _merchantId.value ?: return onResult(false, "No active merchant")
         val db = firestore ?: return onResult(false, "Firestore unavailable")
-        val data = mapOf(
-            "logoUrl" to logoUrl.trim(),
-            "bannerUrl" to bannerUrl.trim()
-        )
+        val data = mapOf("logoUrl" to logoUrl.trim())
         db.collection("merchants").document(mId).update(data)
             .addOnSuccessListener {
-                _settings.value = _settings.value.copy(
-                    logoUrl = logoUrl.trim(),
-                    bannerUrl = bannerUrl.trim()
-                )
+                _settings.value = _settings.value.copy(logoUrl = logoUrl.trim())
                 onResult(true, null)
             }
             .addOnFailureListener { ex ->
-                val err = ex.localizedMessage ?: ex.message ?: "Failed to update store images"
-                Log.e("MerchantRepo", "Store photo update failed: $err", ex)
+                val err = ex.localizedMessage ?: ex.message ?: "Failed to update store logo"
+                Log.e("MerchantRepo", "Store logo update failed: $err", ex)
                 onResult(false, err)
             }
     }
@@ -3763,7 +3813,7 @@ class MerchantRepository private constructor(context: Context) {
         val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
         val db = firestore ?: return onResult(false, "Firestore unavailable")
 
-        val allowedKeys = setOf("ownerName", "phone", "logoUrl", "bannerUrl", "description")
+        val allowedKeys = setOf("ownerName", "phone", "logoUrl", "description")
         val filteredData = changedFields.filterKeys { it in allowedKeys }.toMutableMap()
 
         if (filteredData.isEmpty()) {
@@ -3867,9 +3917,7 @@ class MerchantRepository private constructor(context: Context) {
         val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
         val db = firestore ?: return onResult(false, "Firestore unavailable")
         val docId = item.id.ifBlank { UUID.randomUUID().toString() }
-        val categoryName = item.categoryName.ifBlank {
-            _categories.value.find { it.id == item.categoryId }?.name ?: ""
-        }
+        val categoryName = item.category.ifBlank { item.categoryName }
 
         val setsList = item.sets.mapIndexed { idx, s ->
             val typedName = s.name.trim()
@@ -3903,6 +3951,7 @@ class MerchantRepository private constructor(context: Context) {
             "price" to item.price,
             "imageUrl" to item.imageUrl,
             "categoryId" to item.categoryId,
+            "category" to categoryName,
             "categoryName" to categoryName,
             "subcategoryId" to item.subcategoryId,
             "subcategoryName" to item.subcategoryName,
@@ -3977,6 +4026,7 @@ class MerchantRepository private constructor(context: Context) {
         db.collection("merchants").document(mId).collection("items").document(itemId).update(
             mapOf(
                 "categoryId" to categoryId,
+                "category" to categoryName,
                 "categoryName" to categoryName
             )
         ).addOnSuccessListener {
@@ -5423,13 +5473,15 @@ class MerchantRepository private constructor(context: Context) {
                 }
             )
         }
+        val catVal = item.category.ifBlank { item.categoryName }
         val map = hashMapOf<String, Any?>(
             "name" to item.name,
             "description" to item.description,
             "price" to item.price,
             "imageUrl" to item.imageUrl,
             "categoryId" to item.categoryId,
-            "categoryName" to item.categoryName,
+            "category" to catVal,
+            "categoryName" to catVal,
             "subcategoryId" to item.subcategoryId,
             "subcategoryName" to item.subcategoryName,
             "menuIds" to item.getEffectiveMenuIds(),
@@ -5783,8 +5835,10 @@ class MerchantRepository private constructor(context: Context) {
                     updateMap["itemSize"] = srcItem.itemSize.trim()
                 }
                 if (SyncField.CATEGORY_MENUS in fieldsToSync) {
+                    val syncedCat = srcItem.category.ifBlank { srcItem.categoryName }
                     updateMap["categoryId"] = srcItem.categoryId
-                    updateMap["categoryName"] = srcItem.categoryName
+                    updateMap["category"] = syncedCat
+                    updateMap["categoryName"] = syncedCat
                     val srcSubName = MenuSyncEngine.resolveSubcategoryName(srcItem, srcSnap.subcategories)
                     if (srcSubName.isNotBlank()) {
                         val subKey = OutletsUtils.menuMatchingKey(srcSubName)
@@ -5905,6 +5959,8 @@ class MerchantRepository private constructor(context: Context) {
     }
 
     companion object {
+        private const val PREF_MAIN_CATEGORIES_JSON = "cached_main_categories_json_v1"
+
         @Volatile
         private var instance: MerchantRepository? = null
 

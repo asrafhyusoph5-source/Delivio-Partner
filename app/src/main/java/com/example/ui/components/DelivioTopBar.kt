@@ -71,7 +71,6 @@ fun DelivioTopBar(
                 MerchantLogoView(
                     storeName = settings.storeName,
                     logoUrl = settings.logoUrl,
-                    bannerUrl = settings.bannerUrl,
                     imageUrl = settings.imageUrl,
                     modifier = Modifier
                         .size(42.dp)

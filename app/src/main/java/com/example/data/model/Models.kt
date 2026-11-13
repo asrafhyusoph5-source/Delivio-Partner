@@ -583,6 +583,25 @@ data class MenuCategory(
     val isVisible: Boolean get() = visible
 }
 
+data class MainCategoryOption(
+    val id: String = "",
+    val name: String = "",
+    val aliases: List<String> = emptyList(),
+    val active: Boolean = true,
+    val sortOrder: Int = 0,
+    val businessType: BusinessType = BusinessType.FOOD
+)
+
+data class MainCategoriesStore(
+    val food: List<MainCategoryOption> = emptyList(),
+    val convenience: List<MainCategoryOption> = emptyList()
+) {
+    fun forType(businessType: BusinessType): List<MainCategoryOption> = when (businessType) {
+        BusinessType.FOOD -> food
+        BusinessType.CONVENIENCE -> convenience
+    }
+}
+
 data class ChangeRequest(
     val id: String = "",
     val merchantId: String = "",
@@ -820,6 +839,7 @@ data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
     val categoryId: String = "",
+    val category: String = "",
     val categoryName: String = "",
     val subcategoryId: String? = null,
     val subcategoryName: String? = null,
@@ -889,7 +909,8 @@ data class MenuItem(
         return relevantMenus.any { it.isAvailableNow(currentTimeMillis, timeZoneId) }
     }
 
-    fun getEffectiveCategoryName(categories: List<MenuCategory>): String {
+    fun getEffectiveCategoryName(categories: List<MenuCategory> = emptyList()): String {
+        if (category.isNotBlank()) return category
         if (categoryName.isNotBlank()) return categoryName
         return categories.find { it.id == categoryId }?.name ?: ""
     }
@@ -1105,7 +1126,6 @@ data class MerchantSettings(
     val themeAccentHex: String = "#FFC107",
     val isDarkMode: Boolean = false,
     val logoUrl: String = "",
-    val bannerUrl: String = "",
     val imageUrl: String = "",
     val description: String = "",
     val bankName: String = "",

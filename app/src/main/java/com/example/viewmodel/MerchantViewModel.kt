@@ -11,8 +11,7 @@ import com.example.util.OutletMenuSnapshot
 import com.example.util.PinVerifyResult
 import com.example.util.PlatformOrderStatuses
 import com.example.util.SoundVibrationHelper
-import com.example.util.FOOD_CATEGORIES
-import com.example.util.CONVENIENCE_CATEGORIES
+import com.example.util.MainCategoryConfig
 import com.example.util.SyncField
 import com.example.util.SyncPlanPreview
 import com.example.util.SyncResolution
@@ -45,6 +44,16 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val orders = repository.orders
     val newOrderAlert = repository.newOrderAlert
     val categories = repository.categories
+    val mainCategories: StateFlow<List<MainCategoryOption>> = combine(
+        repository.mainCategoriesByType,
+        settings
+    ) { byType, s ->
+        MainCategoryConfig.activeOrdered(byType.forType(s.businessType))
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        repository.getActiveMainCategoriesFor()
+    )
     val subcategories = repository.subcategories
     val menuItems = repository.menuItems
     val payouts = repository.payouts
@@ -1024,12 +1033,12 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun updateStorePhotos(logoUrl: String, bannerUrl: String) {
-        repository.updateStorePhotos(logoUrl, bannerUrl) { success, error ->
+    fun updateStoreLogo(logoUrl: String) {
+        repository.updateStoreLogo(logoUrl) { success, error ->
             if (success) {
-                showSnackbar("Store images updated successfully")
+                showSnackbar("Store logo updated successfully")
             } else {
-                showSnackbar(error ?: "Failed to update store images")
+                showSnackbar(error ?: "Failed to update store logo")
             }
         }
     }
@@ -1119,20 +1128,23 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openAddMenuItem(categoryId: String? = null) {
-        val isFood = settings.value.businessType == BusinessType.FOOD
-        val allowedList = if (isFood) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
-        val selectedCatName = if (categoryId != null && categoryId != "UNCATEGORIZED") {
-            val found = categories.value.find { it.id == categoryId }?.name ?: ""
-            if (allowedList.any { it.equals(found, ignoreCase = true) }) found else allowedList.first()
-        } else {
-            allowedList.first()
+        val activeCats = mainCategories.value.ifEmpty {
+            MainCategoryConfig.activeOrdered(MainCategoryConfig.getBuiltInDefaults(settings.value.businessType))
         }
-        val targetCatId = categories.value.find { it.name.equals(selectedCatName, ignoreCase = true) }?.id
-            ?: selectedCatName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
+        val matchedFilter = if (categoryId != null && categoryId != "UNCATEGORIZED") {
+            val legacyName = categories.value.find { it.id == categoryId }?.name
+            activeCats.firstOrNull {
+                MainCategoryConfig.matchesOption(legacyName, categoryId, it)
+            }
+        } else null
+        val chosen = matchedFilter ?: activeCats.firstOrNull()
+        val selectedCatName = chosen?.name ?: ""
+        val targetCatId = chosen?.id ?: ""
 
         _editingMenuItem.value = MenuItem(
             id = "",
             categoryId = targetCatId,
+            category = selectedCatName,
             categoryName = selectedCatName,
             name = "",
             description = "",
@@ -1186,10 +1198,14 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun quickAssignCategory(item: MenuItem, newCategoryName: String) {
-        val catDoc = categories.value.find { it.name.equals(newCategoryName, ignoreCase = true) }
-        val catId = catDoc?.id ?: newCategoryName.lowercase().trim().replace("&", "and").replace("[^a-z0-9]+".toRegex(), "_").trim('_')
-        repository.assignItemCategory(item.id, catId, newCategoryName)
-        showSnackbar("""Assigned "${item.name}" to $newCategoryName""")
+        val matched = mainCategories.value.firstOrNull {
+            MainCategoryConfig.matchesOption(newCategoryName, it)
+        }
+        val catName = matched?.name ?: newCategoryName
+        val catId = matched?.id ?: categories.value.find { it.name.equals(catName, ignoreCase = true) }?.id
+            ?: MainCategoryConfig.slugifyId(catName)
+        repository.assignItemCategory(item.id, catId, catName)
+        showSnackbar("""Assigned "${item.name}" to $catName""")
     }
 
     fun addCategory(name: String) {

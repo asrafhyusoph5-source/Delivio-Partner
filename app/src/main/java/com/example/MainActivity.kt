@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
             val orders by viewModel.orders.collectAsStateWithLifecycle()
             val newOrderAlert by viewModel.newOrderAlert.collectAsStateWithLifecycle()
             val categories by viewModel.categories.collectAsStateWithLifecycle()
+            val mainCategories by viewModel.mainCategories.collectAsStateWithLifecycle()
             val menuItems by viewModel.menuItems.collectAsStateWithLifecycle()
             val payouts by viewModel.payouts.collectAsStateWithLifecycle()
             val promos by viewModel.promos.collectAsStateWithLifecycle()
@@ -385,6 +386,7 @@ class MainActivity : ComponentActivity() {
                         menus = menus,
                         menuItems = menuItems,
                         businessType = settings.businessType,
+                        mainCategories = mainCategories,
                         onSave = { updatedItem, onComplete ->
                             viewModel.saveMenuItem(updatedItem, onComplete)
                         },
@@ -699,6 +701,7 @@ class MainActivity : ComponentActivity() {
                                                     menuItems = menuItems,
                                                     promos = promos,
                                                     businessType = settings.businessType,
+                                                    mainCategories = mainCategories,
                                                     currentTime = currentTime,
                                                     isServiceLocked = isServiceLocked,
                                                     serviceLockMessage = serviceLockMessage,

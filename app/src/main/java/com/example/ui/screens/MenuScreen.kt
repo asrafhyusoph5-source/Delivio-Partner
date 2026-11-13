@@ -32,8 +32,7 @@ import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
-import com.example.util.FOOD_CATEGORIES
-import com.example.util.CONVENIENCE_CATEGORIES
+import com.example.util.MainCategoryConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +44,7 @@ fun MenuScreen(
     menuItems: List<MenuItem>,
     promos: List<PromoDeal>,
     businessType: BusinessType,
+    mainCategories: List<MainCategoryOption> = MainCategoryConfig.getBuiltInDefaults(businessType),
     currentTime: Long,
     isServiceLocked: Boolean = false,
     serviceLockMessage: String? = null,
@@ -82,14 +82,13 @@ fun MenuScreen(
     var itemToDelete by remember { mutableStateOf<MenuItem?>(null) }
     var itemToMoveMenu by remember { mutableStateOf<MenuItem?>(null) }
 
-    // Allowed Main Categories
-    val allowedCategories = remember(businessType) {
-        if (businessType == BusinessType.FOOD) FOOD_CATEGORIES else CONVENIENCE_CATEGORIES
+    // Live active Main Categories in admin order, with "Others" last
+    val activeMainCategories = remember(mainCategories) {
+        MainCategoryConfig.activeOrdered(mainCategories)
     }
 
     fun resolveCategoryName(item: MenuItem): String {
-        if (item.categoryName.isNotBlank()) return item.categoryName
-        return categories.find { it.id == item.categoryId }?.name ?: ""
+        return item.getEffectiveCategoryName(categories)
     }
 
     // Products counts for this shop
@@ -116,6 +115,8 @@ fun MenuScreen(
     val displayedItems = remember(
         menuItems,
         businessType,
+        activeMainCategories,
+        categories,
         selectedSubcategoryId,
         selectedCategoryId,
         stockFilter,
@@ -125,6 +126,13 @@ fun MenuScreen(
         currentTime,
         settings.timezone
     ) {
+        val selectedMainOpt = if (selectedCategoryId != null) {
+            activeMainCategories.firstOrNull {
+                it.id.equals(selectedCategoryId, ignoreCase = true) ||
+                    MainCategoryConfig.normalizeCategoryKey(it.name) == MainCategoryConfig.normalizeCategoryKey(selectedCategoryId)
+            }
+        } else null
+
         menuItems.filter { item ->
             val matchType = item.businessType == businessType
             val itemCat = resolveCategoryName(item)
@@ -140,8 +148,25 @@ fun MenuScreen(
             val matchMainCategory = when (selectedCategoryId) {
                 null -> true
                 else -> {
-                    val targetName = categories.find { it.id == selectedCategoryId }?.name ?: selectedCategoryId
-                    itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
+                    if (selectedMainOpt != null) {
+                        val resolved = MainCategoryConfig.resolveItemCategory(
+                            itemCategory = itemCat,
+                            itemCategoryId = item.categoryId,
+                            activeCategories = activeMainCategories,
+                            legacyShopCategories = categories
+                        )
+                        when {
+                            resolved.matchedOption != null ->
+                                resolved.matchedOption.id == selectedMainOpt.id &&
+                                    resolved.matchedOption.name == selectedMainOpt.name
+                            resolved.isLegacyUnmatched ->
+                                MainCategoryConfig.isOthersCategory(selectedMainOpt)
+                            else -> false
+                        }
+                    } else {
+                        val targetName = categories.find { it.id == selectedCategoryId }?.name ?: selectedCategoryId
+                        itemCat.equals(targetName, ignoreCase = true) || item.categoryId == selectedCategoryId
+                    }
                 }
             }
 
@@ -634,12 +659,17 @@ fun MenuScreen(
                             onClick = { tempMainCategory = null },
                             label = { Text("All") }
                         )
-                        allowedCategories.forEach { catName ->
-                            val isSelected = tempMainCategory.equals(catName, ignoreCase = true)
+                        activeMainCategories.forEach { catOption ->
+                            val filterKey = catOption.id.ifBlank { catOption.name }
+                            val isSelected = tempMainCategory != null && (
+                                tempMainCategory.equals(filterKey, ignoreCase = true) ||
+                                    MainCategoryConfig.normalizeCategoryKey(tempMainCategory) == MainCategoryConfig.normalizeCategoryKey(catOption.name)
+                                )
                             FilterChip(
                                 selected = isSelected,
-                                onClick = { tempMainCategory = if (isSelected) null else catName },
-                                label = { Text(catName) }
+                                onClick = { tempMainCategory = if (isSelected) null else filterKey },
+                                label = { Text(catOption.name) },
+                                modifier = Modifier.testTag("main_cat_filter_$filterKey")
                             )
                         }
                     }

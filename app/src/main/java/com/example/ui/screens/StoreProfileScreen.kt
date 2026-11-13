@@ -311,7 +311,6 @@ fun StoreProfileScreen(
                             MerchantLogoView(
                                 storeName = settings.storeName,
                                 logoUrl = trimmedLogo.ifBlank { settings.logoUrl },
-                                bannerUrl = settings.bannerUrl,
                                 imageUrl = settings.imageUrl,
                                 modifier = Modifier
                                     .fillMaxSize()
