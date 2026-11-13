@@ -56,6 +56,11 @@ fun DashboardScreen(
     averageRating: Double = 5.0,
     reviewsCount: Int = 0,
     onOpenReports: () -> Unit = {},
+    isMultiOutlet: Boolean = false,
+    outlets: List<MerchantSettings> = emptyList(),
+    selectedOutletIds: Set<String> = emptySet(),
+    isCombinedLoading: Boolean = false,
+    onOpenOutletsFilter: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -412,10 +417,40 @@ fun DashboardScreen(
         }
 
         // KPI METRICS GRID
-        Text(
-            text = "Today's Performance",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Today's Performance",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+            if (isMultiOutlet) {
+                val filterLabel = when {
+                    selectedOutletIds.size <= 1 -> "Outlets: This outlet"
+                    selectedOutletIds.size >= outlets.size -> "Outlets: All (${outlets.size})"
+                    else -> "Outlets: ${selectedOutletIds.size} of ${outlets.size}"
+                }
+                FilterChip(
+                    selected = selectedOutletIds.size > 1,
+                    onClick = onOpenOutletsFilter,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Storefront,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    label = { Text(filterLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                    modifier = Modifier.testTag("dashboard_outlets_filter_chip")
+                )
+            }
+        }
+
+        if (isMultiOutlet && isCombinedLoading) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -534,6 +569,67 @@ fun DashboardScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.error
                     )
+                }
+            }
+        }
+
+        if (isMultiOutlet && selectedOutletIds.size > 1) {
+            val breakdownRows = remember(outlets, selectedOutletIds, todayDeliveredOrders, todayOrders) {
+                outlets.filter { it.merchantId in selectedOutletIds }.map { outlet ->
+                    val outletOrders = todayOrders.filter { it.merchantId == outlet.merchantId }
+                    val outletDelivered = todayDeliveredOrders.filter { it.merchantId == outlet.merchantId }
+                    Triple(outlet, outletOrders.size, outletDelivered.sumOf { it.netSales })
+                }
+            }
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_per_outlet_breakdown")
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Per-Outlet Breakdown (Today)",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    breakdownRows.forEach { (outlet, orderCount, net) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = outlet.displayName,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = listOfNotNull(
+                                        outlet.branchCode.takeIf { it.isNotBlank() },
+                                        "$orderCount orders"
+                                    ).joinToString(" • "),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "₱${FormatUtils.formatCurrency(net)}",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 13.sp,
+                                color = customColors.accent
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -671,7 +767,7 @@ fun DashboardScreen(
 
                                 csvFile.bufferedWriter().use { writer ->
                                     writer.appendLine("DELIVIO PARTNER - SALES REPORT")
-                                    writer.appendLine("Shop,${settings.storeName}")
+                                    writer.appendLine("Shop,${settings.displayName}")
                                     writer.appendLine("Period,$selectedDateRange")
                                     writer.appendLine("Generated,${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())}")
                                     writer.appendLine()

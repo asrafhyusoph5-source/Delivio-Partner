@@ -1,9 +1,13 @@
 package com.example.util
 
+import android.annotation.SuppressLint
 import com.example.data.model.DayHours
 import com.example.data.model.MerchantSettings
-import java.util.Calendar
-import java.util.TimeZone
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 object BusinessHoursHelper {
 
@@ -29,16 +33,26 @@ object BusinessHoursHelper {
         "sun" to "Sun"
     )
 
-    private fun calendarDayToKey(calDay: Int): String {
-        return when (calDay) {
-            Calendar.MONDAY -> "mon"
-            Calendar.TUESDAY -> "tue"
-            Calendar.WEDNESDAY -> "wed"
-            Calendar.THURSDAY -> "thu"
-            Calendar.FRIDAY -> "fri"
-            Calendar.SATURDAY -> "sat"
-            Calendar.SUNDAY -> "sun"
-            else -> "mon"
+    @SuppressLint("NewApi")
+    fun dayOfWeekToKey(dayOfWeek: DayOfWeek): String {
+        return when (dayOfWeek) {
+            DayOfWeek.MONDAY -> "mon"
+            DayOfWeek.TUESDAY -> "tue"
+            DayOfWeek.WEDNESDAY -> "wed"
+            DayOfWeek.THURSDAY -> "thu"
+            DayOfWeek.FRIDAY -> "fri"
+            DayOfWeek.SATURDAY -> "sat"
+            DayOfWeek.SUNDAY -> "sun"
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun resolveZoneId(timezoneId: String): ZoneId {
+        val cleaned = timezoneId.trim().ifBlank { "Asia/Manila" }
+        return try {
+            ZoneId.of(cleaned)
+        } catch (_: Exception) {
+            ZoneId.of("Asia/Manila")
         }
     }
 
@@ -126,23 +140,19 @@ object BusinessHoursHelper {
         return settings.isOpen
     }
 
+    @SuppressLint("NewApi")
     fun isInsideScheduleWindow(
         hours: Map<String, DayHours>,
         timezoneId: String = "Asia/Manila",
         nowMs: Long = System.currentTimeMillis()
     ): Boolean {
-        val tz = try {
-            TimeZone.getTimeZone(timezoneId.ifBlank { "Asia/Manila" })
-        } catch (_: Exception) {
-            TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
-        val currentDayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
-        val currentMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val zone = resolveZoneId(timezoneId)
+        val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
+        val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
         // 1. Check yesterday's overnight window
-        val yesterdayCal = (cal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
-        val yesterdayKey = calendarDayToKey(yesterdayCal.get(Calendar.DAY_OF_WEEK))
+        val yesterdayKey = dayOfWeekToKey(zdt.minusDays(1).dayOfWeek)
         val yesterdayHours = hours[yesterdayKey]
         if (yesterdayHours != null && !yesterdayHours.closed && yesterdayHours.isOvernight) {
             val closeMinutes = parseTimeToMinutes(yesterdayHours.close)
@@ -172,6 +182,7 @@ object BusinessHoursHelper {
      * Calculates the timestamp of the next scheduled opening time (in shop timezone)
      * when autoSchedule is on. If none found or hours empty, returns TIMESTAMP_2100_01_01_MS.
      */
+    @SuppressLint("NewApi")
     fun getNextScheduledOpenTimestamp(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis()
@@ -179,26 +190,21 @@ object BusinessHoursHelper {
         val hours = settings.hours
         if (hours.isEmpty()) return TIMESTAMP_2100_01_01_MS
 
-        val tz = try {
-            TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
-        } catch (_: Exception) {
-            TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
-        val currentDayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
-        val currentMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val zone = resolveZoneId(settings.timezone)
+        val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
+        val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
         // Check today if not closed and open time is later today
         val todayHours = hours[currentDayKey]
         if (todayHours != null && !todayHours.closed) {
             val openMinutes = parseTimeToMinutes(todayHours.open)
             if (currentMinutes < openMinutes) {
-                return (cal.clone() as Calendar).apply {
-                    set(Calendar.HOUR_OF_DAY, openMinutes / 60)
-                    set(Calendar.MINUTE, openMinutes % 60)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
+                return zdt.toLocalDate()
+                    .atTime(openMinutes / 60, openMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
             }
         }
 
@@ -209,14 +215,11 @@ object BusinessHoursHelper {
             val nextHours = hours[nextDayKey]
             if (nextHours != null && !nextHours.closed) {
                 val openMinutes = parseTimeToMinutes(nextHours.open)
-                val targetCal = (cal.clone() as Calendar).apply {
-                    add(Calendar.DAY_OF_YEAR, i)
-                    set(Calendar.HOUR_OF_DAY, openMinutes / 60)
-                    set(Calendar.MINUTE, openMinutes % 60)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                return targetCal.timeInMillis
+                return zdt.toLocalDate().plusDays(i.toLong())
+                    .atTime(openMinutes / 60, openMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
             }
         }
 
@@ -227,6 +230,7 @@ object BusinessHoursHelper {
      * Calculates the timestamp of the next scheduled closing time when opening store
      * while currently outside schedule hours.
      */
+    @SuppressLint("NewApi")
     fun getNextClosingTimestamp(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis()
@@ -234,36 +238,28 @@ object BusinessHoursHelper {
         val hours = settings.hours
         if (hours.isEmpty()) return null
 
-        val tz = try {
-            TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
-        } catch (_: Exception) {
-            TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
-        val currentDayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
+        val zone = resolveZoneId(settings.timezone)
+        val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
+        val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
         val todayHours = hours[currentDayKey]
 
         if (todayHours != null && !todayHours.closed) {
             val closeMinutes = parseTimeToMinutes(todayHours.close)
             if (todayHours.isOvernight) {
                 // Closes tomorrow early morning
-                val targetCal = (cal.clone() as Calendar).apply {
-                    add(Calendar.DAY_OF_YEAR, 1)
-                    set(Calendar.HOUR_OF_DAY, closeMinutes / 60)
-                    set(Calendar.MINUTE, closeMinutes % 60)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                return targetCal.timeInMillis
+                return zdt.toLocalDate().plusDays(1)
+                    .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
             } else {
-                val targetCal = (cal.clone() as Calendar).apply {
-                    set(Calendar.HOUR_OF_DAY, closeMinutes / 60)
-                    set(Calendar.MINUTE, closeMinutes % 60)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                if (targetCal.timeInMillis > nowMs) {
-                    return targetCal.timeInMillis
+                val targetMs = zdt.toLocalDate()
+                    .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                if (targetMs > nowMs) {
+                    return targetMs
                 }
             }
         }
@@ -274,6 +270,7 @@ object BusinessHoursHelper {
      * Formats closedUntil time for display in the red banner.
      * Returns null if closedUntil is 2100-01-01 or not set.
      */
+    @SuppressLint("NewApi")
     fun formatClosedUntilTime(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis()
@@ -282,21 +279,15 @@ object BusinessHoursHelper {
         if (closedUntil >= TIMESTAMP_2100_01_01_MS - 86400000L) {
             return null
         }
-        val tz = try {
-            TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
-        } catch (_: Exception) {
-            TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = closedUntil }
-        val nowCal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
+        val zone = resolveZoneId(settings.timezone)
+        val closedZdt = Instant.ofEpochMilli(closedUntil).atZone(zone)
+        val nowZdt = Instant.ofEpochMilli(nowMs).atZone(zone)
 
-        val timeStr = "%02d:%02d".format(cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
-        return if (cal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR) &&
-            cal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR)
-        ) {
+        val timeStr = "%02d:%02d".format(closedZdt.hour, closedZdt.minute)
+        return if (closedZdt.toLocalDate() == nowZdt.toLocalDate()) {
             timeStr
         } else {
-            val dayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
+            val dayKey = dayOfWeekToKey(closedZdt.dayOfWeek)
             val dayShort = DAY_SHORT_NAMES[dayKey] ?: ""
             "$dayShort $timeStr"
         }
@@ -306,26 +297,23 @@ object BusinessHoursHelper {
      * Returns a human readable string describing the next scheduled state change.
      * e.g., "Opens Mon 08:00" or "Closes 22:00"
      */
+    @SuppressLint("NewApi")
     fun getNextScheduleChangeDescription(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis()
     ): String {
         val hours = settings.hours
         if (hours.isEmpty()) return ""
-        val tz = try {
-            TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
-        } catch (_: Exception) {
-            TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
+        val zone = resolveZoneId(settings.timezone)
+        val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
         val isOpenNow = isInsideScheduleWindow(hours, settings.timezone, nowMs)
-        val currentDayKey = calendarDayToKey(cal.get(Calendar.DAY_OF_WEEK))
-        val currentMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
         val holiday = getActiveHoliday(settings, nowMs)
         if (holiday != null) {
-            val dateFmt = java.text.SimpleDateFormat("MMM d", java.util.Locale.US).apply { timeZone = tz }
-            val toDateStr = dateFmt.format(java.util.Date(holiday.to))
+            val holidayZdt = Instant.ofEpochMilli(holiday.to).atZone(zone)
+            val toDateStr = holidayZdt.format(DateTimeFormatter.ofPattern("MMM d", Locale.US))
             val notePart = if (holiday.note.isNotBlank()) " for ${holiday.note}" else ""
             return "Closed$notePart until $toDateStr"
         }
@@ -343,8 +331,7 @@ object BusinessHoursHelper {
                 return "Closes ${todayHours.close}"
             }
             // Or yesterday's overnight closing
-            val yesterdayCal = (cal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
-            val yKey = calendarDayToKey(yesterdayCal.get(Calendar.DAY_OF_WEEK))
+            val yKey = dayOfWeekToKey(zdt.minusDays(1).dayOfWeek)
             val yHours = hours[yKey]
             if (yHours != null && !yHours.closed && yHours.isOvernight) {
                 return "Closes ${yHours.close}"

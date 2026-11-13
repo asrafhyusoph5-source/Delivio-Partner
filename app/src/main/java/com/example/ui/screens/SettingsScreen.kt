@@ -72,6 +72,8 @@ fun SettingsScreen(
     onOpenStaffDialog: () -> Unit = {},
     onToggleDarkMode: (Boolean) -> Unit = {},
     onCleanupExpiredChats: ((Int) -> Unit) -> Unit = { it(0) },
+    showSecurityPinOption: Boolean = false,
+    onChangeOutletsPin: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -746,6 +748,42 @@ fun SettingsScreen(
                         },
                         modifier = Modifier.testTag("settings_cleanup_chats_row")
                     )
+                }
+            }
+
+            if (showSecurityPinOption) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "SECURITY",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("settings_security_card")
+                    ) {
+                        SettingsRow(
+                            icon = Icons.Default.Lock,
+                            title = "Change Outlets PIN",
+                            subtitle = "Update the 4-6 digit PIN for switching and syncing outlets",
+                            onClick = onChangeOutletsPin,
+                            trailingContent = {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = "Change PIN",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.testTag("settings_change_pin_row")
+                        )
+                    }
                 }
             }
 

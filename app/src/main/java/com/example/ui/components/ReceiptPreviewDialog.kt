@@ -45,8 +45,9 @@ fun ReceiptPreviewDialog(
     val coroutineScope = rememberCoroutineScope()
 
     val paperSize = settings.printerPaperSize.ifBlank { "80mm" }
-    val formattedText = remember(order, settings.storeName, paperSize, receiptDesign) {
-        ReceiptPrinterHelper.generateFormattedReceiptText(order, settings.storeName, paperSize, receiptDesign)
+    val receiptShopName = settings.displayNameWithCode.ifBlank { settings.storeName }
+    val formattedText = remember(order, receiptShopName, paperSize, receiptDesign) {
+        ReceiptPrinterHelper.generateFormattedReceiptText(order, receiptShopName, paperSize, receiptDesign)
     }
 
     Dialog(
@@ -133,7 +134,7 @@ fun ReceiptPreviewDialog(
                             ReceiptPrinterHelper.shareReceiptAsText(
                                 context,
                                 order,
-                                settings.storeName,
+                                receiptShopName,
                                 paperSize,
                                 receiptDesign
                             )
@@ -163,7 +164,7 @@ fun ReceiptPreviewDialog(
                                     context = context,
                                     deviceAddress = settings.bluetoothPrinterAddress,
                                     order = order,
-                                    storeName = settings.storeName,
+                                    storeName = receiptShopName,
                                     design = receiptDesign
                                 )
                                 isPrintingBt = false
@@ -188,7 +189,7 @@ fun ReceiptPreviewDialog(
                                             context = context,
                                             deviceAddress = settings.bluetoothPrinterAddress,
                                             order = order,
-                                            storeName = settings.storeName,
+                                            storeName = receiptShopName,
                                             design = receiptDesign
                                         )
                                         isPrintingBt = false
@@ -204,7 +205,7 @@ fun ReceiptPreviewDialog(
                                     ReceiptPrinterHelper.printOrderReceipt(
                                         activity,
                                         order,
-                                        settings.storeName,
+                                        receiptShopName,
                                         paperSize,
                                         receiptDesign
                                     )
@@ -212,7 +213,7 @@ fun ReceiptPreviewDialog(
                                     ReceiptPrinterHelper.shareReceiptAsText(
                                         context,
                                         order,
-                                        settings.storeName,
+                                        receiptShopName,
                                         paperSize,
                                         receiptDesign
                                     )

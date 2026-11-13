@@ -374,6 +374,42 @@ fun StoreProfileScreen(
                             .testTag("store_profile_shop_name_readonly")
                     )
 
+                    if (settings.chainId.isNotBlank() || settings.branchName.isNotBlank() || settings.branchCode.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = settings.branchName.ifBlank { "Not set" },
+                            onValueChange = {},
+                            readOnly = true,
+                            enabled = false,
+                            label = { Text("Branch Name") },
+                            leadingIcon = { Icon(Icons.Default.Store, contentDescription = null) },
+                            trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
+                            supportingText = { Text("Only the admin can change these", fontSize = 11.sp) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("store_profile_branch_name_readonly")
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = settings.branchCode.ifBlank { "Not set" },
+                            onValueChange = {},
+                            readOnly = true,
+                            enabled = false,
+                            label = { Text("Branch Code") },
+                            leadingIcon = { Icon(Icons.Default.Tag, contentDescription = null) },
+                            trailingIcon = { Icon(Icons.Default.Lock, contentDescription = "Locked") },
+                            supportingText = { Text("Only the admin can change these", fontSize = 11.sp) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("store_profile_branch_code_readonly")
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // Store Logo URL

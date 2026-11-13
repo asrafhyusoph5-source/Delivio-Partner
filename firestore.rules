@@ -221,7 +221,10 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (canManage(mid)
-        && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt','walletBalance','linkedCustomerUid','linkedCustomerEmail','linkedAt','specialRadius'])
+        && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt','walletBalance','linkedCustomerUid','linkedCustomerEmail','linkedAt','specialRadius','chainId','chainName','isBranch'])
+        && (!touches(['branchName', 'branchCode', 'branchSetupDone'])
+            || (resource.data.get('branchSetupDone', false) != true
+                && request.resource.data.get('branchSetupDone', false) == true))
         && (!touches(['lat', 'lng', 'address', 'storeLocation'])
             || (request.resource.data.get('locationChangedAt', null) == request.time
                 && (resource.data.get('locationChangedAt', null) == null

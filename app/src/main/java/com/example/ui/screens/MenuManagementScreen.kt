@@ -58,6 +58,10 @@ fun MenuManagementScreen(
     onBulkSetCategoryClass: (Set<String>, String?, String?, (Boolean, Int, String?) -> Unit) -> Unit,
     onBulkAdjustPrices: (Set<String>, Double, Double, (Boolean, Int, String?) -> Unit) -> Unit,
     onBulkDeleteItems: (Set<String>, (Boolean, Int, String?) -> Unit) -> Unit,
+    isMultiOutlet: Boolean = false,
+    onPushMenu: () -> Unit = {},
+    onPullMenu: () -> Unit = {},
+    onSyncMenu: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -129,6 +133,10 @@ fun MenuManagementScreen(
                     menuItems = menuItems,
                     currentTime = currentTime,
                     timeZoneId = timeZoneId,
+                    isMultiOutlet = isMultiOutlet,
+                    onPushMenu = onPushMenu,
+                    onPullMenu = onPullMenu,
+                    onSyncMenu = onSyncMenu,
                     onAddMenu = onAddMenu,
                     onEditMenu = onEditMenu,
                     onToggleMenuActive = onToggleMenuActive,
@@ -167,6 +175,10 @@ private fun MenusTabContent(
     menuItems: List<MenuItem>,
     currentTime: Long,
     timeZoneId: String,
+    isMultiOutlet: Boolean,
+    onPushMenu: () -> Unit,
+    onPullMenu: () -> Unit,
+    onSyncMenu: () -> Unit,
     onAddMenu: () -> Unit,
     onEditMenu: (ShopMenu) -> Unit,
     onToggleMenuActive: (String, Boolean) -> Unit,
@@ -181,6 +193,85 @@ private fun MenusTabContent(
         contentPadding = PaddingValues(top = 16.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        if (isMultiOutlet) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth().testTag("multi_outlet_menu_sync_bar")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Storefront,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Outlets Menu Actions",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onPushMenu,
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 44.dp)
+                                    .testTag("btn_push_menu")
+                            ) {
+                                Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Push Menu", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = onPullMenu,
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 44.dp)
+                                    .testTag("btn_pull_menu")
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pull Menu", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                            Button(
+                                onClick = onSyncMenu,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = customColors.accent,
+                                    contentColor = customColors.onAccent
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 44.dp)
+                                    .testTag("btn_sync_menu")
+                            ) {
+                                Icon(Icons.Default.SyncAlt, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Sync Menu", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Explanation Card
         item {
             Card(

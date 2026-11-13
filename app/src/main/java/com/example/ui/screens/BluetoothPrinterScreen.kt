@@ -354,7 +354,7 @@ fun BluetoothPrinterScreen(
                                 val result = BluetoothPrinterHelper.printTestReceipt(
                                     context = context,
                                     deviceAddress = selectedDeviceAddress,
-                                    storeName = settings.storeName.ifBlank { "Delivio Partner" }
+                                    storeName = settings.displayNameWithCode.ifBlank { settings.storeName.ifBlank { "Delivio Partner" } }
                                 )
                                 isPrintingTest = false
                                 if (result.isSuccess) {

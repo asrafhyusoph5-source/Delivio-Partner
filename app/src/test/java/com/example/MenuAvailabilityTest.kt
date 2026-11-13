@@ -1,11 +1,16 @@
 package com.example
 
+import com.example.data.model.DayHours
 import com.example.data.model.MenuItem
 import com.example.data.model.MenuSchedule
+import com.example.data.model.ProductAvailability
 import com.example.data.model.ShopMenu
+import com.example.util.BusinessHoursHelper
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.DayOfWeek
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -104,5 +109,45 @@ class MenuAvailabilityTest {
 
         val itemInClosed = itemInAlways.copy(menuIds = listOf("secret"))
         assertFalse(itemInClosed.isAvailableNow(listOf(alwaysMenu, closedMenu), System.currentTimeMillis(), timeZoneString))
+    }
+
+    @Test
+    fun testSundayDayMappingAndSchedule() {
+        assertEquals("sun", MenuSchedule.dayOfWeekToKey(DayOfWeek.SUNDAY))
+        assertEquals("sat", MenuSchedule.dayOfWeekToKey(DayOfWeek.SATURDAY))
+        assertEquals("mon", MenuSchedule.dayOfWeekToKey(DayOfWeek.MONDAY))
+        assertEquals("sun", BusinessHoursHelper.dayOfWeekToKey(DayOfWeek.SUNDAY))
+
+        // Nov 8, 2026 is a Sunday
+        val sun11am = ZonedDateTime.of(2026, 11, 8, 11, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+        val mon11am = ZonedDateTime.of(2026, 11, 9, 11, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+
+        val sundayMenu = ShopMenu(
+            id = "sunday_special",
+            name = "Sunday Special",
+            active = true,
+            schedule = MenuSchedule(days = listOf("sun"), start = "09:00", end = "21:00")
+        )
+        assertTrue(sundayMenu.isAvailableNow(sun11am, timeZoneString))
+        assertFalse(sundayMenu.isAvailableNow(mon11am, timeZoneString))
+
+        val sundayProduct = ProductAvailability(days = listOf("sun"), start = "09:00", end = "21:00")
+        assertTrue(sundayProduct.isAvailableNow(sun11am, timeZoneString))
+        assertFalse(sundayProduct.isAvailableNow(mon11am, timeZoneString))
+
+        // Overnight Saturday 20:00 to 04:00 into Sunday 02:00 AM
+        val satOvernightProduct = ProductAvailability(days = listOf("sat"), start = "20:00", end = "04:00")
+        val sun2am = ZonedDateTime.of(2026, 11, 8, 2, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+        val sun5am = ZonedDateTime.of(2026, 11, 8, 5, 0, 0, 0, zoneId).toInstant().toEpochMilli()
+        assertTrue(satOvernightProduct.isAvailableNow(sun2am, timeZoneString))
+        assertFalse(satOvernightProduct.isAvailableNow(sun5am, timeZoneString))
+
+        val hoursMap = mapOf(
+            "sat" to DayHours(open = "20:00", close = "04:00", closed = false),
+            "sun" to DayHours(open = "09:00", close = "18:00", closed = false)
+        )
+        assertTrue(BusinessHoursHelper.isInsideScheduleWindow(hoursMap, timeZoneString, sun2am))
+        assertFalse(BusinessHoursHelper.isInsideScheduleWindow(hoursMap, timeZoneString, sun5am))
+        assertTrue(BusinessHoursHelper.isInsideScheduleWindow(hoursMap, timeZoneString, sun11am))
     }
 }

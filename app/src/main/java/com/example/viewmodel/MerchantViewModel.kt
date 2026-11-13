@@ -5,11 +5,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
 import com.example.data.repository.MerchantRepository
+import com.example.util.MenuSyncEngine
+import com.example.util.MenuSyncResult
+import com.example.util.OutletMenuSnapshot
+import com.example.util.PinVerifyResult
 import com.example.util.PlatformOrderStatuses
 import com.example.util.SoundVibrationHelper
 import com.example.util.FOOD_CATEGORIES
 import com.example.util.CONVENIENCE_CATEGORIES
+import com.example.util.SyncField
+import com.example.util.SyncPlanPreview
+import com.example.util.SyncResolution
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -55,6 +64,33 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val riderAverageRating = repository.riderAverageRating
     val riderReviewsCount = repository.riderReviewsCount
 
+    // Multi-outlet flows
+    val activeMerchantId = repository.merchantId
+    val outlets = repository.outlets
+    val newOrderCountByOutlet = repository.newOrderCountByOutlet
+    val otherOutletOrderBanner = repository.otherOutletOrderBanner
+
+    val isMultiOutlet: StateFlow<Boolean> = combine(outlets, currentUser) { list, user ->
+        list.size >= 2 && user?.role != "staff"
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val otherOutletsNewOrdersCount: StateFlow<Int> = combine(
+        newOrderCountByOutlet,
+        activeMerchantId,
+        isMultiOutlet
+    ) { map, activeId, multi ->
+        if (!multi) 0 else map.entries.filter { it.key != activeId }.sumOf { it.value }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val branchSetupOutlet: StateFlow<MerchantSettings?> = combine(
+        settings,
+        currentUser
+    ) { s, user ->
+        if (user != null && user.role != "staff" && s.merchantId.isNotBlank() && s.chainId.isNotBlank() && !s.branchSetupDone) {
+            s
+        } else null
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     // Periodic time ticker for checking scheduled orders (every 30 seconds)
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
     val currentTime: StateFlow<Long> = _currentTime.asStateFlow()
@@ -80,6 +116,17 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
+        // Play alert sound when a new order arrives at another outlet
+        viewModelScope.launch {
+            var lastPlayedId: String? = null
+            repository.otherOutletOrderBanner.collect { event ->
+                if (event != null && event.orderId != lastPlayedId && !isServiceLocked.value) {
+                    lastPlayedId = event.orderId
+                    SoundVibrationHelper.playNewOrderAlert(getApplication())
+                }
+            }
+        }
+
         // 1-minute ticker: evaluate effectiveOpen and refresh inbox visibility when sendAt passes
         viewModelScope.launch {
             repository.checkAndUpdateEffectiveOpen(System.currentTimeMillis())
@@ -95,9 +142,14 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         onMenuOpened()
     }
 
+    fun onAppBackground() {
+        repository.onAppBackground()
+    }
+
     fun onAppForeground() {
         val now = System.currentTimeMillis()
         _currentTime.value = now
+        repository.onAppForeground()
         repository.recheckScheduledOrders(now)
         repository.refreshInboxVisibility()
     }
@@ -1411,6 +1463,384 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     fun cleanupExpiredChats(force: Boolean = true, onComplete: ((Int) -> Unit)? = null) {
         repository.triggerExpiredChatCleanup(force = force, onComplete = onComplete)
     }
+
+    // =========================================================================
+    // MULTI-OUTLET CONTROLS: PIN, OUTLETS SHEET, ANALYTICS FILTERS & MENU SYNC
+    // =========================================================================
+
+    private val _outletsSheetMode = MutableStateFlow<OutletsSheetMode?>(null)
+    val outletsSheetMode: StateFlow<OutletsSheetMode?> = _outletsSheetMode.asStateFlow()
+
+    private val _pinModalMode = MutableStateFlow<PinModalMode?>(null)
+    val pinModalMode: StateFlow<PinModalMode?> = _pinModalMode.asStateFlow()
+
+    private var pendingPinAction: PendingPinAction? = null
+
+    private val _dashboardSelectedOutletIds = MutableStateFlow<Set<String>>(emptySet())
+    val dashboardSelectedOutletIds: StateFlow<Set<String>> = _dashboardSelectedOutletIds.asStateFlow()
+
+    private val _dashboardCombinedOrders = MutableStateFlow<List<Order>>(emptyList())
+    val dashboardCombinedOrders: StateFlow<List<Order>> = _dashboardCombinedOrders.asStateFlow()
+
+    private val _dashboardCombinedReviews = MutableStateFlow<List<CustomerReview>>(emptyList())
+    val dashboardCombinedReviews: StateFlow<List<CustomerReview>> = _dashboardCombinedReviews.asStateFlow()
+
+    private val _isDashboardCombinedLoading = MutableStateFlow(false)
+    val isDashboardCombinedLoading: StateFlow<Boolean> = _isDashboardCombinedLoading.asStateFlow()
+
+    private val _reportsSelectedOutletIds = MutableStateFlow<Set<String>>(emptySet())
+    val reportsSelectedOutletIds: StateFlow<Set<String>> = _reportsSelectedOutletIds.asStateFlow()
+
+    private val _reportsCombinedOrders = MutableStateFlow<List<Order>>(emptyList())
+    val reportsCombinedOrders: StateFlow<List<Order>> = _reportsCombinedOrders.asStateFlow()
+
+    private val _isReportsCombinedLoading = MutableStateFlow(false)
+    val isReportsCombinedLoading: StateFlow<Boolean> = _isReportsCombinedLoading.asStateFlow()
+
+    private val _menuSyncDialogMode = MutableStateFlow<MenuSyncDialogMode?>(null)
+    val menuSyncDialogMode: StateFlow<MenuSyncDialogMode?> = _menuSyncDialogMode.asStateFlow()
+
+    private val _isMenuSyncLoadingSnapshots = MutableStateFlow(false)
+    val isMenuSyncLoadingSnapshots: StateFlow<Boolean> = _isMenuSyncLoadingSnapshots.asStateFlow()
+
+    private val _menuSyncSnapshots = MutableStateFlow<Map<String, OutletMenuSnapshot>>(emptyMap())
+    val menuSyncSnapshots: StateFlow<Map<String, OutletMenuSnapshot>> = _menuSyncSnapshots.asStateFlow()
+
+    private val _isMenuSyncRunning = MutableStateFlow(false)
+    val isMenuSyncRunning: StateFlow<Boolean> = _isMenuSyncRunning.asStateFlow()
+
+    private val _menuSyncProgress = MutableStateFlow(0 to 0)
+    val menuSyncProgress: StateFlow<Pair<Int, Int>> = _menuSyncProgress.asStateFlow()
+
+    private val _menuSyncResult = MutableStateFlow<MenuSyncResult?>(null)
+    val menuSyncResult: StateFlow<MenuSyncResult?> = _menuSyncResult.asStateFlow()
+
+    fun openOutletsSwitcher() {
+        requestPinGatedAction(PendingPinAction.OpenOutletsSheet)
+    }
+
+    fun openPushMenu() {
+        requestPinGatedAction(PendingPinAction.OpenPushMenu)
+    }
+
+    fun openPullMenu() {
+        requestPinGatedAction(PendingPinAction.OpenPullMenu)
+    }
+
+    fun openSyncMenu() {
+        requestPinGatedAction(PendingPinAction.OpenSyncMenu)
+    }
+
+    fun openDashboardOutletsFilter() {
+        if (!isMultiOutlet.value) return
+        _outletsSheetMode.value = OutletsSheetMode.MULTI_DASHBOARD_FILTER
+    }
+
+    fun openReportsOutletsFilter() {
+        if (!isMultiOutlet.value) return
+        _outletsSheetMode.value = OutletsSheetMode.MULTI_REPORTS_FILTER
+    }
+
+    fun closeOutletsSheet() {
+        _outletsSheetMode.value = null
+    }
+
+    fun openChangePinDialog() {
+        if (!isMultiOutlet.value) return
+        pendingPinAction = null
+        _pinModalMode.value = if (repository.hasOutletsPin()) PinModalMode.CHANGE else PinModalMode.CREATE
+    }
+
+    fun openForgotPinFlow() {
+        _pinModalMode.value = PinModalMode.FORGOT_PASSWORD
+    }
+
+    fun closePinModal() {
+        _pinModalMode.value = null
+        pendingPinAction = null
+    }
+
+    private fun requestPinGatedAction(action: PendingPinAction) {
+        if (!isMultiOutlet.value) return
+        when {
+            !repository.hasOutletsPin() -> {
+                pendingPinAction = action
+                _pinModalMode.value = PinModalMode.CREATE
+            }
+            !repository.isOutletsPinUnlocked() -> {
+                pendingPinAction = action
+                _pinModalMode.value = PinModalMode.ENTER
+            }
+            else -> performPendingPinAction(action)
+        }
+    }
+
+    private fun performPendingPinAction(action: PendingPinAction) {
+        when (action) {
+            PendingPinAction.OpenOutletsSheet -> _outletsSheetMode.value = OutletsSheetMode.SINGLE_SWITCH
+            PendingPinAction.OpenPushMenu -> openMenuSyncModal(MenuSyncDialogMode.PUSH)
+            PendingPinAction.OpenPullMenu -> openMenuSyncModal(MenuSyncDialogMode.PULL)
+            PendingPinAction.OpenSyncMenu -> openMenuSyncModal(MenuSyncDialogMode.SYNC)
+        }
+    }
+
+    fun isPinLockedOut(): Boolean = repository.isPinLockedOut()
+
+    fun remainingPinLockoutSeconds(): Long = repository.remainingPinLockoutSeconds()
+
+    fun submitCreatePin(pin: String, confirmPin: String, onResult: (Boolean, String?) -> Unit) {
+        if (pin != confirmPin) {
+            onResult(false, "PINs do not match")
+            return
+        }
+        repository.saveOutletsPin(pin) { success, err ->
+            if (success) {
+                val action = pendingPinAction
+                pendingPinAction = null
+                _pinModalMode.value = null
+                showSnackbar("Outlets PIN saved")
+                if (action != null) performPendingPinAction(action)
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun submitEnterPin(pin: String): PinVerifyResult {
+        val res = repository.verifyOutletsPin(pin)
+        if (res is PinVerifyResult.Success) {
+            val action = pendingPinAction
+            pendingPinAction = null
+            _pinModalMode.value = null
+            if (action != null) performPendingPinAction(action)
+        }
+        return res
+    }
+
+    fun verifyPasswordAndResetPin(password: String, onResult: (Boolean, String?) -> Unit) {
+        repository.verifyAccountPasswordForPinReset(password) { success, err ->
+            if (success) {
+                _pinModalMode.value = PinModalMode.CREATE
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun submitChangePin(oldPin: String, newPin: String, confirmPin: String, onResult: (Boolean, String?) -> Unit) {
+        if (newPin != confirmPin) {
+            onResult(false, "New PINs do not match")
+            return
+        }
+        repository.changeOutletsPin(oldPin, newPin) { success, err ->
+            if (success) {
+                _pinModalMode.value = null
+                showSnackbar("Outlets PIN updated")
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun switchActiveOutlet(targetMerchantId: String) {
+        _outletsSheetMode.value = null
+        val target = outlets.value.find { it.merchantId == targetMerchantId }
+        repository.switchActiveOutlet(targetMerchantId)
+        _dashboardSelectedOutletIds.value = emptySet()
+        _dashboardCombinedOrders.value = emptyList()
+        _dashboardCombinedReviews.value = emptyList()
+        _reportsSelectedOutletIds.value = emptySet()
+        _reportsCombinedOrders.value = emptyList()
+        if (target != null) {
+            showSnackbar("Switched to ${target.displayName}")
+        }
+    }
+
+    fun dismissOtherOutletOrderBanner() {
+        repository.dismissOtherOutletOrderBanner()
+    }
+
+    fun submitBranchSetup(
+        merchantId: String,
+        chainId: String,
+        branchName: String,
+        branchCode: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        repository.checkAndSaveBranchSetup(merchantId, chainId, branchName, branchCode) { success, err ->
+            if (success) {
+                showSnackbar("Branch details saved")
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun applyDashboardOutletFilter(selectedIds: Set<String>) {
+        _outletsSheetMode.value = null
+        val activeId = activeMerchantId.value ?: ""
+        val validIds = selectedIds.filter { id -> outlets.value.any { it.merchantId == id } }.toSet()
+        val effectiveIds = validIds.ifEmpty { if (activeId.isNotBlank()) setOf(activeId) else emptySet() }
+
+        if (effectiveIds.size <= 1 && (effectiveIds.isEmpty() || effectiveIds.first() == activeId)) {
+            _dashboardSelectedOutletIds.value = emptySet()
+            _dashboardCombinedOrders.value = emptyList()
+            _dashboardCombinedReviews.value = emptyList()
+            _isDashboardCombinedLoading.value = false
+            return
+        }
+
+        _dashboardSelectedOutletIds.value = effectiveIds
+        _isDashboardCombinedLoading.value = true
+        repository.fetchCombinedOutletOrders(effectiveIds.toList()) { list, err ->
+            _dashboardCombinedOrders.value = list
+            _isDashboardCombinedLoading.value = false
+            if (err != null) showSnackbar(err)
+        }
+        repository.fetchCombinedOutletReviews(effectiveIds.toList()) { revs ->
+            _dashboardCombinedReviews.value = revs
+        }
+    }
+
+    fun applyReportsOutletFilter(selectedIds: Set<String>) {
+        _outletsSheetMode.value = null
+        val activeId = activeMerchantId.value ?: ""
+        val validIds = selectedIds.filter { id -> outlets.value.any { it.merchantId == id } }.toSet()
+        val effectiveIds = validIds.ifEmpty { if (activeId.isNotBlank()) setOf(activeId) else emptySet() }
+
+        if (effectiveIds.size <= 1 && (effectiveIds.isEmpty() || effectiveIds.first() == activeId)) {
+            _reportsSelectedOutletIds.value = emptySet()
+            _reportsCombinedOrders.value = emptyList()
+            _isReportsCombinedLoading.value = false
+            return
+        }
+
+        _reportsSelectedOutletIds.value = effectiveIds
+        _isReportsCombinedLoading.value = true
+        repository.fetchCombinedOutletOrders(effectiveIds.toList()) { list, err ->
+            _reportsCombinedOrders.value = list
+            _isReportsCombinedLoading.value = false
+            if (err != null) showSnackbar(err)
+        }
+    }
+
+    private fun openMenuSyncModal(mode: MenuSyncDialogMode) {
+        _menuSyncResult.value = null
+        _menuSyncProgress.value = 0 to 0
+        _isMenuSyncRunning.value = false
+        _menuSyncDialogMode.value = mode
+        refreshMenuSyncSnapshots()
+    }
+
+    fun refreshMenuSyncSnapshots() {
+        val currentOutlets = outlets.value
+        if (currentOutlets.isEmpty()) return
+        _isMenuSyncLoadingSnapshots.value = true
+        viewModelScope.launch {
+            try {
+                val results = currentOutlets.map { outlet ->
+                    async { outlet.merchantId to repository.loadOutletMenuSnapshot(outlet) }
+                }.awaitAll().toMap()
+                _menuSyncSnapshots.value = results
+            } catch (ex: Exception) {
+                showSnackbar(ex.localizedMessage ?: "Failed to load outlet menus")
+            } finally {
+                _isMenuSyncLoadingSnapshots.value = false
+            }
+        }
+    }
+
+    fun executePushMenu(source: OutletMenuSnapshot, targets: List<OutletMenuSnapshot>) {
+        val targetsWithItems = targets.map { tgt ->
+            val preview = MenuSyncEngine.planMissingItemsCopy(source, tgt)
+            tgt to preview.itemsToCopy
+        }
+        val skipped = targets.sumOf { tgt -> MenuSyncEngine.planMissingItemsCopy(source, tgt).alreadyExistsCount }
+        _isMenuSyncRunning.value = true
+        _menuSyncProgress.value = 0 to 1
+        repository.executePushMenu(
+            source = source,
+            targetsWithItems = targetsWithItems,
+            totalSkipped = skipped,
+            onProgress = { done, total -> _menuSyncProgress.value = done to total },
+            onComplete = { result ->
+                _isMenuSyncRunning.value = false
+                _menuSyncResult.value = result
+                refreshMenuSyncSnapshots()
+            }
+        )
+    }
+
+    fun executePullMenu(target: OutletMenuSnapshot, source: OutletMenuSnapshot) {
+        val preview = MenuSyncEngine.planMissingItemsCopy(source, target)
+        _isMenuSyncRunning.value = true
+        _menuSyncProgress.value = 0 to 1
+        repository.executePullMenu(
+            target = target,
+            source = source,
+            itemsToCopy = preview.itemsToCopy,
+            skippedCount = preview.alreadyExistsCount,
+            onProgress = { done, total -> _menuSyncProgress.value = done to total },
+            onComplete = { result ->
+                _isMenuSyncRunning.value = false
+                _menuSyncResult.value = result
+                refreshMenuSyncSnapshots()
+            }
+        )
+    }
+
+    fun executeSyncMenu(
+        mine: OutletMenuSnapshot,
+        theirs: OutletMenuSnapshot,
+        fieldsToSync: Set<SyncField>,
+        plan: SyncPlanPreview,
+        resolutions: Map<String, SyncResolution>
+    ) {
+        _isMenuSyncRunning.value = true
+        _menuSyncProgress.value = 0 to 1
+        repository.executeSyncMenu(
+            mine = mine,
+            theirs = theirs,
+            fieldsToSync = fieldsToSync,
+            plan = plan,
+            resolutions = resolutions,
+            onProgress = { done, total -> _menuSyncProgress.value = done to total },
+            onComplete = { result ->
+                _isMenuSyncRunning.value = false
+                _menuSyncResult.value = result
+                refreshMenuSyncSnapshots()
+            }
+        )
+    }
+
+    fun closeMenuSyncDialog() {
+        if (_isMenuSyncRunning.value) return
+        _menuSyncDialogMode.value = null
+        _menuSyncResult.value = null
+        _menuSyncProgress.value = 0 to 0
+    }
+}
+
+enum class OutletsSheetMode {
+    SINGLE_SWITCH,
+    MULTI_DASHBOARD_FILTER,
+    MULTI_REPORTS_FILTER
+}
+
+enum class PinModalMode {
+    CREATE,
+    ENTER,
+    FORGOT_PASSWORD,
+    CHANGE
+}
+
+sealed interface PendingPinAction {
+    data object OpenOutletsSheet : PendingPinAction
+    data object OpenPushMenu : PendingPinAction
+    data object OpenPullMenu : PendingPinAction
+    data object OpenSyncMenu : PendingPinAction
+}
+
+enum class MenuSyncDialogMode {
+    PUSH,
+    PULL,
+    SYNC
 }
 
 enum class MerchantTab(val label: String) {

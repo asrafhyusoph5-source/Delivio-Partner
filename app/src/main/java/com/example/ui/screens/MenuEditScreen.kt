@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.MenuItem
 import com.example.data.model.MenuSchedule
 import com.example.data.model.ShopMenu
+import com.example.ui.components.DayChipsRow
+import com.example.ui.components.orderedDaysList
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
@@ -50,7 +52,13 @@ fun MenuEditScreen(
 
     // Schedule state
     var hasSpecificSchedule by remember { mutableStateOf(menu.schedule != null && menu.schedule.days.isNotEmpty()) }
-    val initialDays = remember(menu) { menu.schedule?.days?.toSet() ?: setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun") }
+    val initialDays = remember(menu) {
+        menu.schedule?.days
+            ?.map { it.trim().lowercase() }
+            ?.filter { it.isNotBlank() }
+            ?.toSet()
+            ?: setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+    }
     var selectedDays by remember { mutableStateOf(initialDays) }
 
     var startTime24 by remember { mutableStateOf(menu.schedule?.start ?: "06:00") }
@@ -165,7 +173,7 @@ fun MenuEditScreen(
                             isSaving = true
                             val finalSchedule = if (hasSpecificSchedule) {
                                 MenuSchedule(
-                                    days = selectedDays.toList(),
+                                    days = orderedDaysList(selectedDays),
                                     start = startTime24,
                                     end = endTime24
                                 )
@@ -228,7 +236,7 @@ fun MenuEditScreen(
                                     trimmedName.length < 2 -> "Menu name is too short (min 2 characters)"
                                     trimmedName.length > 40 -> "Menu name is too long (max 40 characters)"
                                     isNameDuplicate -> "Menu name \"$trimmedName\" already exists"
-                                    !isDaysValid -> "Please select at least one day for availability"
+                                    !isDaysValid -> "Choose at least one day"
                                     else -> "Please check the form requirements"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
@@ -379,56 +387,18 @@ fun MenuEditScreen(
                                 }
                             }
 
-                            // Quick Day Presets
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                FilterChip(
-                                    selected = selectedDays.size == 7,
-                                    onClick = { selectedDays = setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun") },
-                                    label = { Text("Every day", fontSize = 11.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedDays == setOf("mon", "tue", "wed", "thu", "fri"),
-                                    onClick = { selectedDays = setOf("mon", "tue", "wed", "thu", "fri") },
-                                    label = { Text("Weekdays", fontSize = 11.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedDays == setOf("sat", "sun"),
-                                    onClick = { selectedDays = setOf("sat", "sun") },
-                                    label = { Text("Weekends", fontSize = 11.sp) }
-                                )
-                            }
-
-                            // Day chips Mon to Sun
-                            val weekDays = listOf(
-                                "mon" to "Mon",
-                                "tue" to "Tue",
-                                "wed" to "Wed",
-                                "thu" to "Thu",
-                                "fri" to "Fri",
-                                "sat" to "Sat",
-                                "sun" to "Sun"
+                            DayChipsRow(
+                                selectedDays = selectedDays,
+                                onChange = { selectedDays = it }
                             )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                weekDays.forEach { (key, label) ->
-                                    val isSelected = selectedDays.contains(key)
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = {
-                                            selectedDays = if (isSelected) selectedDays - key else selectedDays + key
-                                        },
-                                        label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = customColors.accent,
-                                            selectedLabelColor = customColors.onAccent
-                                        )
-                                    )
-                                }
+                            if (selectedDays.isEmpty()) {
+                                Text(
+                                    text = "Choose at least one day",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.testTag("menu_avail_days_error")
+                                )
                             }
 
                             // Start time & End time selectors (12-hour 15-min steps)

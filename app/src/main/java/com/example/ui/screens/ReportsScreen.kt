@@ -76,6 +76,11 @@ fun ReportsScreen(
     onOpenReviews: () -> Unit,
     onCreateVoucher: () -> Unit,
     onBack: () -> Unit,
+    isMultiOutlet: Boolean = false,
+    outlets: List<MerchantSettings> = emptyList(),
+    selectedOutletIds: Set<String> = emptySet(),
+    isCombinedLoading: Boolean = false,
+    onOpenOutletsFilter: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -405,10 +410,23 @@ fun ReportsScreen(
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply { timeZone = tz }
             csvFile.bufferedWriter().use { writer ->
                 writer.appendLine("DELIVIO PARTNER - ANALYTICS & PERFORMANCE REPORT")
-                writer.appendLine("Shop Name,${settings.storeName}")
+                writer.appendLine("Shop Name,${settings.displayName}")
+                if (isMultiOutlet && selectedOutletIds.size > 1) {
+                    val selectedNames = outlets.filter { it.merchantId in selectedOutletIds }.joinToString(" | ") { it.displayName }
+                    writer.appendLine("Outlets Included,$selectedNames")
+                }
                 writer.appendLine("Period,${selectedPeriod.title} (${FormatUtils.formatDate(startMs)} - ${FormatUtils.formatDate(endMs)})")
                 writer.appendLine("Generated At,${sdf.format(Date(currentTime))}")
                 writer.appendLine()
+                if (isMultiOutlet && selectedOutletIds.size > 1) {
+                    writer.appendLine("PER-OUTLET BREAKDOWN")
+                    writer.appendLine("Outlet,Code,Delivered Orders,Net Sales")
+                    outlets.filter { it.merchantId in selectedOutletIds }.forEach { outlet ->
+                        val oDelivered = deliveredPeriodOrders.filter { it.merchantId == outlet.merchantId }
+                        writer.appendLine("\"${outlet.displayName}\",\"${outlet.branchCode}\",${oDelivered.size},${FormatUtils.formatCurrency(oDelivered.sumOf { it.netSales })}")
+                    }
+                    writer.appendLine()
+                }
 
                 // Sales Summary
                 writer.appendLine("SALES SUMMARY (Subtotals Only)")
@@ -569,6 +587,36 @@ fun ReportsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            if (isMultiOutlet) {
+                val filterText = when {
+                    selectedOutletIds.size <= 1 -> "Outlets: This outlet"
+                    selectedOutletIds.size >= outlets.size -> "Outlets: All (${outlets.size})"
+                    else -> "Outlets: ${selectedOutletIds.size} selected"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    FilterChip(
+                        selected = selectedOutletIds.size > 1,
+                        onClick = onOpenOutletsFilter,
+                        leadingIcon = {
+                            Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = { Text(filterText, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = DelivioYellow,
+                            selectedLabelColor = Color(0xFF1A1A1A)
+                        ),
+                        modifier = Modifier.testTag("reports_outlets_filter_chip")
+                    )
+                    if (isCombinedLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = DelivioYellow)
+                    }
+                }
+            }
+
             // 1. Timeframe Filter Chips
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -837,6 +885,58 @@ fun ReportsScreen(
                                 changePercent = computePercentChange(itemsSold.toDouble(), prevItemsSold.toDouble()),
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+                    }
+                }
+            }
+
+            if (isMultiOutlet && selectedOutletIds.size > 1) {
+                val breakdown = remember(outlets, selectedOutletIds, deliveredPeriodOrders) {
+                    outlets.filter { it.merchantId in selectedOutletIds }.map { outlet ->
+                        val oDelivered = deliveredPeriodOrders.filter { it.merchantId == outlet.merchantId }
+                        Triple(outlet, oDelivered.size, oDelivered.sumOf { it.netSales })
+                    }
+                }
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("reports_per_outlet_breakdown")
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Per-Outlet Breakdown",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        breakdown.forEach { (outlet, count, net) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(outlet.displayName, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(
+                                        text = listOfNotNull(
+                                            outlet.branchCode.takeIf { it.isNotBlank() },
+                                            "$count delivered"
+                                        ).joinToString(" • "),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = "₱${FormatUtils.formatCurrency(net)}",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF1A1A1A)
+                                )
+                            }
                         }
                     }
                 }

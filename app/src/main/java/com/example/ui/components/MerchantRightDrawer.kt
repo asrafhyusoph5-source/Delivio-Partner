@@ -69,6 +69,9 @@ fun MerchantRightDrawer(
     onOpenSettings: () -> Unit,
     onOpenHelp: () -> Unit,
     onLogout: () -> Unit,
+    isMultiOutlet: Boolean = false,
+    otherOutletsNewOrdersCount: Int = 0,
+    onOpenOutlets: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -126,16 +129,40 @@ fun MerchantRightDrawer(
                         Spacer(modifier = Modifier.width(14.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = settings.storeName.ifBlank { "Merchant Store" },
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 17.sp,
-                                    color = Color(0xFF1A1A1A)
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = if (isMultiOutlet) settings.displayName.ifBlank { "Merchant Store" }
+                                    else settings.storeName.ifBlank { "Merchant Store" },
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 17.sp,
+                                        color = Color(0xFF1A1A1A)
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (isMultiOutlet && settings.branchCode.isNotBlank()) {
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.72f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.testTag("drawer_branch_code_chip")
+                                    ) {
+                                        Text(
+                                            text = settings.branchCode,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFF1A1A1A),
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
 
                             // View store profile with chevron
                             Row(
@@ -427,6 +454,18 @@ fun MerchantRightDrawer(
 
 
 
+                if (isMultiOutlet) {
+                    DrawerListItem(
+                        icon = Icons.Default.Store,
+                        title = "Outlets",
+                        badgeText = if (otherOutletsNewOrdersCount > 0) "$otherOutletsNewOrdersCount" else null,
+                        badgeColor = MaterialTheme.colorScheme.error,
+                        badgeTag = "drawer_outlets_badge",
+                        onClick = onOpenOutlets,
+                        modifier = Modifier.testTag("drawer_item_outlets")
+                    )
+                }
+
                 // Settings
                 DrawerListItem(
                     icon = Icons.Default.Settings,
@@ -589,6 +628,7 @@ private fun DrawerListItem(
     onClick: () -> Unit,
     badgeText: String? = null,
     badgeColor: Color = MaterialTheme.colorScheme.primary,
+    badgeTag: String? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -615,7 +655,8 @@ private fun DrawerListItem(
         if (badgeText != null) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = badgeColor
+                color = badgeColor,
+                modifier = if (badgeTag != null) Modifier.testTag(badgeTag) else Modifier
             ) {
                 Text(
                     text = badgeText,

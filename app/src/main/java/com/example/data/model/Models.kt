@@ -246,7 +246,11 @@ data class Order(
     val customerId: String = "",
     val rejectedAt: Long? = null,
     val statusHistory: List<Map<String, Any?>> = emptyList(),
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val merchantName: String = "",
+    val branchName: String = "",
+    val branchCode: String = "",
+    val chainId: String = ""
 ) {
     fun isChatOpen(): Boolean {
         val s = status.name
@@ -635,18 +639,40 @@ data class MenuSchedule(
     }
 
     fun scheduleSummary(): String {
-        if (days.isEmpty()) return "Always available"
+        val normDays = days.map { it.trim().lowercase() }.filter { it.isNotBlank() }
+        if (normDays.isEmpty()) return "Always available"
         val dayLabel = when {
-            days.size == 7 -> "Every day"
-            days.size == 5 && days.containsAll(listOf("mon", "tue", "wed", "thu", "fri")) -> "Weekdays"
-            days.size == 2 && days.containsAll(listOf("sat", "sun")) -> "Weekends"
-            else -> days.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
+            normDays.toSet().size == 7 -> "Every day"
+            normDays.toSet() == setOf("mon", "tue", "wed", "thu", "fri") -> "Weekdays"
+            normDays.toSet() == setOf("sat", "sun") -> "Weekends"
+            else -> normDays.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
         }
         if (isAllDay()) return "$dayLabel · All day"
         return "$dayLabel · ${formatTime12h(start)} - ${formatTime12h(end)}"
     }
 
     companion object {
+        @android.annotation.SuppressLint("NewApi")
+        fun dayOfWeekToKey(dayOfWeek: java.time.DayOfWeek): String = when (dayOfWeek) {
+            java.time.DayOfWeek.MONDAY -> "mon"
+            java.time.DayOfWeek.TUESDAY -> "tue"
+            java.time.DayOfWeek.WEDNESDAY -> "wed"
+            java.time.DayOfWeek.THURSDAY -> "thu"
+            java.time.DayOfWeek.FRIDAY -> "fri"
+            java.time.DayOfWeek.SATURDAY -> "sat"
+            java.time.DayOfWeek.SUNDAY -> "sun"
+        }
+
+        @android.annotation.SuppressLint("NewApi")
+        fun resolveZoneId(timeZoneId: String): java.time.ZoneId {
+            val cleaned = timeZoneId.trim().ifBlank { "Asia/Manila" }
+            return try {
+                java.time.ZoneId.of(cleaned)
+            } catch (_: Exception) {
+                java.time.ZoneId.of("Asia/Manila")
+            }
+        }
+
         fun formatTime12h(time24: String): String {
             if (time24.isBlank()) return ""
             val parts = time24.split(":")
@@ -680,33 +706,17 @@ data class ShopMenu(
         return schedule?.scheduleSummary() ?: "Always available"
     }
 
+    @android.annotation.SuppressLint("NewApi")
     fun isAvailableNow(currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
         if (!active) return false
         val sched = schedule ?: return true
-        if (sched.days.isEmpty()) return true
+        val normDays = sched.days.map { it.trim().lowercase() }.toSet()
+        if (normDays.isEmpty()) return true
 
-        val tz = try {
-            java.util.TimeZone.getTimeZone(timeZoneId)
-        } catch (_: Exception) {
-            java.util.TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = java.util.Calendar.getInstance(tz).apply {
-            timeInMillis = currentTimeMillis
-        }
-
-        fun dayToKey(calDay: Int): String = when (calDay) {
-            java.util.Calendar.MONDAY -> "mon"
-            java.util.Calendar.TUESDAY -> "tue"
-            java.util.Calendar.WEDNESDAY -> "wed"
-            java.util.Calendar.THURSDAY -> "thu"
-            java.util.Calendar.FRIDAY -> "fri"
-            java.util.Calendar.SATURDAY -> "sat"
-            java.util.Calendar.SUNDAY -> "sun"
-            else -> "mon"
-        }
-
-        val todayKey = dayToKey(cal.get(java.util.Calendar.DAY_OF_WEEK))
-        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        val zone = MenuSchedule.resolveZoneId(timeZoneId)
+        val zdt = java.time.Instant.ofEpochMilli(currentTimeMillis).atZone(zone)
+        val todayKey = MenuSchedule.dayOfWeekToKey(zdt.dayOfWeek)
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
         val (sH, sM) = sched.start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 0 to 0 }
         val (eH, eM) = sched.end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 23 to 59 }
@@ -714,17 +724,12 @@ data class ShopMenu(
         val endMin = eH * 60 + eM
 
         return if (!sched.isOvernight()) {
-            todayKey in sched.days && currentMinutes in startMin..endMin
+            todayKey in normDays && currentMinutes in startMin..endMin
         } else {
             // Overnight schedule: e.g. 20:00 to 04:00
-            // 1. Started today and hasn't passed midnight
-            val matchToday = todayKey in sched.days && currentMinutes >= startMin
-            // 2. Started yesterday and is currently before endMin
-            val calYesterday = (cal.clone() as java.util.Calendar).apply {
-                add(java.util.Calendar.DATE, -1)
-            }
-            val yesterdayKey = dayToKey(calYesterday.get(java.util.Calendar.DAY_OF_WEEK))
-            val matchYesterday = yesterdayKey in sched.days && currentMinutes <= endMin
+            val matchToday = todayKey in normDays && currentMinutes >= startMin
+            val yesterdayKey = MenuSchedule.dayOfWeekToKey(zdt.minusDays(1).dayOfWeek)
+            val matchYesterday = yesterdayKey in normDays && currentMinutes <= endMin
             matchToday || matchYesterday
         }
     }
@@ -757,40 +762,21 @@ data class ProductAvailability(
         return (start == "00:00" && (end == "23:59" || end == "24:00")) || (start.isBlank() && end.isBlank())
     }
 
+    @android.annotation.SuppressLint("NewApi")
     fun isAvailableNow(currentTimeMillis: Long = System.currentTimeMillis(), timeZoneId: String = "Asia/Manila"): Boolean {
-        if (days.isEmpty()) return false
+        val normDays = days.map { it.trim().lowercase() }.toSet()
+        if (normDays.isEmpty()) return false
 
-        val tz = try {
-            java.util.TimeZone.getTimeZone(timeZoneId)
-        } catch (_: Exception) {
-            java.util.TimeZone.getTimeZone("Asia/Manila")
-        }
-        val cal = java.util.Calendar.getInstance(tz).apply {
-            timeInMillis = currentTimeMillis
-        }
+        val zone = MenuSchedule.resolveZoneId(timeZoneId)
+        val zdt = java.time.Instant.ofEpochMilli(currentTimeMillis).atZone(zone)
 
         // Check date range limits if set
-        val todayStr = "%04d-%02d-%02d".format(
-            cal.get(java.util.Calendar.YEAR),
-            cal.get(java.util.Calendar.MONTH) + 1,
-            cal.get(java.util.Calendar.DAY_OF_MONTH)
-        )
+        val todayStr = "%04d-%02d-%02d".format(zdt.year, zdt.monthValue, zdt.dayOfMonth)
         if (!dateFrom.isNullOrBlank() && todayStr < dateFrom) return false
         if (!dateTo.isNullOrBlank() && todayStr > dateTo) return false
 
-        fun dayToKey(calDay: Int): String = when (calDay) {
-            java.util.Calendar.MONDAY -> "mon"
-            java.util.Calendar.TUESDAY -> "tue"
-            java.util.Calendar.WEDNESDAY -> "wed"
-            java.util.Calendar.THURSDAY -> "thu"
-            java.util.Calendar.FRIDAY -> "fri"
-            java.util.Calendar.SATURDAY -> "sat"
-            java.util.Calendar.SUNDAY -> "sun"
-            else -> "mon"
-        }
-
-        val todayKey = dayToKey(cal.get(java.util.Calendar.DAY_OF_WEEK))
-        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        val todayKey = MenuSchedule.dayOfWeekToKey(zdt.dayOfWeek)
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
         val (sH, sM) = start.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 0 to 0 }
         val (eH, eM) = end.split(":").mapNotNull { it.toIntOrNull() }.let { if (it.size == 2) it[0] to it[1] else 23 to 59 }
@@ -798,26 +784,24 @@ data class ProductAvailability(
         val endMin = eH * 60 + eM
 
         return if (!isOvernight()) {
-            todayKey in days && currentMinutes in startMin..endMin
+            todayKey in normDays && currentMinutes in startMin..endMin
         } else {
             // Overnight: e.g. 20:00 to 04:00
-            val matchToday = todayKey in days && currentMinutes >= startMin
-            val calYesterday = (cal.clone() as java.util.Calendar).apply {
-                add(java.util.Calendar.DATE, -1)
-            }
-            val yesterdayKey = dayToKey(calYesterday.get(java.util.Calendar.DAY_OF_WEEK))
-            val matchYesterday = yesterdayKey in days && currentMinutes <= endMin
+            val matchToday = todayKey in normDays && currentMinutes >= startMin
+            val yesterdayKey = MenuSchedule.dayOfWeekToKey(zdt.minusDays(1).dayOfWeek)
+            val matchYesterday = yesterdayKey in normDays && currentMinutes <= endMin
             matchToday || matchYesterday
         }
     }
 
     fun summary(): String {
+        val normDays = days.map { it.trim().lowercase() }.filter { it.isNotBlank() }
         val dayLabel = when {
-            days.size == 7 -> "Every day"
-            days.size == 5 && days.containsAll(listOf("mon", "tue", "wed", "thu", "fri")) -> "Weekdays"
-            days.size == 2 && days.containsAll(listOf("sat", "sun")) -> "Weekends"
-            days.isEmpty() -> "No days selected"
-            else -> days.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
+            normDays.toSet().size == 7 -> "Every day"
+            normDays.toSet() == setOf("mon", "tue", "wed", "thu", "fri") -> "Weekdays"
+            normDays.toSet() == setOf("sat", "sun") -> "Weekends"
+            normDays.isEmpty() -> "No days selected"
+            else -> normDays.joinToString(", ") { it.replaceFirstChar { c -> c.uppercase() } }
         }
         val timeLabel = if (isAllDay()) "All day" else "${MenuSchedule.formatTime12h(start)} - ${MenuSchedule.formatTime12h(end)}"
         val dateLabel = if (!dateFrom.isNullOrBlank() && !dateTo.isNullOrBlank()) {
@@ -868,7 +852,12 @@ data class MenuItem(
     // Item size (convenience shops only, e.g. "190ml", "225g")
     val itemSize: String = "",
     // Per-product custom availability schedule (days, hours, date window)
-    val availability: ProductAvailability? = null
+    val availability: ProductAvailability? = null,
+    // Multi-outlet menu copy/sync provenance & ordering
+    val sortOrder: Int = 0,
+    val copiedFromMerchantId: String = "",
+    val copiedFromItemId: String = "",
+    val copiedAt: Long? = null
 ) {
     val available: Boolean get() = inStock
 
@@ -1134,7 +1123,42 @@ data class MerchantSettings(
     val locationChangedAt: Long? = null,
     val holidays: List<HolidaySchedule> = emptyList(),
     val bluetoothPrinterName: String = "",
-    val bluetoothPrinterAddress: String = ""
+    val bluetoothPrinterAddress: String = "",
+    // Multi-outlet chain & branch fields
+    val merchantId: String = "",
+    val ownerUid: String = "",
+    val chainId: String = "",
+    val chainName: String = "",
+    val isBranch: Boolean = false,
+    val branchName: String = "",
+    val branchCode: String = "",
+    val branchSetupDone: Boolean = true
+) {
+    val displayName: String
+        get() {
+            val base = storeName.ifBlank { chainName }.trim()
+            val branch = branchName.trim()
+            return when {
+                base.isBlank() && branch.isNotBlank() -> branch
+                branch.isNotBlank() -> "$base - $branch"
+                else -> base
+            }
+        }
+
+    val displayNameWithCode: String
+        get() {
+            val dn = displayName
+            val code = branchCode.trim()
+            return if (code.isNotBlank() && dn.isNotBlank()) "$dn ($code)" else dn
+        }
+}
+
+data class OtherOutletOrderEvent(
+    val merchantId: String,
+    val outletLabel: String,
+    val displayName: String,
+    val orderId: String,
+    val orderNumber: String
 )
 
 data class HolidaySchedule(

@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.*
+import com.example.ui.components.DayChipsRow
+import com.example.ui.components.orderedDaysList
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
@@ -165,7 +167,11 @@ fun ProductEditScreen(
     var availabilityMode by remember { mutableStateOf(if (initialAvailability != null) "custom" else "always") }
     var availDays by remember {
         mutableStateOf(
-            initialAvailability?.days?.toSet() ?: setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+            initialAvailability?.days
+                ?.map { it.trim().lowercase() }
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
         )
     }
     var availStartTime24 by remember { mutableStateOf(initialAvailability?.start ?: "00:00") }
@@ -283,7 +289,8 @@ fun ProductEditScreen(
         errors
     }
 
-    val canSave = isNameValid && !isCatMissing && isPriceValid && setErrors.isEmpty() && !isSaving
+    val isAvailDaysValid = availabilityMode != "custom" || availDays.isNotEmpty()
+    val canSave = isNameValid && !isCatMissing && isPriceValid && isAvailDaysValid && setErrors.isEmpty() && !isSaving
 
     Scaffold(
         modifier = modifier.fillMaxSize().testTag("product_edit_screen"),
@@ -345,6 +352,7 @@ fun ProductEditScreen(
                             !isNameValid -> "Product name is required"
                             isCatMissing -> "Main Category is required"
                             !isPriceValid -> "Please enter a valid price"
+                            !isAvailDaysValid -> "Choose at least one day"
                             setErrors.isNotEmpty() -> setErrors.first()
                             else -> "Please correct highlighted fields above"
                         }
@@ -428,7 +436,7 @@ fun ProductEditScreen(
 
                                 val finalAvailability = if (availabilityMode == "custom") {
                                     ProductAvailability(
-                                        days = availDays.toList(),
+                                        days = orderedDaysList(availDays),
                                         start = availStartTime24,
                                         end = availEndTime24,
                                         dateFrom = if (limitToDates && availDateFrom.isNotBlank()) availDateFrom else null,
@@ -929,61 +937,18 @@ fun ProductEditScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        // Quick Day Presets
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = availDays.size == 7,
-                                onClick = { availDays = setOf("mon", "tue", "wed", "thu", "fri", "sat", "sun") },
-                                label = { Text("Every day", fontSize = 11.sp) }
-                            )
-                            FilterChip(
-                                selected = availDays == setOf("mon", "tue", "wed", "thu", "fri"),
-                                onClick = { availDays = setOf("mon", "tue", "wed", "thu", "fri") },
-                                label = { Text("Weekdays", fontSize = 11.sp) }
-                            )
-                            FilterChip(
-                                selected = availDays == setOf("sat", "sun"),
-                                onClick = { availDays = setOf("sat", "sun") },
-                                label = { Text("Weekends", fontSize = 11.sp) }
-                            )
-                        }
-
-                        // Mon to Sun Day chips
-                        val weekDays = listOf(
-                            "mon" to "Mon",
-                            "tue" to "Tue",
-                            "wed" to "Wed",
-                            "thu" to "Thu",
-                            "fri" to "Fri",
-                            "sat" to "Sat",
-                            "sun" to "Sun"
+                        DayChipsRow(
+                            selectedDays = availDays,
+                            onChange = { availDays = it }
                         )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            weekDays.forEach { (key, label) ->
-                                val isSelected = availDays.contains(key)
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = {
-                                        availDays = if (isSelected) {
-                                            val next = availDays - key
-                                            if (next.isEmpty()) setOf("mon") else next
-                                        } else {
-                                            availDays + key
-                                        }
-                                    },
-                                    label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = customColors.accent,
-                                        selectedLabelColor = customColors.onAccent
-                                    )
-                                )
-                            }
+                        if (availDays.isEmpty()) {
+                            Text(
+                                text = "Choose at least one day",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("product_avail_days_error")
+                            )
                         }
 
                         // Start time & End time (12-hour, 15-minute steps)

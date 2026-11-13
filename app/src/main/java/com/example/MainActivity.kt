@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,23 +38,18 @@ class MainActivity : ComponentActivity() {
         viewModel.onAppForeground()
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            viewModel.onAppBackground()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         setContent {
-            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-            DisposableEffect(lifecycleOwner) {
-                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                        viewModel.onAppForeground()
-                    }
-                }
-                lifecycleOwner.lifecycle.addObserver(observer)
-                onDispose {
-                    lifecycleOwner.lifecycle.removeObserver(observer)
-                }
-            }
 
             val context = androidx.compose.ui.platform.LocalContext.current
             val networkHelper = remember { com.example.util.NetworkConnectivityHelper(context) }
@@ -151,6 +147,30 @@ class MainActivity : ComponentActivity() {
             val hasUnreadCustomerMessages by remember(orderChats) {
                 derivedStateOf { orderChats.values.any { it.isUnreadForMerchant() } }
             }
+
+            // Multi-Outlet states
+            val activeMerchantId by viewModel.activeMerchantId.collectAsStateWithLifecycle()
+            val outlets by viewModel.outlets.collectAsStateWithLifecycle()
+            val isMultiOutlet by viewModel.isMultiOutlet.collectAsStateWithLifecycle()
+            val otherOutletsNewOrdersCount by viewModel.otherOutletsNewOrdersCount.collectAsStateWithLifecycle()
+            val newOrderCountByOutlet by viewModel.newOrderCountByOutlet.collectAsStateWithLifecycle()
+            val otherOutletOrderBanner by viewModel.otherOutletOrderBanner.collectAsStateWithLifecycle()
+            val branchSetupOutlet by viewModel.branchSetupOutlet.collectAsStateWithLifecycle()
+            val outletsSheetMode by viewModel.outletsSheetMode.collectAsStateWithLifecycle()
+            val pinModalMode by viewModel.pinModalMode.collectAsStateWithLifecycle()
+            val dashboardSelectedOutletIds by viewModel.dashboardSelectedOutletIds.collectAsStateWithLifecycle()
+            val dashboardCombinedOrders by viewModel.dashboardCombinedOrders.collectAsStateWithLifecycle()
+            val dashboardCombinedReviews by viewModel.dashboardCombinedReviews.collectAsStateWithLifecycle()
+            val isDashboardCombinedLoading by viewModel.isDashboardCombinedLoading.collectAsStateWithLifecycle()
+            val reportsSelectedOutletIds by viewModel.reportsSelectedOutletIds.collectAsStateWithLifecycle()
+            val reportsCombinedOrders by viewModel.reportsCombinedOrders.collectAsStateWithLifecycle()
+            val isReportsCombinedLoading by viewModel.isReportsCombinedLoading.collectAsStateWithLifecycle()
+            val menuSyncDialogMode by viewModel.menuSyncDialogMode.collectAsStateWithLifecycle()
+            val isMenuSyncLoadingSnapshots by viewModel.isMenuSyncLoadingSnapshots.collectAsStateWithLifecycle()
+            val menuSyncSnapshots by viewModel.menuSyncSnapshots.collectAsStateWithLifecycle()
+            val isMenuSyncRunning by viewModel.isMenuSyncRunning.collectAsStateWithLifecycle()
+            val menuSyncProgress by viewModel.menuSyncProgress.collectAsStateWithLifecycle()
+            val menuSyncResult by viewModel.menuSyncResult.collectAsStateWithLifecycle()
 
             LaunchedEffect(Unit) {
                 viewModel.newIncomingMessageEvent.collect { thread ->
@@ -279,6 +299,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
+                        showSecurityPinOption = isMultiOutlet,
+                        onChangeOutletsPin = { viewModel.openChangePinDialog() },
                         onBack = { viewModel.closeSettings() }
                     )
                 } else if (showPrinterScreen) {
@@ -347,7 +369,11 @@ class MainActivity : ComponentActivity() {
                         onBulkMoveToMenu = { ids, menuId, cb -> viewModel.bulkMoveItemsToMenu(ids, menuId, cb) },
                         onBulkSetCategoryClass = { ids, subId, subName, cb -> viewModel.bulkSetCategoryClass(ids, subId, subName, cb) },
                         onBulkAdjustPrices = { ids, pct, fix, cb -> viewModel.bulkAdjustPrices(ids, pct, fix, cb) },
-                        onBulkDeleteItems = { ids, cb -> viewModel.bulkDeleteItems(ids, cb) }
+                        onBulkDeleteItems = { ids, cb -> viewModel.bulkDeleteItems(ids, cb) },
+                        isMultiOutlet = isMultiOutlet,
+                        onPushMenu = { viewModel.openPushMenu() },
+                        onPullMenu = { viewModel.openPullMenu() },
+                        onSyncMenu = { viewModel.openSyncMenu() }
                     )
                 } else if (editingMenuItem != null) {
                     // Full-screen Add / Edit Product route
@@ -401,9 +427,11 @@ class MainActivity : ComponentActivity() {
                     )
                 } else if (showReportsScreen) {
                     // Full-screen Reports route
+                    val useCombinedReports = isMultiOutlet && reportsSelectedOutletIds.size > 1
+                    val effectiveReportsOrders = if (useCombinedReports) reportsCombinedOrders else orders
                     ReportsScreen(
                         settings = settings,
-                        orders = orders,
+                        orders = effectiveReportsOrders,
                         menuItems = menuItems,
                         reviews = reviews,
                         vouchers = vouchers,
@@ -416,7 +444,12 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenReviews = { viewModel.openReviews() },
                         onCreateVoucher = { viewModel.openCreateVoucher() },
-                        onBack = { viewModel.closeReports() }
+                        onBack = { viewModel.closeReports() },
+                        isMultiOutlet = isMultiOutlet,
+                        outlets = outlets,
+                        selectedOutletIds = if (reportsSelectedOutletIds.isNotEmpty()) reportsSelectedOutletIds else setOfNotNull(activeMerchantId),
+                        isCombinedLoading = isReportsCombinedLoading,
+                        onOpenOutletsFilter = { viewModel.openReportsOutletsFilter() }
                     )
                 } else if (activeChatOrder != null) {
                     // Full-screen Customer Chat view
@@ -542,6 +575,12 @@ class MainActivity : ComponentActivity() {
                                         onLogout = {
                                             coroutineScope.launch { drawerState.close() }
                                             viewModel.logout()
+                                        },
+                                        isMultiOutlet = isMultiOutlet,
+                                        otherOutletsNewOrdersCount = otherOutletsNewOrdersCount,
+                                        onOpenOutlets = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openOutletsSwitcher()
                                         }
                                     )
                                 }
@@ -559,13 +598,61 @@ class MainActivity : ComponentActivity() {
                                                         if (drawerState.isClosed) drawerState.open() else drawerState.close()
                                                     }
                                                 },
-                                                badgeCount = newOrdersCount + unreadInboxCount,
+                                                badgeCount = newOrdersCount + unreadInboxCount + otherOutletsNewOrdersCount,
                                                 hasUnreadChat = hasUnreadCustomerMessages,
                                                 currentTime = currentTime,
                                                 isServiceLocked = isServiceLocked,
-                                                serviceLockMessage = serviceLockMessage
+                                                serviceLockMessage = serviceLockMessage,
+                                                isMultiOutlet = isMultiOutlet,
+                                                onOutletClick = { viewModel.openOutletsSwitcher() }
                                             )
                                             OfflineBanner(isOnline = isOnline)
+                                            otherOutletOrderBanner?.let { bannerEvent ->
+                                                Surface(
+                                                    color = com.example.ui.theme.DelivioYellow,
+                                                    contentColor = androidx.compose.ui.graphics.Color(0xFF1A1A1A),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable { viewModel.switchActiveOutlet(bannerEvent.merchantId) }
+                                                        .testTag("other_outlet_order_banner")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                                            modifier = Modifier.weight(1f)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Notifications,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Text(
+                                                                text = "New order ${bannerEvent.orderNumber} at ${bannerEvent.outletLabel} — Switch",
+                                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                                fontSize = 13.sp,
+                                                                maxLines = 2
+                                                            )
+                                                        }
+                                                        IconButton(
+                                                            onClick = { viewModel.dismissOtherOutletOrderBanner() },
+                                                            modifier = Modifier.size(32.dp)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Close,
+                                                                contentDescription = "Dismiss banner",
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     },
                                     containerColor = MaterialTheme.colorScheme.background
@@ -647,10 +734,17 @@ class MainActivity : ComponentActivity() {
                                                 val lowStockCount = menuItems.count {
                                                     it.businessType == settings.businessType && it.trackStock && it.stockCount <= it.lowStockAt
                                                 }
+                                                val useCombinedDashboard = isMultiOutlet && dashboardSelectedOutletIds.size > 1
+                                                val effectiveDashboardOrders = if (useCombinedDashboard) dashboardCombinedOrders else orders
+                                                val effectiveDashboardReviewsCount = if (useCombinedDashboard) dashboardCombinedReviews.size else reviewsCount
+                                                val effectiveDashboardAvgRating = if (useCombinedDashboard) {
+                                                    if (dashboardCombinedReviews.isEmpty()) 0.0
+                                                    else dashboardCombinedReviews.map { it.ratingMerchant }.average()
+                                                } else averageRating
 
                                                 DashboardScreen(
                                                     settings = settings,
-                                                    orders = orders,
+                                                    orders = effectiveDashboardOrders,
                                                     onToggleOpen = { viewModel.toggleStoreOpen() },
                                                     onPauseClick = { viewModel.openPauseSheet() },
                                                     onResumeClick = { viewModel.resumeOrders() },
@@ -661,9 +755,14 @@ class MainActivity : ComponentActivity() {
                                                     currentTime = currentTime,
                                                     isServiceLocked = isServiceLocked,
                                                     serviceLockMessage = serviceLockMessage,
-                                                    averageRating = averageRating,
-                                                    reviewsCount = reviewsCount,
-                                                    onOpenReports = { viewModel.openReports() }
+                                                    averageRating = effectiveDashboardAvgRating,
+                                                    reviewsCount = effectiveDashboardReviewsCount,
+                                                    onOpenReports = { viewModel.openReports() },
+                                                    isMultiOutlet = isMultiOutlet,
+                                                    outlets = outlets,
+                                                    selectedOutletIds = if (dashboardSelectedOutletIds.isNotEmpty()) dashboardSelectedOutletIds else setOfNotNull(activeMerchantId),
+                                                    isCombinedLoading = isDashboardCombinedLoading,
+                                                    onOpenOutletsFilter = { viewModel.openDashboardOutletsFilter() }
                                                 )
                                             }
 
@@ -1079,6 +1178,84 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+
+                // 20a. Outlets Selector / Multi-Select Filter Sheet
+                outletsSheetMode?.let { mode ->
+                    val currentFilterIds = when (mode) {
+                        com.example.viewmodel.OutletsSheetMode.SINGLE_SWITCH -> emptySet()
+                        com.example.viewmodel.OutletsSheetMode.MULTI_DASHBOARD_FILTER -> dashboardSelectedOutletIds
+                        com.example.viewmodel.OutletsSheetMode.MULTI_REPORTS_FILTER -> reportsSelectedOutletIds
+                    }
+                    OutletsSelectorSheet(
+                        mode = mode,
+                        outlets = outlets,
+                        activeMerchantId = activeMerchantId ?: settings.merchantId,
+                        selectedFilterIds = currentFilterIds,
+                        newOrderCountByOutlet = newOrderCountByOutlet,
+                        currentTime = currentTime,
+                        onDismiss = { viewModel.closeOutletsSheet() },
+                        onApplySingle = { targetId -> viewModel.switchActiveOutlet(targetId) },
+                        onApplyMulti = { selectedIds ->
+                            when (mode) {
+                                com.example.viewmodel.OutletsSheetMode.MULTI_DASHBOARD_FILTER -> viewModel.applyDashboardOutletFilter(selectedIds)
+                                com.example.viewmodel.OutletsSheetMode.MULTI_REPORTS_FILTER -> viewModel.applyReportsOutletFilter(selectedIds)
+                                else -> viewModel.closeOutletsSheet()
+                            }
+                        }
+                    )
+                }
+
+                // 20b. Outlets PIN Gate Dialog
+                pinModalMode?.let { mode ->
+                    OutletsPinDialog(
+                        mode = mode,
+                        isLockedOutInitially = viewModel.isPinLockedOut(),
+                        initialLockoutSeconds = viewModel.remainingPinLockoutSeconds(),
+                        onCheckLockoutSeconds = { viewModel.remainingPinLockoutSeconds() },
+                        onCreatePin = { pin, confirm, cb -> viewModel.submitCreatePin(pin, confirm, cb) },
+                        onEnterPin = { pin -> viewModel.submitEnterPin(pin) },
+                        onForgotPinClick = { viewModel.openForgotPinFlow() },
+                        onVerifyPasswordReset = { pass, cb -> viewModel.verifyPasswordAndResetPin(pass, cb) },
+                        onChangePin = { oldPin, newPin, confirm, cb -> viewModel.submitChangePin(oldPin, newPin, confirm, cb) },
+                        onDismiss = { viewModel.closePinModal() }
+                    )
+                }
+
+                // 20c. One-Time Branch Setup Prompt
+                branchSetupOutlet?.let { setupOutlet ->
+                    BranchSetupDialog(
+                        outlet = setupOutlet,
+                        existingOutlets = outlets,
+                        onSave = { name, code, cb ->
+                            viewModel.submitBranchSetup(
+                                merchantId = setupOutlet.merchantId,
+                                chainId = setupOutlet.chainId,
+                                branchName = name,
+                                branchCode = code,
+                                onResult = cb
+                            )
+                        }
+                    )
+                }
+
+                // 20d. Menu Push / Pull / Sync Dialog
+                menuSyncDialogMode?.let { mode ->
+                    MenuSyncDialog(
+                        mode = mode,
+                        activeMerchantId = activeMerchantId ?: settings.merchantId,
+                        snapshotsByMerchantId = menuSyncSnapshots,
+                        isLoadingSnapshots = isMenuSyncLoadingSnapshots,
+                        isRunning = isMenuSyncRunning,
+                        progress = menuSyncProgress,
+                        result = menuSyncResult,
+                        onExecutePush = { source, targets -> viewModel.executePushMenu(source, targets) },
+                        onExecutePull = { target, source -> viewModel.executePullMenu(target, source) },
+                        onExecuteSync = { mine, theirs, fields, plan, res ->
+                            viewModel.executeSyncMenu(mine, theirs, fields, plan, res)
+                        },
+                        onDismiss = { viewModel.closeMenuSyncDialog() }
+                    )
+                }
 
                 // 21. Help and Support Dialog
                 if (showHelpDialog) {
