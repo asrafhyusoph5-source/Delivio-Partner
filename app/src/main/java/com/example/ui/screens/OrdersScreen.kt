@@ -1154,13 +1154,35 @@ fun OrderCard(
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = itemSummary,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = if (showItemDetails) 100 else 2
-                        )
+                        val hasVariantsInOrder = order.items.any { it.variantLabel.isNotBlank() }
+                        if (!hasVariantsInOrder) {
+                            Text(
+                                text = itemSummary,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = if (showItemDetails) 100 else 2
+                            )
+                        } else {
+                            val visibleItems = if (showItemDetails) order.items else order.items.take(2)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                visibleItems.forEach { orderItem ->
+                                    Text(
+                                        text = "${orderItem.quantity}x ${orderItem.name}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (orderItem.variantLabel.isNotBlank()) {
+                                        Text(
+                                            text = "${orderItem.variantLabel} x${orderItem.quantity}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
                         if (order.items.size > 2) {
                             Spacer(modifier = Modifier.height(2.dp))

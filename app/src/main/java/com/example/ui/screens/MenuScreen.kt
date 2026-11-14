@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -506,7 +507,8 @@ fun MenuScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp)
+                    .testTag("menu_products_list"),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -598,6 +600,7 @@ fun MenuScreen(
                         ProductCard(
                             item = item,
                             businessType = businessType,
+                            currentTime = currentTime,
                             isAvailableNow = isAvailableNow,
                             nonMainMenuNames = nonMainMenuNames,
                             onCardClick = { onEditItem(item) },
@@ -807,6 +810,7 @@ fun MenuScreen(
 private fun ProductCard(
     item: MenuItem,
     businessType: BusinessType,
+    currentTime: Long = System.currentTimeMillis(),
     isAvailableNow: Boolean,
     nonMainMenuNames: List<String>,
     onCardClick: () -> Unit,
@@ -818,6 +822,8 @@ private fun ProductCard(
 ) {
     val customColors = LocalDelivioColors.current
     var showMenu by remember { mutableStateOf(false) }
+    val saleInEffect = item.isSaleInEffect(currentTime)
+    val saleScheduled = !saleInEffect && item.isSaleScheduled(currentTime)
 
     Card(
         shape = RoundedCornerShape(14.dp),
@@ -876,14 +882,58 @@ private fun ProductCard(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = FormatUtils.formatCurrency(item.price),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp,
-                        color = if (item.inStock) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    val isVarItem = item.variationsEnabled && item.variants.isNotEmpty()
+                    val regularPriceDisplay = if (isVarItem && item.hasPriceRange) {
+                        "from ${FormatUtils.formatCurrency(item.price)}"
+                    } else {
+                        FormatUtils.formatCurrency(item.price)
+                    }
+                    val activeSaleVal = if (isVarItem) item.lowestVariantSalePrice else item.salePrice
+
+                    if (saleInEffect && activeSaleVal != null) {
+                        val salePrefix = if (isVarItem && item.variants.size > 1) "from " else ""
+                        Text(
+                            text = "$salePrefix${FormatUtils.formatCurrency(activeSaleVal)}",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp,
+                            color = if (item.inStock) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("product_sale_price_${item.id}")
+                        )
+                        Text(
+                            text = regularPriceDisplay,
+                            fontSize = 12.sp,
+                            textDecoration = TextDecoration.LineThrough,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("product_regular_price_struck_${item.id}")
+                        )
+                        val pctBadge = item.formattedDiscountPercent
+                        if (pctBadge.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = StatusClosedRed.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = pctBadge,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = StatusClosedRed,
+                                    modifier = Modifier
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                        .testTag("product_sale_badge_${item.id}")
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = regularPriceDisplay,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp,
+                            color = if (item.inStock) customColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("product_price_${item.id}")
+                        )
+                    }
                     if (businessType == BusinessType.CONVENIENCE && item.itemSize.isNotBlank()) {
                         Text(
                             text = "/${item.itemSize.trim()}",
@@ -896,7 +946,7 @@ private fun ProductCard(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // Small chips row: sets, sold out, menu name (when not Main Menu), "Not available now" in amber
+                // Small chips row: sale scheduled, prep time, variations/sets, sold out, low stock, menu name, "Not available now"
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -904,6 +954,21 @@ private fun ProductCard(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (saleScheduled) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = StatusWarningAmber.copy(alpha = 0.20f)
+                        ) {
+                            Text(
+                                text = "Sale scheduled",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB45309),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
                     // Prep time chip
                     if (businessType == BusinessType.FOOD && item.prepTimeMinutes > 0) {
                         Surface(
@@ -920,8 +985,23 @@ private fun ProductCard(
                         }
                     }
 
-                    // Sets chip: e.g. "2 sets"
-                    if (item.hasSets && item.sets.isNotEmpty()) {
+                    // Variations chip (convenience) OR Sets chip (food/legacy)
+                    if (item.variationsEnabled && item.variants.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${item.variants.size} ${if (item.variants.size == 1) "variation" else "variations"}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier
+                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                    .testTag("product_variations_chip_${item.id}")
+                            )
+                        }
+                    } else if (item.hasSets && item.sets.isNotEmpty()) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.primaryContainer
@@ -936,7 +1016,7 @@ private fun ProductCard(
                         }
                     }
 
-                    // Sold out chip
+                    // Sold out / Low stock chip
                     if (!item.inStock) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
@@ -950,7 +1030,22 @@ private fun ProductCard(
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
                         }
-                    } else if (item.trackStock && item.stockCount <= item.lowStockAt) {
+                    } else if (item.variationsEnabled && item.hasAnyLowStockVariant) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = StatusWarningAmber.copy(alpha = 0.20f)
+                        ) {
+                            Text(
+                                text = "Low stock",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB45309),
+                                modifier = Modifier
+                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                    .testTag("product_low_stock_chip_${item.id}")
+                            )
+                        }
+                    } else if (!item.variationsEnabled && item.trackStock && item.stockCount <= item.lowStockAt) {
                         // Low stock alert amber chip
                         Surface(
                             shape = RoundedCornerShape(4.dp),

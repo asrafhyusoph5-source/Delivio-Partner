@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
             val selectedSubcategoryId by viewModel.selectedSubcategoryId.collectAsStateWithLifecycle()
             val menus by viewModel.menus.collectAsStateWithLifecycle()
             val showMenuManagementScreen by viewModel.showMenuManagementScreen.collectAsStateWithLifecycle()
+            val showPriceDropsScreen by viewModel.showPriceDropsScreen.collectAsStateWithLifecycle()
             val editingShopMenu by viewModel.editingShopMenu.collectAsStateWithLifecycle()
             val isNewShopMenu by viewModel.isNewShopMenu.collectAsStateWithLifecycle()
             val selectedMenuIdFilter by viewModel.selectedMenuIdFilter.collectAsStateWithLifecycle()
@@ -348,6 +349,25 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { viewModel.closeEditShopMenu() }
                     )
+                } else if (showPriceDropsScreen) {
+                    // Full-screen Price Drops route
+                    PriceDropsScreen(
+                        menuItems = menuItems,
+                        menus = menus,
+                        businessType = settings.businessType,
+                        currentTime = currentTime,
+                        timeZoneId = settings.timezone,
+                        onBack = { viewModel.closePriceDrops() },
+                        onApplyPriceDrops = { itemSalePrices, startsAt, endsAt, cb ->
+                            viewModel.applyPriceDrops(itemSalePrices, startsAt, endsAt, emptyMap(), cb)
+                        },
+                        onApplyVariationPriceDrops = { itemSalePrices, variantSalePrices, startsAt, endsAt, cb ->
+                            viewModel.applyPriceDrops(itemSalePrices, startsAt, endsAt, variantSalePrices, cb)
+                        },
+                        onEndPriceDrop = { itemId, cb ->
+                            viewModel.endPriceDrop(itemId, cb)
+                        }
+                    )
                 } else if (showMenuManagementScreen) {
                     // Full-screen Menu Management route (Menus, Category Classes, Bulk edit)
                     MenuManagementScreen(
@@ -374,7 +394,8 @@ class MainActivity : ComponentActivity() {
                         isMultiOutlet = isMultiOutlet,
                         onPushMenu = { viewModel.openPushMenu() },
                         onPullMenu = { viewModel.openPullMenu() },
-                        onSyncMenu = { viewModel.openSyncMenu() }
+                        onSyncMenu = { viewModel.openSyncMenu() },
+                        onOpenPriceDrops = { viewModel.openPriceDrops() }
                     )
                 } else if (editingMenuItem != null) {
                     // Full-screen Add / Edit Product route
@@ -387,6 +408,8 @@ class MainActivity : ComponentActivity() {
                         menuItems = menuItems,
                         businessType = settings.businessType,
                         mainCategories = mainCategories,
+                        currentTime = currentTime,
+                        timeZoneId = settings.timezone,
                         onSave = { updatedItem, onComplete ->
                             viewModel.saveMenuItem(updatedItem, onComplete)
                         },
@@ -404,6 +427,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onDeleteSubcategory = { id, onComplete ->
                             viewModel.deleteSubcategory(id, onComplete)
+                        },
+                        onShowSaleEndedNotice = { msg ->
+                            viewModel.showSnackbar(msg)
                         }
                     )
                 } else if (editingVoucher != null) {
@@ -735,7 +761,10 @@ class MainActivity : ComponentActivity() {
                                             MerchantTab.DASHBOARD -> {
                                                 val soldOutCount = menuItems.count { it.businessType == settings.businessType && !it.inStock }
                                                 val lowStockCount = menuItems.count {
-                                                    it.businessType == settings.businessType && it.trackStock && it.stockCount <= it.lowStockAt
+                                                    it.businessType == settings.businessType && (
+                                                        (it.variationsEnabled && it.hasAnyLowStockVariant) ||
+                                                            (!it.variationsEnabled && it.trackStock && it.stockCount <= it.lowStockAt)
+                                                        )
                                                 }
                                                 val useCombinedDashboard = isMultiOutlet && dashboardSelectedOutletIds.size > 1
                                                 val effectiveDashboardOrders = if (useCombinedDashboard) dashboardCombinedOrders else orders

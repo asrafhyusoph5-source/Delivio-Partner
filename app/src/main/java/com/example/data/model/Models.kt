@@ -95,6 +95,10 @@ data class OrderItem(
     val price: Double = 0.0,
     val basePrice: Double = price,
     val unitPrice: Double = price,
+    val regularUnitPrice: Double = unitPrice,
+    val variantKey: String = "",
+    val variantLabel: String = "",
+    val variantImageUrl: String = "",
     val selectedSize: String? = null,
     val modifiers: List<OrderModifier> = emptyList(),
     val selections: List<OrderItemSelection> = emptyList(),
@@ -835,6 +839,31 @@ data class ProductAvailability(
     }
 }
 
+data class VariationOption(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String = "",
+    val imageUrl: String = ""
+)
+
+data class ProductVariation(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String = "",
+    val imageEnabled: Boolean = false,
+    val options: List<VariationOption> = emptyList()
+)
+
+data class ProductVariant(
+    val key: String = "",
+    val optionIds: List<String> = emptyList(),
+    val label: String = "",
+    val price: Double = 0.0,
+    val stock: Int = 0,
+    val salePrice: Double? = null
+) {
+    val isPurchasable: Boolean
+        get() = stock > 0
+}
+
 data class MenuItem(
     val id: String = "",
     val merchantId: String = "",
@@ -847,6 +876,7 @@ data class MenuItem(
     val name: String = "",
     val description: String = "",
     val price: Double = 0.0,
+    val priceMax: Double? = null,
     val inStock: Boolean = true,
     val soldOutReason: String? = null,
     val soldOutUntilTimestamp: Long? = null,
@@ -855,6 +885,10 @@ data class MenuItem(
     val imageUrl: String = "",
     val hasSets: Boolean = false,
     val sets: List<ProductSet> = emptyList(),
+    // Convenience Variations
+    val variationsEnabled: Boolean = false,
+    val variations: List<ProductVariation> = emptyList(),
+    val variants: List<ProductVariant> = emptyList(),
     // Food specific
     val prepTimeMinutes: Int = 15,
     val tags: List<String> = emptyList(),
@@ -869,6 +903,11 @@ data class MenuItem(
     val stockCount: Int = 50,
     val lowStockAt: Int = 5,
     val discountPercentage: Double? = null,
+    // Price Drop fields (calculated discount percent is never stored)
+    val salePrice: Double? = null,
+    val saleStartsAt: Long? = null,
+    val saleEndsAt: Long? = null,
+    val saleActive: Boolean = false,
     // Item size (convenience shops only, e.g. "190ml", "225g")
     val itemSize: String = "",
     // Per-product custom availability schedule (days, hours, date window)
@@ -883,8 +922,114 @@ data class MenuItem(
 
     val lowStockAlertThreshold: Int get() = lowStockAt
 
+    val totalVariantStock: Int
+        get() = if (variationsEnabled && variants.isNotEmpty()) variants.sumOf { it.stock.coerceAtLeast(0) } else stockCount
+
+    val effectivePriceMax: Double
+        get() = if (variationsEnabled && variants.isNotEmpty()) {
+            priceMax ?: variants.maxOf { it.price }
+        } else {
+            price
+        }
+
+    val hasPriceRange: Boolean
+        get() = variationsEnabled && variants.isNotEmpty() && effectivePriceMax > price
+
+    val hasAnyLowStockVariant: Boolean
+        get() = variationsEnabled && variants.any { it.stock <= lowStockAt }
+
+    fun lowStockVariants(): List<ProductVariant> {
+        return if (variationsEnabled) variants.filter { it.stock <= lowStockAt } else emptyList()
+    }
+
     val isLowStock: Boolean
-        get() = inStock && trackStock && stockCount > 0 && stockCount <= lowStockAt
+        get() = if (variationsEnabled) {
+            inStock && hasAnyLowStockVariant
+        } else {
+            inStock && trackStock && stockCount > 0 && stockCount <= lowStockAt
+        }
+
+    fun isVariantSaleInEffect(variant: ProductVariant, nowMs: Long = System.currentTimeMillis()): Boolean {
+        return variationsEnabled && com.example.util.PriceDropUtils.isSaleInEffect(
+            price = variant.price,
+            salePrice = variant.salePrice,
+            saleActive = saleActive,
+            saleStartsAt = saleStartsAt,
+            saleEndsAt = saleEndsAt,
+            nowMs = nowMs
+        )
+    }
+
+    fun isSaleInEffect(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (variationsEnabled && variants.isNotEmpty()) {
+            return variants.any { v ->
+                com.example.util.PriceDropUtils.isSaleInEffect(
+                    price = v.price,
+                    salePrice = v.salePrice,
+                    saleActive = saleActive,
+                    saleStartsAt = saleStartsAt,
+                    saleEndsAt = saleEndsAt,
+                    nowMs = nowMs
+                )
+            }
+        }
+        return com.example.util.PriceDropUtils.isSaleInEffect(
+            price = price,
+            salePrice = salePrice,
+            saleActive = saleActive,
+            saleStartsAt = saleStartsAt,
+            saleEndsAt = saleEndsAt,
+            nowMs = nowMs
+        )
+    }
+
+    fun isSaleScheduled(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (variationsEnabled && variants.isNotEmpty()) {
+            return variants.any { v ->
+                com.example.util.PriceDropUtils.isSaleScheduled(
+                    price = v.price,
+                    salePrice = v.salePrice,
+                    saleActive = saleActive,
+                    saleStartsAt = saleStartsAt,
+                    saleEndsAt = saleEndsAt,
+                    nowMs = nowMs
+                )
+            }
+        }
+        return com.example.util.PriceDropUtils.isSaleScheduled(
+            price = price,
+            salePrice = salePrice,
+            saleActive = saleActive,
+            saleStartsAt = saleStartsAt,
+            saleEndsAt = saleEndsAt,
+            nowMs = nowMs
+        )
+    }
+
+    val lowestVariantSalePrice: Double?
+        get() = if (variationsEnabled) {
+            variants.mapNotNull { v ->
+                val sp = v.salePrice
+                if (sp != null && sp > 0.0 && sp < v.price) sp else null
+            }.minOrNull()
+        } else {
+            salePrice
+        }
+
+    val calculatedDiscountPercent: Int
+        get() = if (variationsEnabled && variants.isNotEmpty()) {
+            variants.mapNotNull { v ->
+                val sp = v.salePrice
+                if (sp != null && sp > 0.0 && sp < v.price) {
+                    com.example.util.PriceDropUtils.calculateDiscountPercent(v.price, sp)
+                } else null
+            }.maxOrNull() ?: 0
+        } else {
+            salePrice?.let { com.example.util.PriceDropUtils.calculateDiscountPercent(price, it) } ?: 0
+        }
+
+    val formattedDiscountPercent: String
+        get() = calculatedDiscountPercent.let { if (it > 0) "-$it%" else "" }
 
     fun getEffectiveMenuIds(): List<String> {
         val filtered = menuIds.filter { it.isNotBlank() }

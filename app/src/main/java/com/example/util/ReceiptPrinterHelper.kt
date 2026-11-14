@@ -111,6 +111,9 @@ object ReceiptPrinterHelper {
             } else {
                 sb.appendLine(itemLine)
             }
+            if (item.variantLabel.isNotBlank()) {
+                sb.appendLine("  ${item.variantLabel} x${item.quantity}")
+            }
 
             if (design.showSetChoices) {
                 item.selections.forEach { sel ->

@@ -888,6 +888,14 @@ fun OrderDetailScreen(
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
+                                if (item.variantLabel.isNotBlank()) {
+                                    Text(
+                                        text = "${item.variantLabel} x${item.quantity}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                                 if (item.selectedSize != null) {
                                     Text("Size: ${item.selectedSize}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
@@ -948,7 +956,11 @@ fun OrderDetailScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "${orig.quantity}x ${orig.name}",
+                                            text = if (orig.variantLabel.isNotBlank()) {
+                                                "${orig.quantity}x ${orig.name} (${orig.variantLabel})"
+                                            } else {
+                                                "${orig.quantity}x ${orig.name}"
+                                            },
                                             fontSize = 12.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

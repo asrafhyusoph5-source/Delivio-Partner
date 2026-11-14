@@ -541,7 +541,7 @@ fun OrderEditDialog(
     swapTargetItem?.let { target ->
         val candidateItems = remember(availableShopItems, target) {
             availableShopItems.filter {
-                it.inStock && !it.hasSets && it.price <= target.effectivePrice && it.id != target.menuItemId
+                it.inStock && !it.hasSets && !it.variationsEnabled && it.price <= target.effectivePrice && it.id != target.menuItemId
             }
         }
 

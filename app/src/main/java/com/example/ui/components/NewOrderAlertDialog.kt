@@ -203,12 +203,20 @@ fun NewOrderAlertDialog(
                                         .padding(vertical = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(
-                                        text = "${item.quantity}x ${item.name}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        modifier = Modifier.weight(1f)
-                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${item.quantity}x ${item.name}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        if (item.variantLabel.isNotBlank()) {
+                                            Text(
+                                                text = "${item.variantLabel} x${item.quantity}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
                                     Text(
                                         text = FormatUtils.formatCurrency(item.lineTotal),
                                         style = MaterialTheme.typography.bodyMedium,

@@ -62,11 +62,15 @@ fun MenuManagementScreen(
     onPushMenu: () -> Unit = {},
     onPullMenu: () -> Unit = {},
     onSyncMenu: () -> Unit = {},
+    onOpenPriceDrops: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
     val customColors = LocalDelivioColors.current
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Menus, 1: Category Classes, 2: Bulk edit
+    val activeDropsCount = remember(menuItems, currentTime) {
+        menuItems.count { it.isSaleInEffect(currentTime) || it.isSaleScheduled(currentTime) }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize().testTag("menu_management_screen"),
@@ -90,8 +94,37 @@ fun MenuManagementScreen(
                         Text(
                             text = "Menu Management",
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
                         )
+                        FilledTonalButton(
+                            onClick = onOpenPriceDrops,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = customColors.accentTint,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .defaultMinSize(minHeight = 40.dp)
+                                .testTag("price_drops_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocalOffer,
+                                contentDescription = null,
+                                tint = customColors.accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (activeDropsCount > 0) "Price Drops ($activeDropsCount)" else "Price Drops",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
 
                     TabRow(

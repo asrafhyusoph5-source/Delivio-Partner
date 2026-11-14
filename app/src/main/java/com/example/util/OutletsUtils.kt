@@ -502,15 +502,17 @@ object MenuSyncEngine {
         }
 
         if (SyncField.OPTIONS in fields) {
-            val mySig = normalizedSetsSignature(myItem.sets)
-            val theirSig = normalizedSetsSignature(theirItem.sets)
+            val mySig = "${normalizedSetsSignature(myItem.sets)}##${normalizedVariationsSignature(myItem)}"
+            val theirSig = "${normalizedSetsSignature(theirItem.sets)}##${normalizedVariationsSignature(theirItem)}"
             if (mySig != theirSig) {
+                val mySummary = if (myItem.variationsEnabled) "${myItem.variants.size} variation(s)" else "${myItem.sets.size} set(s)"
+                val theirSummary = if (theirItem.variationsEnabled) "${theirItem.variants.size} variation(s)" else "${theirItem.sets.size} set(s)"
                 diffs.add(
                     SyncFieldDiff(
                         SyncField.OPTIONS,
                         "Options",
-                        "${myItem.sets.size} set(s)",
-                        "${theirItem.sets.size} set(s)"
+                        mySummary,
+                        theirSummary
                     )
                 )
             }
@@ -549,6 +551,18 @@ object MenuSyncEngine {
         return diffs
     }
 
+    private fun normalizedVariationsSignature(item: MenuItem): String {
+        if (!item.variationsEnabled) return "NO_VAR"
+        val groups = item.variations.joinToString("||") { vg ->
+            val opts = vg.options.joinToString(",") { "${it.name.trim()}:${it.imageUrl.trim()}" }
+            "${vg.name.trim()}:${vg.imageEnabled}[$opts]"
+        }
+        val vars = item.variants.sortedBy { it.label }.joinToString("||") { v ->
+            "${v.label.trim()}:${"%.2f".format(v.price)}"
+        }
+        return "$groups##$vars"
+    }
+
     private fun normalizedSetsSignature(sets: List<ProductSet>): String {
         return sets.sortedBy { it.sortOrder }.joinToString("||") { s ->
             val ch = s.choices.joinToString(",") { c ->
@@ -566,8 +580,8 @@ object MenuSyncEngine {
 
     /**
      * Clones a full MenuItem from source to target (Push / Pull / both-ways add).
-     * Starts inStock = true, copies no stock counts, generates new doc & set/choice IDs,
-     * and attaches provenance fields.
+     * Starts inStock = true for regular items (and stock = 0, inStock = false for variation items),
+     * generates new doc & set/choice/variation IDs, and attaches provenance fields.
      */
     fun buildCopiedItem(
         sourceItem: MenuItem,
@@ -587,6 +601,31 @@ object MenuSyncEngine {
                 choices = s.choices.map { c -> c.copy(id = UUID.randomUUID().toString()) }
             )
         }
+        val optionIdMap = mutableMapOf<String, String>()
+        val copiedVariations = sourceItem.variations.map { vg ->
+            val newOptions = vg.options.map { opt ->
+                val newId = UUID.randomUUID().toString()
+                optionIdMap[opt.id] = newId
+                opt.copy(id = newId)
+            }
+            vg.copy(
+                id = UUID.randomUUID().toString(),
+                options = newOptions
+            )
+        }
+        val copiedVariants = sourceItem.variants.map { v ->
+            val newOptionIds = v.optionIds.map { oldId -> optionIdMap[oldId] ?: oldId }
+            val newKey = if (newOptionIds.isNotEmpty()) VariationUtils.makeVariantKey(newOptionIds) else v.key
+            v.copy(
+                key = newKey,
+                optionIds = newOptionIds,
+                stock = 0,
+                salePrice = null
+            )
+        }
+        val isVarEnabled = sourceItem.variationsEnabled && copiedVariations.isNotEmpty() && copiedVariants.isNotEmpty()
+        val derived = if (isVarEnabled) VariationUtils.computeDerivedFields(copiedVariants) else null
+
         return MenuItem(
             id = UUID.randomUUID().toString(),
             merchantId = targetMerchantId,
@@ -597,8 +636,9 @@ object MenuSyncEngine {
             menuIds = targetMenuIds.ifEmpty { listOf("main") },
             name = sourceItem.name.trim(),
             description = sourceItem.description.trim(),
-            price = sourceItem.price,
-            inStock = true,
+            price = derived?.priceMin ?: sourceItem.price,
+            priceMax = derived?.priceMax,
+            inStock = if (isVarEnabled) false else true,
             soldOutReason = null,
             soldOutUntilTimestamp = null,
             businessType = sourceItem.businessType,
@@ -606,6 +646,9 @@ object MenuSyncEngine {
             imageUrl = sourceItem.imageUrl.trim(),
             hasSets = copiedSets.isNotEmpty(),
             sets = copiedSets,
+            variationsEnabled = isVarEnabled,
+            variations = if (isVarEnabled) copiedVariations else emptyList(),
+            variants = if (isVarEnabled) copiedVariants else emptyList(),
             prepTimeMinutes = sourceItem.prepTimeMinutes,
             tags = sourceItem.tags,
             sizes = emptyList(),
@@ -614,9 +657,13 @@ object MenuSyncEngine {
             sku = "",
             barcode = "",
             unit = sourceItem.unit,
-            trackStock = false,
-            stockCount = 50,
-            lowStockAt = 5,
+            trackStock = if (isVarEnabled) true else false,
+            stockCount = if (isVarEnabled) 0 else 50,
+            lowStockAt = sourceItem.lowStockAt,
+            salePrice = null,
+            saleStartsAt = null,
+            saleEndsAt = null,
+            saleActive = false,
             itemSize = sourceItem.itemSize.trim(),
             availability = sourceItem.availability,
             sortOrder = sourceItem.sortOrder,

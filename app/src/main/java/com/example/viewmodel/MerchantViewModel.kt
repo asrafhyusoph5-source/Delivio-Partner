@@ -1164,11 +1164,20 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun saveMenuItem(item: MenuItem, onResult: ((Boolean, String?) -> Unit)? = null) {
+        val previousItem = if (item.id.isNotBlank()) menuItems.value.find { it.id == item.id } else null
+        val saleAutoEnded = previousItem?.saleActive == true &&
+            previousItem.salePrice != null &&
+            item.price <= previousItem.salePrice &&
+            !item.saleActive
         repository.saveMenuItem(item) { success, errorMsg ->
             if (success) {
                 _editingMenuItem.value = null
                 SoundVibrationHelper.playClickHaptic(getApplication())
-                showSnackbar("Product saved successfully")
+                if (saleAutoEnded) {
+                    showSnackbar("Product saved. Price drop ended because regular price is at or below the sale price.")
+                } else {
+                    showSnackbar("Product saved successfully")
+                }
             }
             onResult?.invoke(success, errorMsg)
         }
@@ -1187,7 +1196,27 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
                 choices = s.choices.map { c -> c.copy(id = java.util.UUID.randomUUID().toString()) }
             )
         }
-        val duplicate = item.copy(id = "", name = "${item.name} (Copy)", sets = copiedSets)
+        val optionIdMap = mutableMapOf<String, String>()
+        val copiedVariations = item.variations.map { v ->
+            val newOptions = v.options.map { opt ->
+                val newOptId = java.util.UUID.randomUUID().toString()
+                if (opt.id.isNotBlank()) optionIdMap[opt.id] = newOptId
+                opt.copy(id = newOptId)
+            }
+            v.copy(id = java.util.UUID.randomUUID().toString(), options = newOptions)
+        }
+        val copiedVariants = item.variants.map { variant ->
+            val newOptIds = variant.optionIds.map { oldId -> optionIdMap[oldId] ?: oldId }
+            val newKey = if (newOptIds.isNotEmpty()) com.example.util.VariationUtils.makeVariantKey(newOptIds) else variant.key
+            variant.copy(key = newKey, optionIds = newOptIds)
+        }
+        val duplicate = item.copy(
+            id = "",
+            name = "${item.name} (Copy)",
+            sets = copiedSets,
+            variations = copiedVariations,
+            variants = copiedVariants
+        )
         repository.saveMenuItem(duplicate) { success, errorMsg ->
             if (success) {
                 showSnackbar("Product duplicated")
@@ -1276,6 +1305,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     private val _showMenuManagementScreen = MutableStateFlow(false)
     val showMenuManagementScreen: StateFlow<Boolean> = _showMenuManagementScreen.asStateFlow()
 
+    private val _showPriceDropsScreen = MutableStateFlow(false)
+    val showPriceDropsScreen: StateFlow<Boolean> = _showPriceDropsScreen.asStateFlow()
+
     private val _editingShopMenu = MutableStateFlow<ShopMenu?>(null)
     val editingShopMenu: StateFlow<ShopMenu?> = _editingShopMenu.asStateFlow()
 
@@ -1287,7 +1319,46 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun closeMenuManagement() {
+        _showPriceDropsScreen.value = false
         _showMenuManagementScreen.value = false
+    }
+
+    fun openPriceDrops() {
+        _showPriceDropsScreen.value = true
+    }
+
+    fun closePriceDrops() {
+        _showPriceDropsScreen.value = false
+    }
+
+    fun applyPriceDrops(
+        itemSalePrices: Map<String, Double>,
+        saleStartsAt: Long?,
+        saleEndsAt: Long?,
+        variantSalePrices: Map<String, Map<String, Double>> = emptyMap(),
+        onResult: (Boolean, Int, String?) -> Unit
+    ) {
+        repository.applyPriceDrops(itemSalePrices, saleStartsAt, saleEndsAt, variantSalePrices) { success, count, err ->
+            if (success) {
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Price drop applied to $count ${if (count == 1) "product" else "products"}")
+            } else if (!err.isNullOrBlank()) {
+                showSnackbar(err)
+            }
+            onResult(success, count, err)
+        }
+    }
+
+    fun endPriceDrop(itemId: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        repository.endPriceDrop(itemId) { success, err ->
+            if (success) {
+                SoundVibrationHelper.playClickHaptic(getApplication())
+                showSnackbar("Price drop ended")
+            } else if (!err.isNullOrBlank()) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
     }
 
     fun openAddShopMenu() {

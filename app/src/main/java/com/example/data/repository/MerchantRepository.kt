@@ -18,6 +18,7 @@ import com.example.util.SyncConflict
 import com.example.util.SyncField
 import com.example.util.SyncPlanPreview
 import com.example.util.SyncResolution
+import com.example.util.VariationUtils
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.Timestamp
@@ -855,6 +856,8 @@ class MerchantRepository private constructor(context: Context) {
                     price = FormatUtils.parseDouble(sm["price"]) ?: 0.0
                 )
             }
+            val unitPriceVal = FormatUtils.parseDouble(itm["unitPrice"]) ?: priceVal
+            val regularUnitPriceVal = FormatUtils.parseDouble(itm["regularUnitPrice"]) ?: unitPriceVal
             val basePriceVal = FormatUtils.parseDouble(itm["basePrice"]) ?: priceVal
 
             OrderItem(
@@ -864,7 +867,11 @@ class MerchantRepository private constructor(context: Context) {
                 quantity = finalQty,
                 price = priceVal,
                 basePrice = basePriceVal,
-                unitPrice = priceVal,
+                unitPrice = unitPriceVal,
+                regularUnitPrice = regularUnitPriceVal,
+                variantKey = (itm["variantKey"] as? String) ?: "",
+                variantLabel = (itm["variantLabel"] as? String) ?: "",
+                variantImageUrl = (itm["variantImageUrl"] as? String) ?: "",
                 selectedSize = itm["selectedSize"] as? String,
                 modifiers = mods,
                 selections = selections,
@@ -1220,6 +1227,30 @@ class MerchantRepository private constructor(context: Context) {
         val rawCatName = doc.getString("categoryName")?.trim().orEmpty()
         val resolvedRawCat = rawCat.ifBlank { rawCatName }
 
+        val rawVariations = (doc.get("variations") as? List<*>) ?: emptyList<Any>()
+        val parsedVariations = rawVariations.mapIndexedNotNull { vIdx, vObj ->
+            val vMap = vObj as? Map<*, *> ?: return@mapIndexedNotNull null
+            val rawOptions = (vMap["options"] as? List<*>) ?: emptyList<Any>()
+            val parsedOptions = rawOptions.mapNotNull { oObj ->
+                val oMap = oObj as? Map<*, *> ?: return@mapNotNull null
+                VariationOption(
+                    id = (oMap["id"] as? String) ?: UUID.randomUUID().toString(),
+                    name = (oMap["name"] as? String) ?: "",
+                    imageUrl = (oMap["imageUrl"] as? String) ?: ""
+                )
+            }
+            ProductVariation(
+                id = (vMap["id"] as? String) ?: UUID.randomUUID().toString(),
+                name = (vMap["name"] as? String) ?: "",
+                imageEnabled = vIdx == 0 && ((vMap["imageEnabled"] as? Boolean) ?: false),
+                options = parsedOptions
+            )
+        }
+        val parsedVariants = parseVariantsList(doc.get("variants") as? List<*>)
+        val rawVariationsEnabled = doc.getBoolean("variationsEnabled") ?: false
+        val effVariationsEnabled = rawVariationsEnabled && parsedVariants.isNotEmpty()
+        val parsedPriceMax = FormatUtils.parseDouble(doc.get("priceMax"))
+
         return MenuItem(
             id = doc.id,
             merchantId = mId,
@@ -1232,6 +1263,7 @@ class MerchantRepository private constructor(context: Context) {
             name = doc.getString("name") ?: "",
             description = doc.getString("description") ?: "",
             price = FormatUtils.parseDouble(doc.get("price")) ?: 0.0,
+            priceMax = parsedPriceMax,
             inStock = isAvail,
             soldOutReason = doc.getString("soldOutReason"),
             businessType = BusinessType.fromString(doc.getString("businessType")),
@@ -1239,6 +1271,9 @@ class MerchantRepository private constructor(context: Context) {
             imageUrl = doc.getString("imageUrl") ?: "",
             hasSets = hasSetsVal || parsedSets.isNotEmpty(),
             sets = parsedSets,
+            variationsEnabled = effVariationsEnabled,
+            variations = parsedVariations,
+            variants = parsedVariants,
             prepTimeMinutes = doc.getLong("prepTime")?.toInt() ?: doc.getLong("prepTimeMinutes")?.toInt() ?: 15,
             tags = parsedTags,
             sku = doc.getString("sku") ?: "",
@@ -1246,6 +1281,10 @@ class MerchantRepository private constructor(context: Context) {
             trackStock = doc.getBoolean("trackStock") ?: false,
             stockCount = doc.getLong("stockCount")?.toInt() ?: 50,
             lowStockAt = doc.getLong("lowStockAt")?.toInt() ?: doc.getLong("lowStockAlertThreshold")?.toInt() ?: 5,
+            salePrice = FormatUtils.parseDouble(doc.get("salePrice")),
+            saleStartsAt = FormatUtils.parseTimestamp(doc.get("saleStartsAt")),
+            saleEndsAt = FormatUtils.parseTimestamp(doc.get("saleEndsAt")),
+            saleActive = doc.getBoolean("saleActive") ?: false,
             itemSize = doc.getString("itemSize") ?: "",
             availability = parsedAvail,
             sortOrder = doc.getLong("sortOrder")?.toInt() ?: 0,
@@ -1253,6 +1292,23 @@ class MerchantRepository private constructor(context: Context) {
             copiedFromItemId = doc.getString("copiedFromItemId") ?: "",
             copiedAt = FormatUtils.parseTimestamp(doc.get("copiedAt"))
         )
+    }
+
+    private fun parseVariantsList(rawVariants: List<*>?): List<ProductVariant> {
+        if (rawVariants.isNullOrEmpty()) return emptyList()
+        return rawVariants.mapNotNull { varObj ->
+            val map = varObj as? Map<*, *> ?: return@mapNotNull null
+            val optIds = (map["optionIds"] as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+            val keyStr = (map["key"] as? String)?.ifBlank { optIds.joinToString("|") } ?: optIds.joinToString("|")
+            ProductVariant(
+                key = keyStr,
+                optionIds = optIds,
+                label = (map["label"] as? String) ?: "",
+                price = FormatUtils.parseDouble(map["price"]) ?: 0.0,
+                stock = FormatUtils.parseInt(map["stock"]) ?: 0,
+                salePrice = FormatUtils.parseDouble(map["salePrice"])
+            )
+        }
     }
 
     private fun parseSubcategoryDoc(doc: DocumentSnapshot): Subcategory? {
@@ -1498,7 +1554,17 @@ class MerchantRepository private constructor(context: Context) {
                     syncCuisineTags(mId, items)
 
                     items.forEach { itm ->
-                        if (itm.trackStock && itm.stockCount <= itm.lowStockAt) {
+                        if (itm.variationsEnabled && itm.variants.isNotEmpty()) {
+                            itm.variants.forEach { variant ->
+                                if (variant.stock <= itm.lowStockAt) {
+                                    com.example.util.NotificationHelper.showLowStockNotification(
+                                        context = appContext,
+                                        productName = "${itm.name} (${variant.label})",
+                                        remainingStock = variant.stock
+                                    )
+                                }
+                            }
+                        } else if (itm.trackStock && itm.stockCount <= itm.lowStockAt) {
                             com.example.util.NotificationHelper.showLowStockNotification(
                                 context = appContext,
                                 productName = itm.name,
@@ -2574,6 +2640,16 @@ class MerchantRepository private constructor(context: Context) {
 
     fun confirmAcceptOrder(orderId: String, prepMinutes: Int, isPickUp: Boolean = false, onResult: (Boolean, String?) -> Unit) {
         val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val existingOrder = _orders.value.find { it.id == orderId }
+        val wasAlreadyAccepted = existingOrder?.acceptedAt != null || existingOrder?.status in setOf(
+            OrderStatus.PREPARING,
+            OrderStatus.READY,
+            OrderStatus.RIDER_ON_THE_WAY,
+            OrderStatus.ON_ANOTHER_DELIVERY,
+            OrderStatus.DELIVERED,
+            OrderStatus.COMPLETED
+        )
+
         val data = mutableMapOf<String, Any>(
             "status" to PlatformOrderStatuses.PREPARING,
             "statusHistory" to FieldValue.arrayUnion(
@@ -2600,6 +2676,9 @@ class MerchantRepository private constructor(context: Context) {
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 dismissNewOrderAlert()
+                if (!wasAlreadyAccepted && existingOrder != null) {
+                    adjustOrderInventoryStock(db, existingOrder, isDeduct = true)
+                }
                 onResult(true, null)
             }
             .addOnFailureListener { ex ->
@@ -2607,6 +2686,82 @@ class MerchantRepository private constructor(context: Context) {
                 Log.e("MerchantRepo", "Accept order failed: $err", ex)
                 onResult(false, err)
             }
+    }
+
+    private fun adjustOrderInventoryStock(db: FirebaseFirestore, order: Order, isDeduct: Boolean) {
+        val targetMerchantId = order.merchantId.ifBlank { _merchantId.value.orEmpty() }
+        if (targetMerchantId.isBlank()) return
+        val groupedLines = order.items.filter { it.menuItemId.isNotBlank() && it.quantity > 0 }.groupBy { it.menuItemId }
+        if (groupedLines.isEmpty()) return
+
+        groupedLines.forEach { (itemId, lines) ->
+            val itemRef = db.collection("merchants").document(targetMerchantId).collection("items").document(itemId)
+            val qtyByKey = mutableMapOf<String, Int>()
+            val qtyByLabel = mutableMapOf<String, Int>()
+            var totalQty = 0
+            lines.forEach { line ->
+                totalQty += line.quantity
+                if (line.variantKey.isNotBlank()) {
+                    qtyByKey[line.variantKey] = (qtyByKey[line.variantKey] ?: 0) + line.quantity
+                }
+                if (line.variantLabel.isNotBlank()) {
+                    val lk = line.variantLabel.trim().lowercase()
+                    qtyByLabel[lk] = (qtyByLabel[lk] ?: 0) + line.quantity
+                }
+            }
+
+            db.runTransaction { tx ->
+                val snap = tx.get(itemRef)
+                if (!snap.exists()) return@runTransaction null
+                val varEnabled = snap.getBoolean("variationsEnabled") ?: false
+                if (varEnabled) {
+                    val parsedVariants = parseVariantsList(snap.get("variants") as? List<*>)
+                    if (parsedVariants.isNotEmpty()) {
+                        val (updatedVariants, derived) = VariationUtils.adjustVariantsStock(
+                            variants = parsedVariants,
+                            qtyByVariantKey = qtyByKey,
+                            qtyByVariantLabel = qtyByLabel,
+                            isDeduct = isDeduct
+                        )
+                        val serializedVariants = serializeVariants(updatedVariants)
+                        tx.update(
+                            itemRef,
+                            mapOf(
+                                "variants" to serializedVariants,
+                                "price" to derived.priceMin,
+                                "priceMax" to derived.priceMax,
+                                "stockCount" to derived.stockCount,
+                                "inStock" to derived.inStock,
+                                "available" to derived.inStock,
+                                "soldOutReason" to if (derived.inStock) "" else "Out of stock",
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    }
+                } else if (snap.getBoolean("trackStock") == true) {
+                    val currentStock = snap.getLong("stockCount")?.toInt() ?: 0
+                    val nextStock = if (isDeduct) {
+                        (currentStock - totalQty).coerceAtLeast(0)
+                    } else {
+                        (currentStock + totalQty).coerceAtLeast(0)
+                    }
+                    val nextInStock = nextStock > 0
+                    tx.update(
+                        itemRef,
+                        mapOf(
+                            "stockCount" to nextStock,
+                            "inStock" to nextInStock,
+                            "available" to nextInStock,
+                            "soldOutReason" to if (nextInStock) "" else "Out of stock",
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                null
+            }.addOnFailureListener { ex ->
+                Log.w("MerchantRepo", "Stock adjustment transaction failed for item=$itemId", ex)
+            }
+        }
     }
 
     fun confirmAcceptOrder(orderId: String, prepMinutes: Int, onResult: (Boolean, String?) -> Unit) {
@@ -2951,6 +3106,16 @@ class MerchantRepository private constructor(context: Context) {
 
     fun confirmRejectOrder(orderId: String, reason: String, onResult: (Boolean, String?) -> Unit) {
         val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val existingOrder = _orders.value.find { it.id == orderId }
+        val wasAccepted = existingOrder != null &&
+            existingOrder.status != OrderStatus.REJECTED &&
+            existingOrder.status != OrderStatus.CANCELLED &&
+            (existingOrder.acceptedAt != null || existingOrder.status in setOf(
+                OrderStatus.PREPARING,
+                OrderStatus.READY,
+                OrderStatus.RIDER_ON_THE_WAY,
+                OrderStatus.ON_ANOTHER_DELIVERY
+            ))
         val data = mapOf(
             "status" to PlatformOrderStatuses.REJECTED,
             "rejectReason" to reason.trim(),
@@ -2966,6 +3131,9 @@ class MerchantRepository private constructor(context: Context) {
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
                 dismissNewOrderAlert()
+                if (wasAccepted && existingOrder != null) {
+                    adjustOrderInventoryStock(db, existingOrder, isDeduct = false)
+                }
                 onResult(true, null)
             }
             .addOnFailureListener { ex ->
@@ -3001,6 +3169,16 @@ class MerchantRepository private constructor(context: Context) {
 
     fun cancelOrder(orderId: String, reason: String, onResult: (Boolean, String?) -> Unit) {
         val db = firestore ?: return onResult(false, "Firestore unavailable")
+        val existingOrder = _orders.value.find { it.id == orderId }
+        val wasAccepted = existingOrder != null &&
+            existingOrder.status != OrderStatus.REJECTED &&
+            existingOrder.status != OrderStatus.CANCELLED &&
+            (existingOrder.acceptedAt != null || existingOrder.status in setOf(
+                OrderStatus.PREPARING,
+                OrderStatus.READY,
+                OrderStatus.RIDER_ON_THE_WAY,
+                OrderStatus.ON_ANOTHER_DELIVERY
+            ))
         val data = mapOf(
             "status" to PlatformOrderStatuses.CANCELLED,
             "cancelReason" to reason.trim(),
@@ -3014,6 +3192,9 @@ class MerchantRepository private constructor(context: Context) {
         )
         db.collection("orders").document(orderId).update(data)
             .addOnSuccessListener {
+                if (wasAccepted && existingOrder != null) {
+                    adjustOrderInventoryStock(db, existingOrder, isDeduct = false)
+                }
                 onResult(true, null)
             }
             .addOnFailureListener { ex ->
@@ -3943,12 +4124,43 @@ class MerchantRepository private constructor(context: Context) {
             )
         }
 
-        val effectiveInStock = if (item.trackStock && item.stockCount <= 0) false else item.inStock
+        val isVarEnabled = item.businessType == BusinessType.CONVENIENCE &&
+            item.variationsEnabled &&
+            item.variations.isNotEmpty() &&
+            item.variants.isNotEmpty()
+        val normalizedVariations = if (isVarEnabled) VariationUtils.normalizeVariationsForSave(item.variations) else emptyList()
+        val serializedVariations = serializeVariations(normalizedVariations)
+        val serializedVariants = if (isVarEnabled) serializeVariants(item.variants) else emptyList()
+        val derived = if (isVarEnabled) VariationUtils.computeDerivedFields(item.variants) else null
+
+        val effectivePrice = derived?.priceMin ?: item.price
+        val effectivePriceMax = derived?.priceMax
+        val effectiveStockCount = derived?.stockCount ?: item.stockCount
+        val effectiveTrackStock = if (isVarEnabled) true else item.trackStock
+        val effectiveInStock = derived?.inStock ?: if (item.trackStock && item.stockCount <= 0) false else item.inStock
+
+        val cleanSalePrice = if (isVarEnabled) null else item.salePrice?.let { kotlin.math.round(it * 100.0) / 100.0 }
+        val saleInvalidatedByRegular = if (isVarEnabled) {
+            item.saleActive && item.variants.none { v ->
+                val sp = v.salePrice
+                sp != null && sp > 0.0 && sp < v.price
+            }
+        } else {
+            item.saleActive && (cleanSalePrice == null || cleanSalePrice <= 0.0 || effectivePrice <= cleanSalePrice)
+        }
+        val effectiveSaleActive = if (saleInvalidatedByRegular) false else item.saleActive
+        val effectiveSaleStartsAt = if (effectiveSaleActive) item.saleStartsAt else null
+        val effectiveSaleEndsAt = if (effectiveSaleActive) item.saleEndsAt else null
 
         val itemMap = hashMapOf<String, Any?>(
             "name" to item.name,
             "description" to item.description,
-            "price" to item.price,
+            "price" to effectivePrice,
+            "priceMax" to effectivePriceMax,
+            "salePrice" to cleanSalePrice,
+            "saleActive" to effectiveSaleActive,
+            "saleStartsAt" to effectiveSaleStartsAt?.let { Timestamp(Date(it)) },
+            "saleEndsAt" to effectiveSaleEndsAt?.let { Timestamp(Date(it)) },
             "imageUrl" to item.imageUrl,
             "categoryId" to item.categoryId,
             "category" to categoryName,
@@ -3958,15 +4170,15 @@ class MerchantRepository private constructor(context: Context) {
             "menuIds" to item.getEffectiveMenuIds(),
             "available" to effectiveInStock,
             "inStock" to effectiveInStock,
-            "soldOutReason" to (if (item.trackStock && item.stockCount <= 0) "Out of stock" else (item.soldOutReason ?: "")),
+            "soldOutReason" to (if (effectiveTrackStock && effectiveStockCount <= 0) "Out of stock" else (item.soldOutReason ?: "")),
             "businessType" to if (item.businessType == BusinessType.FOOD) "food" else "convenience",
             "prepTime" to item.prepTimeMinutes,
             "tags" to item.tags,
             "sku" to item.sku,
             "barcode" to item.barcode,
             "unit" to item.unit,
-            "trackStock" to item.trackStock,
-            "stockCount" to item.stockCount,
+            "trackStock" to effectiveTrackStock,
+            "stockCount" to effectiveStockCount,
             "lowStockAt" to item.lowStockAt,
             "itemSize" to item.itemSize.trim(),
             "availability" to item.availability?.let { avail ->
@@ -3980,6 +4192,9 @@ class MerchantRepository private constructor(context: Context) {
             },
             "hasSets" to item.sets.isNotEmpty(),
             "sets" to setsList,
+            "variationsEnabled" to isVarEnabled,
+            "variations" to serializedVariations,
+            "variants" to serializedVariants,
             "sortOrder" to item.sortOrder
         )
         if (!item.copiedFromMerchantId.isNullOrBlank()) {
@@ -4487,6 +4702,7 @@ class MerchantRepository private constructor(context: Context) {
 
         val targetItems = _menuItems.value.filter { it.id in itemIds }
         val batch = db.batch()
+        var endedSalesCount = 0
         targetItems.forEach { item ->
             val oldPrice = item.price
             val newPrice = if (percentDelta != 0.0) {
@@ -4494,12 +4710,146 @@ class MerchantRepository private constructor(context: Context) {
             } else {
                 (oldPrice + fixedDelta).coerceAtLeast(0.0)
             }
+            val roundedPrice = Math.round(newPrice * 100.0) / 100.0
             val ref = db.collection("merchants").document(mId).collection("items").document(item.id)
-            batch.update(ref, "price", (Math.round(newPrice * 100.0) / 100.0))
+            if (item.saleActive && item.salePrice != null && roundedPrice <= item.salePrice) {
+                endedSalesCount++
+                batch.update(
+                    ref,
+                    mapOf(
+                        "price" to roundedPrice,
+                        "saleActive" to false,
+                        "saleStartsAt" to null,
+                        "saleEndsAt" to null,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } else {
+                batch.update(ref, "price", roundedPrice)
+            }
         }
         batch.commit()
-            .addOnSuccessListener { onResult(true, targetItems.size, null) }
+            .addOnSuccessListener {
+                val info = if (endedSalesCount > 0) {
+                    "$endedSalesCount active price drop(s) ended because the new regular price was at or below the sale price"
+                } else null
+                onResult(true, targetItems.size, info)
+            }
             .addOnFailureListener { ex -> onResult(false, 0, ex.localizedMessage ?: "Failed to adjust prices") }
+    }
+
+    fun applyPriceDrops(
+        itemSalePrices: Map<String, Double>,
+        saleStartsAt: Long?,
+        saleEndsAt: Long?,
+        variantSalePrices: Map<String, Map<String, Double>> = emptyMap(),
+        onResult: (Boolean, Int, String?) -> Unit
+    ) {
+        val mId = _merchantId.value ?: return onResult(false, 0, "No active merchant session")
+        val db = firestore ?: return onResult(false, 0, "Firestore unavailable")
+        if (itemSalePrices.isEmpty() && variantSalePrices.isEmpty()) {
+            return onResult(false, 0, "Select at least one product")
+        }
+
+        val startTs = saleStartsAt?.let { Timestamp(Date(it)) }
+        val endTs = saleEndsAt?.let { Timestamp(Date(it)) }
+        val singleOps = itemSalePrices.entries.mapNotNull { (itemId, rawSale) ->
+            val roundedSale = Math.round(rawSale * 100.0) / 100.0
+            val existing = _menuItems.value.find { it.id == itemId }
+            if (roundedSale <= 0.0 || (existing != null && roundedSale >= existing.price)) {
+                null
+            } else {
+                val ref = db.collection("merchants").document(mId).collection("items").document(itemId)
+                val payload = mapOf<String, Any?>(
+                    "salePrice" to roundedSale,
+                    "saleActive" to true,
+                    "saleStartsAt" to startTs,
+                    "saleEndsAt" to endTs,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                val op: (WriteBatch) -> Unit = { batch -> batch.update(ref, payload) }
+                op
+            }
+        }
+        val variantOps = variantSalePrices.entries.mapNotNull { (itemId, varMap) ->
+            val existing = _menuItems.value.find { it.id == itemId }
+            if (existing == null || !existing.variationsEnabled || existing.variants.isEmpty()) {
+                null
+            } else {
+                var anyValid = false
+                val updatedVariants = existing.variants.map { v ->
+                    val raw = varMap[v.key]
+                    val rounded = raw?.let { Math.round(it * 100.0) / 100.0 }
+                    if (rounded != null && rounded > 0.0 && rounded < v.price) {
+                        anyValid = true
+                        v.copy(salePrice = rounded)
+                    } else {
+                        v.copy(salePrice = null)
+                    }
+                }
+                if (!anyValid) {
+                    null
+                } else {
+                    val ref = db.collection("merchants").document(mId).collection("items").document(itemId)
+                    val payload = mapOf<String, Any?>(
+                        "variants" to serializeVariants(updatedVariants),
+                        "salePrice" to null,
+                        "saleActive" to true,
+                        "saleStartsAt" to startTs,
+                        "saleEndsAt" to endTs,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    val op: (WriteBatch) -> Unit = { batch -> batch.update(ref, payload) }
+                    op
+                }
+            }
+        }
+        val ops = singleOps + variantOps
+        if (ops.isEmpty()) {
+            return onResult(false, 0, "No valid sale prices to save")
+        }
+
+        scope.launch(Dispatchers.IO) {
+            var updated = 0
+            var failedErr: String? = null
+            for (chunk in MenuSyncEngine.chunkForFirestoreBatches(ops)) {
+                try {
+                    val batch = db.batch()
+                    chunk.forEach { it(batch) }
+                    batch.commit().awaitTask()
+                    updated += chunk.size
+                } catch (ex: Exception) {
+                    failedErr = ex.localizedMessage ?: "Failed to save price drops"
+                }
+            }
+            withContext(Dispatchers.Main) {
+                if (failedErr == null) {
+                    onResult(true, updated, null)
+                } else {
+                    onResult(updated > 0, updated, failedErr)
+                }
+            }
+        }
+    }
+
+    fun endPriceDrop(itemId: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
+        val db = firestore ?: return onResult(false, "Firestore unavailable")
+        if (itemId.isBlank()) return onResult(false, "Invalid product")
+
+        db.collection("merchants").document(mId).collection("items").document(itemId)
+            .update(
+                mapOf(
+                    "saleActive" to false,
+                    "saleStartsAt" to null,
+                    "saleEndsAt" to null,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex ->
+                onResult(false, ex.localizedMessage ?: "Failed to end price drop")
+            }
     }
 
     fun bulkDeleteItems(itemIds: Set<String>, onResult: (Boolean, Int, String?) -> Unit) {
@@ -5449,6 +5799,36 @@ class MerchantRepository private constructor(context: Context) {
         )
     }
 
+    private fun serializeVariations(variations: List<ProductVariation>): List<Map<String, Any?>> {
+        return VariationUtils.normalizeVariationsForSave(variations).mapIndexed { idx, vg ->
+            mapOf(
+                "id" to vg.id,
+                "name" to vg.name,
+                "imageEnabled" to (idx == 0 && vg.imageEnabled),
+                "options" to vg.options.map { opt ->
+                    mapOf(
+                        "id" to opt.id,
+                        "name" to opt.name,
+                        "imageUrl" to opt.imageUrl
+                    )
+                }
+            )
+        }
+    }
+
+    private fun serializeVariants(variants: List<ProductVariant>): List<Map<String, Any?>> {
+        return variants.map { v ->
+            mapOf(
+                "key" to v.key,
+                "optionIds" to v.optionIds,
+                "label" to v.label,
+                "price" to VariationUtils.roundCents(v.price),
+                "stock" to v.stock.coerceAtLeast(0),
+                "salePrice" to v.salePrice?.let { VariationUtils.roundCents(it) }
+            )
+        }
+    }
+
     private fun buildFirestoreMenuItemMap(item: MenuItem): MutableMap<String, Any?> {
         val setsList = item.sets.mapIndexed { idx, s ->
             val typedName = s.name.trim()
@@ -5473,11 +5853,14 @@ class MerchantRepository private constructor(context: Context) {
                 }
             )
         }
+        val isVarEnabled = item.variationsEnabled && item.variations.isNotEmpty() && item.variants.isNotEmpty()
+        val derived = if (isVarEnabled) VariationUtils.computeDerivedFields(item.variants) else null
         val catVal = item.category.ifBlank { item.categoryName }
         val map = hashMapOf<String, Any?>(
             "name" to item.name,
             "description" to item.description,
-            "price" to item.price,
+            "price" to (derived?.priceMin ?: item.price),
+            "priceMax" to derived?.priceMax,
             "imageUrl" to item.imageUrl,
             "categoryId" to item.categoryId,
             "category" to catVal,
@@ -5485,8 +5868,8 @@ class MerchantRepository private constructor(context: Context) {
             "subcategoryId" to item.subcategoryId,
             "subcategoryName" to item.subcategoryName,
             "menuIds" to item.getEffectiveMenuIds(),
-            "available" to item.inStock,
-            "inStock" to item.inStock,
+            "available" to (derived?.inStock ?: item.inStock),
+            "inStock" to (derived?.inStock ?: item.inStock),
             "soldOutReason" to (item.soldOutReason ?: ""),
             "businessType" to if (item.businessType == BusinessType.FOOD) "food" else "convenience",
             "prepTime" to item.prepTimeMinutes,
@@ -5494,9 +5877,13 @@ class MerchantRepository private constructor(context: Context) {
             "sku" to item.sku,
             "barcode" to item.barcode,
             "unit" to item.unit,
-            "trackStock" to item.trackStock,
-            "stockCount" to item.stockCount,
+            "trackStock" to (if (isVarEnabled) true else item.trackStock),
+            "stockCount" to (derived?.stockCount ?: item.stockCount),
             "lowStockAt" to item.lowStockAt,
+            "salePrice" to null,
+            "saleStartsAt" to null,
+            "saleEndsAt" to null,
+            "saleActive" to false,
             "itemSize" to item.itemSize.trim(),
             "availability" to item.availability?.let { avail ->
                 mapOf(
@@ -5509,6 +5896,9 @@ class MerchantRepository private constructor(context: Context) {
             },
             "hasSets" to item.sets.isNotEmpty(),
             "sets" to setsList,
+            "variationsEnabled" to isVarEnabled,
+            "variations" to (if (isVarEnabled) serializeVariations(item.variations) else emptyList<Any>()),
+            "variants" to (if (isVarEnabled) serializeVariants(item.variants) else emptyList<Any>()),
             "sortOrder" to item.sortOrder
         )
         if (!item.copiedFromMerchantId.isNullOrBlank()) map["copiedFromMerchantId"] = item.copiedFromMerchantId
@@ -5659,6 +6049,7 @@ class MerchantRepository private constructor(context: Context) {
             // Keep item count accurate separately from helper subcategory/menu doc ops
             val opUnits = mutableListOf<Pair<List<(WriteBatch) -> Unit>, Int>>() // (ops, itemAddedDelta)
             val batchGroups = mutableListOf<Pair<String, List<(WriteBatch) -> Unit>>>()
+            val needsStockNames = mutableListOf<String>()
 
             for ((target, items) in targetsWithItems) {
                 if (items.isEmpty()) continue
@@ -5674,6 +6065,9 @@ class MerchantRepository private constructor(context: Context) {
                 )
                 batchGroups.add("${target.displayName}: ${items.size} product(s)" to ops)
                 opUnits.add(ops to items.size)
+                items.filter { it.variationsEnabled && it.variants.isNotEmpty() }.forEach {
+                    needsStockNames.add("${it.name} (${target.displayName}): needs stock numbers")
+                }
             }
 
             val allOps = opUnits.flatMap { it.first }
@@ -5696,6 +6090,7 @@ class MerchantRepository private constructor(context: Context) {
             val plannedItems = targetsWithItems.sumOf { it.second.size }
             addedCount = (plannedItems - failedCount).coerceAtLeast(0)
             details.addAll(0, batchGroups.map { it.first })
+            details.addAll(needsStockNames)
 
             withContext(Dispatchers.Main) {
                 onComplete(
@@ -5752,6 +6147,9 @@ class MerchantRepository private constructor(context: Context) {
 
             val added = (itemsToCopy.size - failed).coerceAtLeast(0)
             details.add(0, "Pulled $added item(s) from ${source.displayName} into ${target.displayName}")
+            itemsToCopy.filter { it.variationsEnabled && it.variants.isNotEmpty() }.forEach {
+                details.add("${it.name}: needs stock numbers")
+            }
             withContext(Dispatchers.Main) {
                 onComplete(
                     MenuSyncResult(
@@ -5908,6 +6306,45 @@ class MerchantRepository private constructor(context: Context) {
                     }
                     updateMap["hasSets"] = srcItem.sets.isNotEmpty()
                     updateMap["sets"] = setsList
+
+                    if (srcItem.variationsEnabled && srcItem.variations.isNotEmpty() && srcItem.variants.isNotEmpty()) {
+                        val existingDstByLabel = dstItem.variants.associateBy { it.label.trim().lowercase() }
+                        val optIdMap = mutableMapOf<String, String>()
+                        val clonedVars = srcItem.variations.map { vg ->
+                            vg.copy(
+                                id = UUID.randomUUID().toString(),
+                                options = vg.options.map { o ->
+                                    val newOId = UUID.randomUUID().toString()
+                                    optIdMap[o.id] = newOId
+                                    o.copy(id = newOId)
+                                }
+                            )
+                        }
+                        val clonedVariants = srcItem.variants.map { v ->
+                            val newOptIds = v.optionIds.map { optIdMap[it] ?: it }
+                            val newKey = if (newOptIds.isNotEmpty()) VariationUtils.makeVariantKey(newOptIds) else v.key
+                            val existingStock = existingDstByLabel[v.label.trim().lowercase()]?.stock ?: 0
+                            v.copy(key = newKey, optionIds = newOptIds, stock = existingStock, salePrice = null)
+                        }
+                        val derivedSync = VariationUtils.computeDerivedFields(clonedVariants)
+                        updateMap["variationsEnabled"] = true
+                        updateMap["variations"] = serializeVariations(clonedVars)
+                        updateMap["variants"] = serializeVariants(clonedVariants)
+                        updateMap["price"] = derivedSync.priceMin
+                        updateMap["priceMax"] = derivedSync.priceMax
+                        updateMap["stockCount"] = derivedSync.stockCount
+                        updateMap["inStock"] = derivedSync.inStock
+                        updateMap["available"] = derivedSync.inStock
+                        updateMap["trackStock"] = true
+                        if (clonedVariants.all { it.stock == 0 }) {
+                            details.add("${srcItem.name}: needs stock numbers")
+                        }
+                    } else {
+                        updateMap["variationsEnabled"] = false
+                        updateMap["variations"] = emptyList<Any>()
+                        updateMap["variants"] = emptyList<Any>()
+                        updateMap["priceMax"] = null
+                    }
                 }
                 if (SyncField.AVAILABILITY in fieldsToSync) {
                     updateMap["availability"] = srcItem.availability?.let {
@@ -5923,6 +6360,10 @@ class MerchantRepository private constructor(context: Context) {
                 allOps.add { b -> b.update(dstRef, updateMap) }
                 updatedCount++
             }
+
+            (plan.addHereItems + plan.addThereItems)
+                .filter { it.variationsEnabled && it.variants.isNotEmpty() }
+                .forEach { details.add("${it.name}: needs stock numbers") }
 
             val chunks = MenuSyncEngine.chunkForFirestoreBatches(allOps)
             val totalBatches = chunks.size.coerceAtLeast(1)

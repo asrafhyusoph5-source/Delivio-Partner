@@ -309,13 +309,21 @@ fun ReportsScreen(
         hourlyDataList.maxByOrNull { it.orders }?.takeIf { it.orders > 0 }
     }
 
-    // 5. Top Products and Slow Movers
-    val (topProducts, slowMovers) = remember(deliveredPeriodOrders, menuItems) {
+    // 5. Top Products, Slow Movers & Per-Variant Sales Breakdown
+    val (topProducts, slowMovers, variantSalesMap) = remember(deliveredPeriodOrders, menuItems) {
         val salesMap = mutableMapOf<String, Pair<Int, Double>>()
+        val vMap = mutableMapOf<String, MutableMap<String, Pair<Int, Double>>>()
         deliveredPeriodOrders.forEach { ord ->
             ord.items.forEach { itm ->
+                val itemUnit = if (itm.unitPrice > 0.0) itm.unitPrice else itm.basePrice
+                val lineRev = itm.quantity * itemUnit
                 val curr = salesMap[itm.name] ?: (0 to 0.0)
-                salesMap[itm.name] = (curr.first + itm.quantity) to (curr.second + (itm.quantity * itm.basePrice))
+                salesMap[itm.name] = (curr.first + itm.quantity) to (curr.second + lineRev)
+                if (itm.variantLabel.isNotBlank()) {
+                    val prodVariants = vMap.getOrPut(itm.name) { mutableMapOf() }
+                    val vCurr = prodVariants[itm.variantLabel] ?: (0 to 0.0)
+                    prodVariants[itm.variantLabel] = (vCurr.first + itm.quantity) to (vCurr.second + lineRev)
+                }
             }
         }
         val sortedDesc = salesMap.map { (name, pair) ->
@@ -331,8 +339,9 @@ fun ReportsScreen(
             ProductStat(name, sold.first, sold.second)
         }.sortedBy { it.quantity }.take(5)
 
-        top to slow
+        Triple(top, slow, vMap.mapValues { it.value.toMap() })
     }
+    var selectedVariantProduct by remember { mutableStateOf<String?>(null) }
 
     // 6. Order Types & Payment Types
     val deliveryOrdersCount = remember(periodOrders) { periodOrders.count { it.fulfillment.contains("delivery", ignoreCase = true) } }
@@ -1070,18 +1079,37 @@ fun ReportsScreen(
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             topProducts.forEachIndexed { idx, item ->
+                                val hasVariantSales = variantSalesMap[item.name]?.isNotEmpty() == true
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .then(
+                                            if (hasVariantSales) {
+                                                Modifier.clickable { selectedVariantProduct = item.name }
+                                            } else Modifier
+                                        )
+                                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                                        .testTag("top_product_row_$idx"),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                         Text("${idx + 1}.", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = DelivioYellow)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text(item.name, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                        Column {
+                                            Text(item.name, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                            if (hasVariantSales) {
+                                                Text(
+                                                    text = "Tap for variants (${variantSalesMap[item.name]?.size ?: 0})",
+                                                    fontSize = 10.sp,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
                                     }
                                     Text(
-                                        text = "${item.quantity} sold • ₱${FormatUtils.formatCurrency(item.revenue)}",
+                                        text = "${item.quantity} sold • ${FormatUtils.formatCurrency(item.revenue)}",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -1098,8 +1126,14 @@ fun ReportsScreen(
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             slowMovers.forEach { item ->
+                                val hasVariantSales = variantSalesMap[item.name]?.isNotEmpty() == true
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (hasVariantSales) Modifier.clickable { selectedVariantProduct = item.name } else Modifier
+                                        )
+                                        .padding(vertical = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1310,6 +1344,59 @@ fun ReportsScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
         }
+    }
+
+    selectedVariantProduct?.let { prodName ->
+        val breakdown = remember(prodName, variantSalesMap) {
+            variantSalesMap[prodName].orEmpty().entries
+                .sortedByDescending { it.value.first }
+        }
+        AlertDialog(
+            onDismissRequest = { selectedVariantProduct = null },
+            modifier = Modifier.testTag("reports_variant_breakdown_dialog"),
+            title = {
+                Column {
+                    Text("Variant Breakdown", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = prodName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            text = {
+                if (breakdown.isEmpty()) {
+                    Text("No variant sales recorded for this product in this period.")
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        breakdown.forEach { (variantLabel, pair) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = variantLabel,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "${pair.first} sold • ${FormatUtils.formatCurrency(pair.second)}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedVariantProduct = null }) {
+                    Text("Close", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 }
 

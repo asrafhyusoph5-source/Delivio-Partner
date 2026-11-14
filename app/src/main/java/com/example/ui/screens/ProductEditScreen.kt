@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -39,11 +40,23 @@ import com.example.ui.components.orderedDaysList
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
+import com.example.ui.theme.StatusWarningAmber
 import com.example.util.CurrencyConstants
 import com.example.util.MainCategoryConfig
 import com.example.util.FormatUtils
+import com.example.util.PriceDropUtils
+import com.example.util.SalePriceValidation
+import com.example.util.VariationUtils
 import kotlinx.coroutines.launch
+import java.util.Calendar
+import java.util.TimeZone
 import java.util.UUID
+
+private enum class ProductEditSubRoute {
+    FORM,
+    ADD_VARIATION,
+    SET_STOCK_PRICE
+}
 
 private class EditableChoice(
     val id: String = UUID.randomUUID().toString(),
@@ -87,12 +100,15 @@ fun ProductEditScreen(
     menuItems: List<MenuItem> = emptyList(),
     businessType: BusinessType,
     mainCategories: List<MainCategoryOption> = MainCategoryConfig.getBuiltInDefaults(businessType),
+    currentTime: Long = System.currentTimeMillis(),
+    timeZoneId: String = "Asia/Manila",
     onSave: (MenuItem, onComplete: (Boolean, String?) -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
     onCreateSubcategory: (String, onComplete: (Boolean, Subcategory?, String?) -> Unit) -> Unit = { _, _ -> },
     onRenameSubcategory: (String, String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, _, _ -> },
     onDeleteSubcategory: (String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
+    onShowSaleEndedNotice: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onDismiss() }
@@ -115,10 +131,81 @@ fun ProductEditScreen(
         )
     }
 
+    // Sub-screen navigation (Form <-> Add Variation <-> Set Stock And Price)
+    var subRoute by remember { mutableStateOf(ProductEditSubRoute.FORM) }
+    var variationsEnabled by remember {
+        mutableStateOf(businessType == BusinessType.CONVENIENCE && item.variationsEnabled && item.variants.isNotEmpty())
+    }
+    var variationsState by remember { mutableStateOf(item.variations) }
+    var variantsState by remember { mutableStateOf(item.variants) }
+    var draftVariationsForWizard by remember { mutableStateOf(item.variations) }
+    var draftVariantsForWizard by remember { mutableStateOf(item.variants) }
+    var showRemoveVariationsConfirm by remember { mutableStateOf(false) }
+    var isOldSetsExpanded by remember { mutableStateOf(false) }
+
     // 1. Basic info
     var name by remember { mutableStateOf(item.name) }
     var priceText by remember { mutableStateOf(if (item.price > 0.0) item.price.toString() else "0") }
     var itemSizeText by remember { mutableStateOf(item.itemSize) }
+    val variantSaleInputs = remember {
+        mutableStateMapOf<String, String>().apply {
+            item.variants.forEach { v ->
+                val sp = v.salePrice
+                if (sp != null && sp > 0.0) {
+                    this[v.key] = formatEditablePrice(sp)
+                }
+            }
+        }
+    }
+    val touchedVariantSaleKeys = remember { mutableStateMapOf<String, Boolean>() }
+
+    // 1b. Price Drop state
+    val defaultSaleDates = remember(currentTime, timeZoneId) {
+        val tz = TimeZone.getTimeZone(timeZoneId.ifBlank { "Asia/Manila" })
+        val cal = Calendar.getInstance(tz).apply { timeInMillis = currentTime }
+        val today = "%04d-%02d-%02d".format(
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH) + 1,
+            cal.get(Calendar.DAY_OF_MONTH)
+        )
+        val endCal = Calendar.getInstance(tz).apply {
+            timeInMillis = currentTime
+            add(Calendar.DAY_OF_YEAR, 7)
+        }
+        val plus7 = "%04d-%02d-%02d".format(
+            endCal.get(Calendar.YEAR),
+            endCal.get(Calendar.MONTH) + 1,
+            endCal.get(Calendar.DAY_OF_MONTH)
+        )
+        today to plus7
+    }
+    var saleActive by remember {
+        mutableStateOf(item.saleActive && item.salePrice != null && item.salePrice > 0.0)
+    }
+    var salePriceText by remember {
+        mutableStateOf(item.salePrice?.let { if (it > 0.0) formatEditablePrice(it) else "" } ?: "")
+    }
+    var saleStartMode by remember { mutableStateOf(if (item.saleStartsAt != null) "scheduled" else "now") }
+    var saleEndMode by remember { mutableStateOf(if (item.saleEndsAt != null) "scheduled" else "until_ended") }
+    var saleStartDateStr by remember {
+        mutableStateOf(item.saleStartsAt?.let { extractDateYmd(it, timeZoneId) } ?: defaultSaleDates.first)
+    }
+    var saleStartTime24 by remember {
+        mutableStateOf(item.saleStartsAt?.let { extractTime24(it, timeZoneId) } ?: "09:00")
+    }
+    var saleEndDateStr by remember {
+        mutableStateOf(item.saleEndsAt?.let { extractDateYmd(it, timeZoneId) } ?: defaultSaleDates.second)
+    }
+    var saleEndTime24 by remember {
+        mutableStateOf(item.saleEndsAt?.let { extractTime24(it, timeZoneId) } ?: "23:59")
+    }
+    var showSaleStartDatePicker by remember { mutableStateOf(false) }
+    var showSaleStartTimePicker by remember { mutableStateOf(false) }
+    var showSaleEndDatePicker by remember { mutableStateOf(false) }
+    var showSaleEndTimePicker by remember { mutableStateOf(false) }
+    var lastEditedPriceSource by remember { mutableStateOf("none") } // "regular" | "sale" | "none"
+    var hasTouchedSalePrice by remember { mutableStateOf(false) }
+    var saleEndedNoticeBanner by remember { mutableStateOf<String?>(null) }
     var selectedCategoryName by remember {
         mutableStateOf(
             when {
@@ -282,56 +369,184 @@ fun ProductEditScreen(
     var setIndexToDelete by remember { mutableStateOf<Int?>(null) }
 
     // Validation computations
+    val isConvenienceWithVariations = businessType == BusinessType.CONVENIENCE && variationsEnabled
+    val derivedVariantSummary = remember(isConvenienceWithVariations, variantsState) {
+        if (isConvenienceWithVariations) VariationUtils.computeDerivedFields(variantsState) else null
+    }
     val parsedPrice = priceText.toDoubleOrNull()
-    val isPriceValid = parsedPrice != null && parsedPrice >= 0.0
+    val isPriceValid = if (isConvenienceWithVariations) {
+        variantsState.isNotEmpty() && variantsState.all { it.price > 0.0 }
+    } else {
+        parsedPrice != null && parsedPrice >= 0.0
+    }
     val isNameValid = name.isNotBlank()
     val isCatMissing = !isLegacyUnmatched && (
         selectedCategoryName.isBlank() ||
             activeMainCategories.none { MainCategoryConfig.matchesOption(selectedCategoryName, selectedCategoryId, it) }
         )
 
-    val setErrors = remember(setsList.map { listOf(it.name, it.required.toString(), it.minSelect.toString(), it.maxSelect.toString(), it.choices.size.toString()) + it.choices.map { c -> "${c.name}:${c.priceText}:${c.available}:${c.popular}" } }) {
-        val errors = mutableListOf<String>()
-        val seenNames = mutableSetOf<String>()
+    val setErrors = remember(
+        businessType,
+        setsList.map { listOf(it.name, it.required.toString(), it.minSelect.toString(), it.maxSelect.toString(), it.choices.size.toString()) + it.choices.map { c -> "${c.name}:${c.priceText}:${c.available}:${c.popular}" } }
+    ) {
+        if (businessType == BusinessType.CONVENIENCE) {
+            emptyList()
+        } else {
+            val errors = mutableListOf<String>()
+            val seenNames = mutableSetOf<String>()
 
-        setsList.forEachIndexed { sIdx, set ->
-            val sNum = sIdx + 1
-            val trimmedSetName = set.name.trim()
-            if (trimmedSetName.isBlank()) {
-                errors.add("Set $sNum needs a name")
-            } else if (trimmedSetName.length > 50) {
-                errors.add("Set $sNum name cannot exceed 50 characters")
-            } else if (!seenNames.add(trimmedSetName.lowercase())) {
-                errors.add("Set $sNum has duplicate name \"${set.name}\"")
+            setsList.forEachIndexed { sIdx, set ->
+                val sNum = sIdx + 1
+                val trimmedSetName = set.name.trim()
+                if (trimmedSetName.isBlank()) {
+                    errors.add("Set $sNum needs a name")
+                } else if (trimmedSetName.length > 50) {
+                    errors.add("Set $sNum name cannot exceed 50 characters")
+                } else if (!seenNames.add(trimmedSetName.lowercase())) {
+                    errors.add("Set $sNum has duplicate name \"${set.name}\"")
+                }
+
+                if (set.choices.isEmpty()) {
+                    errors.add("Set $sNum needs at least one choice")
+                } else {
+                    val choiceSeen = mutableSetOf<String>()
+                    set.choices.forEachIndexed { cIdx, choice ->
+                        val cNum = cIdx + 1
+                        val trimmedChoiceName = choice.name.trim()
+                        if (trimmedChoiceName.isBlank()) {
+                            errors.add("Set $sNum choice $cNum needs a name")
+                        } else if (!choiceSeen.add(trimmedChoiceName.lowercase())) {
+                            errors.add("Set $sNum has duplicate choice \"${choice.name}\"")
+                        }
+                        val cPrice = choice.priceText.toDoubleOrNull()
+                        if (cPrice == null || cPrice < 0.0) {
+                            errors.add("Set $sNum choice $cNum needs a valid price")
+                        }
+                    }
+                    if (set.required && set.minSelect > set.maxSelect) {
+                        errors.add("Set $sNum minimum choices cannot exceed maximum choices")
+                    }
+                }
             }
+            errors
+        }
+    }
 
-            if (set.choices.isEmpty()) {
-                errors.add("Set $sNum needs at least one choice")
-            } else {
-                val choiceSeen = mutableSetOf<String>()
-                set.choices.forEachIndexed { cIdx, choice ->
-                    val cNum = cIdx + 1
-                    val trimmedChoiceName = choice.name.trim()
-                    if (trimmedChoiceName.isBlank()) {
-                        errors.add("Set $sNum choice $cNum needs a name")
-                    } else if (!choiceSeen.add(trimmedChoiceName.lowercase())) {
-                        errors.add("Set $sNum has duplicate choice \"${choice.name}\"")
-                    }
-                    val cPrice = choice.priceText.toDoubleOrNull()
-                    if (cPrice == null || cPrice < 0.0) {
-                        errors.add("Set $sNum choice $cNum needs a valid price")
-                    }
+    val saleStartEpochMs = remember(saleActive, saleStartMode, saleStartDateStr, saleStartTime24, timeZoneId) {
+        if (saleActive && saleStartMode == "scheduled") {
+            combineDateTimeToMillis(saleStartDateStr, saleStartTime24, timeZoneId)
+        } else null
+    }
+    val saleEndEpochMs = remember(saleActive, saleEndMode, saleEndDateStr, saleEndTime24, timeZoneId) {
+        if (saleActive && saleEndMode == "scheduled") {
+            combineDateTimeToMillis(saleEndDateStr, saleEndTime24, timeZoneId)
+        } else null
+    }
+    val saleScheduleError: String? = remember(saleActive, saleStartMode, saleEndMode, saleStartEpochMs, saleEndEpochMs, currentTime) {
+        if (!saleActive) null
+        else when {
+            saleEndMode == "scheduled" && saleStartMode == "scheduled" &&
+                saleStartEpochMs != null && saleEndEpochMs != null && saleEndEpochMs <= saleStartEpochMs ->
+                "End date and time must be after start date and time."
+            saleEndMode == "scheduled" && saleEndEpochMs != null && saleEndEpochMs <= currentTime ->
+                "End date and time must be in the future."
+            else -> null
+        }
+    }
+    val parsedSalePriceForCheck = salePriceText.trim().toDoubleOrNull()
+    val regularAtOrBelowActiveSale = !isConvenienceWithVariations && saleActive &&
+        parsedPrice != null && parsedPrice >= 0.0 &&
+        parsedSalePriceForCheck != null && parsedSalePriceForCheck > 0.0 &&
+        parsedPrice <= parsedSalePriceForCheck
+    val effectiveSaleAutoEndOnRegularLower = regularAtOrBelowActiveSale && lastEditedPriceSource == "regular"
+    val salePriceValidation = remember(parsedPrice, salePriceText, saleActive, isConvenienceWithVariations) {
+        if (!saleActive || isConvenienceWithVariations) SalePriceValidation(isValid = true, parsedPrice = parsedSalePriceForCheck)
+        else PriceDropUtils.validateSalePrice(parsedPrice ?: 0.0, salePriceText)
+    }
+
+    val variantSaleValidations = remember(isConvenienceWithVariations, saleActive, variantsState, variantSaleInputs.toMap()) {
+        if (!isConvenienceWithVariations || !saleActive) {
+            emptyMap()
+        } else {
+            variantsState.associate { v ->
+                val raw = variantSaleInputs[v.key].orEmpty().trim()
+                val res = if (raw.isEmpty()) {
+                    SalePriceValidation(isValid = true, parsedPrice = null)
+                } else {
+                    PriceDropUtils.validateSalePrice(v.price, raw)
                 }
-                if (set.required && set.minSelect > set.maxSelect) {
-                    errors.add("Set $sNum minimum choices cannot exceed maximum choices")
-                }
+                v.key to res
             }
         }
-        errors
+    }
+    val variantSaleErrorText: String? = remember(isConvenienceWithVariations, saleActive, variantSaleValidations) {
+        if (!isConvenienceWithVariations || !saleActive) {
+            null
+        } else {
+            val badMsg = variantSaleValidations.values.firstOrNull { !it.isValid }?.errorMessage
+            val hasAtLeastOneDiscount = variantSaleValidations.values.any { it.isValid && it.parsedPrice != null }
+            badMsg ?: if (!hasAtLeastOneDiscount) "Enter a sale price for at least one variation" else null
+        }
+    }
+
+    val hasBlockingSaleError = if (isConvenienceWithVariations) {
+        saleActive && (variantSaleErrorText != null || saleScheduleError != null)
+    } else {
+        saleActive && !effectiveSaleAutoEndOnRegularLower &&
+            (!salePriceValidation.isValid || saleScheduleError != null)
     }
 
     val isAvailDaysValid = availabilityMode != "custom" || availDays.isNotEmpty()
-    val canSave = isNameValid && !isCatMissing && isPriceValid && isAvailDaysValid && setErrors.isEmpty() && !isSaving
+    val canSave = isNameValid && !isCatMissing && isPriceValid && isAvailDaysValid && setErrors.isEmpty() && !hasBlockingSaleError && !isSaving
+
+    if (businessType == BusinessType.CONVENIENCE) {
+        when (subRoute) {
+            ProductEditSubRoute.ADD_VARIATION -> {
+                AddVariationScreen(
+                    initialVariations = draftVariationsForWizard,
+                    onBack = { subRoute = ProductEditSubRoute.FORM },
+                    onNext = { nextVars ->
+                        draftVariationsForWizard = nextVars
+                        subRoute = ProductEditSubRoute.SET_STOCK_PRICE
+                    },
+                    modifier = modifier
+                )
+                return
+            }
+            ProductEditSubRoute.SET_STOCK_PRICE -> {
+                SetStockAndPriceScreen(
+                    variations = draftVariationsForWizard,
+                    existingVariants = draftVariantsForWizard,
+                    onBack = { partialVariants ->
+                        draftVariantsForWizard = partialVariants
+                        subRoute = ProductEditSubRoute.ADD_VARIATION
+                    },
+                    onSave = { finalVars, finalVariants ->
+                        variationsEnabled = true
+                        variationsState = finalVars
+                        variantsState = finalVariants
+                        draftVariationsForWizard = finalVars
+                        draftVariantsForWizard = finalVariants
+                        val derived = VariationUtils.computeDerivedFields(finalVariants)
+                        priceText = derived.priceMin.toString()
+                        stockCountText = derived.stockCount.toString()
+                        inStock = derived.inStock
+                        variantSaleInputs.clear()
+                        finalVariants.forEach { v ->
+                            val sp = v.salePrice
+                            if (sp != null && sp > 0.0 && sp < v.price) {
+                                variantSaleInputs[v.key] = formatEditablePrice(sp)
+                            }
+                        }
+                        subRoute = ProductEditSubRoute.FORM
+                    },
+                    modifier = modifier
+                )
+                return
+            }
+            ProductEditSubRoute.FORM -> Unit
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize().testTag("product_edit_screen"),
@@ -394,6 +609,7 @@ fun ProductEditScreen(
                             isCatMissing -> "Main Category is required"
                             !isPriceValid -> "Please enter a valid price"
                             !isAvailDaysValid -> "Choose at least one day"
+                            hasBlockingSaleError -> variantSaleErrorText ?: salePriceValidation.errorMessage ?: saleScheduleError ?: "Fix price drop fields"
                             setErrors.isNotEmpty() -> setErrors.first()
                             else -> "Please correct highlighted fields above"
                         }
@@ -438,9 +654,22 @@ fun ProductEditScreen(
                                 if (!canSave) return@Button
                                 isSaving = true
 
-                                val priceVal = parsedPrice ?: 0.0
+                                val updatedVariantsForSave = if (isConvenienceWithVariations) {
+                                    variantsState.map { v ->
+                                        val sp = if (saleActive) {
+                                            variantSaleValidations[v.key]?.parsedPrice
+                                        } else null
+                                        v.copy(salePrice = sp)
+                                    }
+                                } else emptyList()
+
+                                val derivedForSave = if (isConvenienceWithVariations) {
+                                    VariationUtils.computeDerivedFields(updatedVariantsForSave)
+                                } else null
+
+                                val priceVal = derivedForSave?.priceMin ?: (parsedPrice ?: 0.0)
                                 val parsedPrep = prepTimeText.toIntOrNull() ?: item.prepTimeMinutes
-                                val parsedStock = stockCountText.toIntOrNull() ?: item.stockCount
+                                val parsedStock = derivedForSave?.stockCount ?: (stockCountText.toIntOrNull() ?: item.stockCount)
                                 val parsedThreshold = lowStockThresholdText.toIntOrNull() ?: item.lowStockAt
 
                                 val preserveLegacyUnchanged = isLegacyUnmatched && !hasPickedNewCategory
@@ -494,10 +723,47 @@ fun ProductEditScreen(
                                     )
                                 } else null
 
+                                val didAutoEndSale = !isConvenienceWithVariations && saleActive && (
+                                    (parsedSalePriceForCheck != null && priceVal <= parsedSalePriceForCheck) ||
+                                        parsedSalePriceForCheck == null || parsedSalePriceForCheck <= 0.0
+                                    )
+                                val finalSaleActive: Boolean
+                                val finalSalePrice: Double?
+                                val finalSaleStartsAt: Long?
+                                val finalSaleEndsAt: Long?
+                                if (isConvenienceWithVariations) {
+                                    if (saleActive && updatedVariantsForSave.any { it.salePrice != null && it.salePrice > 0.0 && it.salePrice < it.price }) {
+                                        finalSaleActive = true
+                                        finalSalePrice = null
+                                        finalSaleStartsAt = saleStartEpochMs
+                                        finalSaleEndsAt = saleEndEpochMs
+                                    } else {
+                                        finalSaleActive = false
+                                        finalSalePrice = null
+                                        finalSaleStartsAt = null
+                                        finalSaleEndsAt = null
+                                    }
+                                } else if (saleActive && !didAutoEndSale && salePriceValidation.isValid && salePriceValidation.parsedPrice != null) {
+                                    finalSaleActive = true
+                                    finalSalePrice = salePriceValidation.parsedPrice
+                                    finalSaleStartsAt = saleStartEpochMs
+                                    finalSaleEndsAt = saleEndEpochMs
+                                } else {
+                                    finalSaleActive = false
+                                    finalSalePrice = parsedSalePriceForCheck?.takeIf { it > 0.0 }
+                                    finalSaleStartsAt = null
+                                    finalSaleEndsAt = null
+                                }
+
                                 val updated = item.copy(
                                     name = name.trim().ifBlank { "Untitled Item" },
                                     description = description.trim(),
                                     price = priceVal,
+                                    priceMax = derivedForSave?.priceMax,
+                                    salePrice = finalSalePrice,
+                                    saleStartsAt = finalSaleStartsAt,
+                                    saleEndsAt = finalSaleEndsAt,
+                                    saleActive = finalSaleActive,
                                     categoryId = finalCatId,
                                     category = finalCatName,
                                     categoryName = if (preserveLegacyUnchanged) item.categoryName.ifBlank { finalCatName } else finalCatName,
@@ -512,19 +778,24 @@ fun ProductEditScreen(
                                     unit = if (businessType == BusinessType.CONVENIENCE) unit.trim().ifBlank { "1 pc" } else "1 pc",
                                     itemSize = if (businessType == BusinessType.CONVENIENCE) itemSizeText.trim() else "",
                                     availability = finalAvailability,
-                                    trackStock = trackStock,
+                                    trackStock = if (isConvenienceWithVariations) true else trackStock,
                                     stockCount = parsedStock,
                                     lowStockAt = parsedThreshold,
-                                    inStock = if (trackStock && parsedStock <= 0) false else inStock,
+                                    inStock = derivedForSave?.inStock ?: (if (trackStock && parsedStock <= 0) false else inStock),
                                     businessType = businessType,
                                     hasSets = finalSets.isNotEmpty(),
-                                    sets = finalSets
+                                    sets = finalSets,
+                                    variationsEnabled = isConvenienceWithVariations,
+                                    variations = if (isConvenienceWithVariations) VariationUtils.normalizeVariationsForSave(variationsState) else emptyList(),
+                                    variants = updatedVariantsForSave
                                 )
 
                                 onSave(updated) { success, errorMsg ->
                                     isSaving = false
                                     if (!success) {
                                         failureErrorMessage = errorMsg ?: "Unknown error occurred while saving product."
+                                    } else if (didAutoEndSale) {
+                                        onShowSaleEndedNotice("Price drop ended because the regular price is at or below the sale price.")
                                     }
                                 }
                             },
@@ -679,19 +950,73 @@ fun ProductEditScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    OutlinedTextField(
-                        value = priceText,
-                        onValueChange = { priceText = it },
-                        label = { Text("Price (${CurrencyConstants.SYMBOL}) *") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        isError = hasTappedSaveOnce && !isPriceValid,
-                        supportingText = if (hasTappedSaveOnce && !isPriceValid) {
-                            { Text("Invalid price", color = MaterialTheme.colorScheme.error) }
-                        } else null,
-                        modifier = Modifier.weight(1f).testTag("menu_item_price_input")
-                    )
+                    if (isConvenienceWithVariations && derivedVariantSummary != null) {
+                        OutlinedCard(
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("variations_price_readonly")
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                Text(
+                                    text = "Price",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                val rangeText = if (derivedVariantSummary.priceMax > derivedVariantSummary.priceMin) {
+                                    "Price from ${FormatUtils.formatCurrency(derivedVariantSummary.priceMin)} – ${FormatUtils.formatCurrency(derivedVariantSummary.priceMax)}"
+                                } else {
+                                    "Price from ${FormatUtils.formatCurrency(derivedVariantSummary.priceMin)}"
+                                }
+                                Text(
+                                    text = rangeText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = customColors.accent
+                                )
+                                Text(
+                                    text = "Set per variation",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = priceText,
+                            onValueChange = {
+                                priceText = it
+                                lastEditedPriceSource = "regular"
+                                saleEndedNoticeBanner = null
+                            },
+                            label = { Text("Price (${CurrencyConstants.SYMBOL}) *") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            isError = hasTappedSaveOnce && !isPriceValid,
+                            supportingText = if (hasTappedSaveOnce && !isPriceValid) {
+                                { Text("Invalid price", color = MaterialTheme.colorScheme.error) }
+                            } else null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { focusState ->
+                                    if (!focusState.isFocused &&
+                                        lastEditedPriceSource == "regular" &&
+                                        regularAtOrBelowActiveSale
+                                    ) {
+                                        saleActive = false
+                                        saleStartMode = "now"
+                                        saleEndMode = "until_ended"
+                                        val msg = "Price drop ended because regular price is at or below the sale price."
+                                        saleEndedNoticeBanner = msg
+                                        onShowSaleEndedNotice(msg)
+                                        coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                }
+                                .testTag("menu_item_price_input")
+                        )
+                    }
 
                     var catExpanded by remember { mutableStateOf(false) }
                     val displayCategoryValue = when {
@@ -784,7 +1109,11 @@ fun ProductEditScreen(
                         }
 
                         // Live preview: "₱92.92 /225g"
-                        val priceNum = parsedPrice ?: 0.0
+                        val priceNum = if (isConvenienceWithVariations) {
+                            derivedVariantSummary?.priceMin ?: 0.0
+                        } else {
+                            parsedPrice ?: 0.0
+                        }
                         val formattedPrice = FormatUtils.formatCurrency(priceNum)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -883,6 +1212,377 @@ fun ProductEditScreen(
                         modifier = Modifier.padding(top = 4.dp).testTag("manage_subcategories_btn")
                     ) {
                         Icon(Icons.Default.Tune, contentDescription = "Manage Categories", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            // SECTION 2b: Price drop
+            SectionCard(
+                title = "Price drop",
+                helpText = "Set a temporary or ongoing sale price. The discount percentage is calculated automatically from the regular price.",
+                onHelpClick = { activeHelpDialogText = it }
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (saleActive) "Price drop active" else "No active price drop",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Regular price stays in Price above.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = saleActive,
+                        onCheckedChange = { enabled ->
+                            saleActive = enabled
+                            saleEndedNoticeBanner = null
+                            if (enabled) {
+                                lastEditedPriceSource = "sale"
+                            } else {
+                                saleStartMode = "now"
+                                saleEndMode = "until_ended"
+                            }
+                        },
+                        modifier = Modifier.testTag("product_edit_sale_switch")
+                    )
+                }
+
+                if (!saleEndedNoticeBanner.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = StatusWarningAmber.copy(alpha = 0.16f),
+                        modifier = Modifier.fillMaxWidth().testTag("sale_ended_notice_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = Color(0xFFB45309),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = saleEndedNoticeBanner!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF92400E)
+                            )
+                        }
+                    }
+                }
+
+                if (effectiveSaleAutoEndOnRegularLower) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = StatusClosedRed.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth().testTag("sale_auto_end_warning")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = StatusClosedRed,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Regular price is at or below the active sale price — this price drop will end when saved.",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = StatusClosedRed
+                            )
+                        }
+                    }
+                }
+
+                if (saleActive) {
+                    if (isConvenienceWithVariations) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Set a sale price per variation (leave blank to keep regular price):",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            variantsState.forEach { variant ->
+                                val inputText = variantSaleInputs[variant.key].orEmpty()
+                                val validation = variantSaleValidations[variant.key]
+                                val showErr = (touchedVariantSaleKeys[variant.key] == true || hasTappedSaveOnce) &&
+                                    validation != null && !validation.isValid
+                                val pctText = if (validation?.isValid == true && validation.parsedPrice != null) {
+                                    PriceDropUtils.formatDiscountPercent(variant.price, validation.parsedPrice)
+                                } else ""
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Column(modifier = Modifier.weight(1.1f)) {
+                                            Text(
+                                                text = variant.label,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = FormatUtils.formatCurrency(variant.price),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        OutlinedTextField(
+                                            value = inputText,
+                                            onValueChange = { next ->
+                                                val filtered = next.filter { ch -> ch.isDigit() || ch == '.' }
+                                                if (filtered.count { it == '.' } <= 1) {
+                                                    variantSaleInputs[variant.key] = filtered
+                                                    touchedVariantSaleKeys[variant.key] = true
+                                                }
+                                            },
+                                            label = { Text("New price", fontSize = 11.sp) },
+                                            prefix = { Text(CurrencyConstants.SYMBOL, fontWeight = FontWeight.Bold) },
+                                            placeholder = { Text("Optional") },
+                                            singleLine = true,
+                                            isError = showErr,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("product_edit_variant_sale_input_${variant.key}")
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (pctText.isNotEmpty()) StatusClosedRed.copy(alpha = 0.14f)
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        ) {
+                                            Text(
+                                                text = pctText.ifEmpty { "--%" },
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (pctText.isNotEmpty()) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier
+                                                    .padding(horizontal = 8.dp, vertical = 10.dp)
+                                                    .testTag("product_edit_variant_sale_pct_${variant.key}")
+                                            )
+                                        }
+                                    }
+                                    if (showErr && !validation?.errorMessage.isNullOrBlank()) {
+                                        Text(
+                                            text = validation!!.errorMessage!!,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                            if (variantSaleErrorText != null && hasTappedSaveOnce) {
+                                Text(
+                                    text = variantSaleErrorText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    } else {
+                        val regPrice = parsedPrice ?: 0.0
+                        val computedPctText = if (salePriceValidation.isValid && salePriceValidation.parsedPrice != null) {
+                            PriceDropUtils.formatDiscountPercent(regPrice, salePriceValidation.parsedPrice)
+                        } else ""
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            OutlinedTextField(
+                                value = salePriceText,
+                                onValueChange = { next ->
+                                    val filtered = next.filter { ch -> ch.isDigit() || ch == '.' }
+                                    if (filtered.count { it == '.' } <= 1) {
+                                        salePriceText = filtered
+                                        hasTouchedSalePrice = true
+                                        lastEditedPriceSource = "sale"
+                                        saleEndedNoticeBanner = null
+                                    }
+                                },
+                                label = { Text("New price (${CurrencyConstants.SYMBOL})") },
+                                placeholder = { Text("0.00") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                shape = RoundedCornerShape(12.dp),
+                                singleLine = true,
+                                isError = !effectiveSaleAutoEndOnRegularLower && (hasTouchedSalePrice || hasTappedSaveOnce) && !salePriceValidation.isValid,
+                                supportingText = if (!effectiveSaleAutoEndOnRegularLower && (hasTouchedSalePrice || hasTappedSaveOnce) && !salePriceValidation.isValid) {
+                                    {
+                                        Text(
+                                            text = salePriceValidation.errorMessage ?: "Invalid price",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                } else null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("product_edit_sale_price_input")
+                            )
+
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (computedPctText.isNotEmpty()) StatusClosedRed.copy(alpha = 0.14f)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) {
+                                Text(
+                                    text = computedPctText.ifEmpty { "--%" },
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (computedPctText.isNotEmpty()) StatusClosedRed
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .padding(horizontal = 12.dp, vertical = 14.dp)
+                                        .testTag("product_edit_sale_pct")
+                                )
+                            }
+                        }
+                    }
+
+                    // Start schedule
+                    Text(
+                        text = "Starts",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = saleStartMode == "now",
+                            onClick = { saleStartMode = "now" },
+                            label = { Text("Start now", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = saleStartMode == "scheduled",
+                            onClick = { saleStartMode = "scheduled" },
+                            label = { Text("At a date and time", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (saleStartMode == "scheduled") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showSaleStartDatePicker = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("Start date", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(saleStartDateStr, fontWeight = FontWeight.Bold, color = customColors.accent)
+                                }
+                            }
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showSaleStartTimePicker = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("Start time", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(MenuSchedule.formatTime12h(saleStartTime24), fontWeight = FontWeight.Bold, color = customColors.accent)
+                                }
+                            }
+                        }
+                    }
+
+                    // End schedule
+                    Text(
+                        text = "Ends",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = saleEndMode == "until_ended",
+                            onClick = { saleEndMode = "until_ended" },
+                            label = { Text("Until I end it", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = saleEndMode == "scheduled",
+                            onClick = { saleEndMode = "scheduled" },
+                            label = { Text("At a date and time", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (saleEndMode == "scheduled") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showSaleEndDatePicker = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("End date", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(saleEndDateStr, fontWeight = FontWeight.Bold, color = customColors.accent)
+                                }
+                            }
+                            OutlinedCard(
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).clickable { showSaleEndTimePicker = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("End time", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(MenuSchedule.formatTime12h(saleEndTime24), fontWeight = FontWeight.Bold, color = customColors.accent)
+                                }
+                            }
+                        }
+                    }
+
+                    if (saleScheduleError != null) {
+                        Text(
+                            text = saleScheduleError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            saleActive = false
+                            saleStartMode = "now"
+                            saleEndMode = "until_ended"
+                            saleEndedNoticeBanner = "Price drop will end when you save."
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusClosedRed),
+                        border = BorderStroke(1.dp, StatusClosedRed.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("product_edit_end_sale_btn")
+                    ) {
+                        Icon(Icons.Default.StopCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("End price drop", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1181,7 +1881,230 @@ fun ProductEditScreen(
                 }
             }
 
-            // SECTION 5: Options (Sets)
+            // SECTION 5: Variations (Convenience) OR Options (Sets) (Food)
+            if (businessType == BusinessType.CONVENIENCE) {
+                SectionCard(
+                    title = "Variations",
+                    helpText = "Variations let convenience shop customers choose options like Color, Size, or Flavor, each with its own price and stock.",
+                    onHelpClick = { activeHelpDialogText = it }
+                ) {
+                    if (!variationsEnabled || variantsState.isEmpty()) {
+                        Text(
+                            text = "Add options such as Color, Size, or Flavor with their own prices and stock counts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                draftVariationsForWizard = variationsState
+                                draftVariantsForWizard = variantsState
+                                subRoute = ProductEditSubRoute.ADD_VARIATION
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("add_variation_initial_btn")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("+ Add variation", fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        val summaryLine = VariationUtils.formatSummaryLine(variationsState, variantsState.size)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = customColors.accent.copy(alpha = 0.1f),
+                            border = BorderStroke(1.dp, customColors.accent.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = summaryLine,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("variations_summary_text")
+                                )
+                                TextButton(
+                                    onClick = {
+                                        draftVariationsForWizard = variationsState
+                                        draftVariantsForWizard = variantsState
+                                        subRoute = ProductEditSubRoute.ADD_VARIATION
+                                    },
+                                    modifier = Modifier.testTag("edit_variations_btn")
+                                ) {
+                                    Text("Edit", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        // Compact read-only table of combinations (label, price, stock)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Variation", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.4f))
+                                    Text("Price", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.9f))
+                                    Text("Stock", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.6f))
+                                }
+                                variantsState.forEachIndexed { idx, variant ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = variant.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.weight(1.4f)
+                                        )
+                                        Text(
+                                            text = FormatUtils.formatCurrency(variant.price),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.weight(0.9f)
+                                        )
+                                        Text(
+                                            text = variant.stock.toString(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (variant.stock <= 0) StatusClosedRed else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = if (variant.stock <= 0) FontWeight.Bold else FontWeight.Normal,
+                                            modifier = Modifier.weight(0.6f)
+                                        )
+                                    }
+                                    if (idx < variantsState.lastIndex) {
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    draftVariationsForWizard = variationsState
+                                    draftVariantsForWizard = variantsState
+                                    subRoute = ProductEditSubRoute.SET_STOCK_PRICE
+                                },
+                                modifier = Modifier.testTag("edit_price_and_stock_btn")
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Edit price and stock", fontWeight = FontWeight.Bold)
+                            }
+
+                            TextButton(
+                                onClick = { showRemoveVariationsConfirm = true },
+                                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.testTag("remove_all_variations_btn")
+                            ) {
+                                Text("Remove all variations", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+
+                // Collapsed delete-only "Old options (sets)" card if convenience item still has legacy sets
+                if (setsList.isNotEmpty()) {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("legacy_old_sets_card")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { isOldSetsExpanded = !isOldSetsExpanded },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Old options (sets)",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "${setsList.size} legacy ${if (setsList.size == 1) "set" else "sets"} (remove only)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (isOldSetsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Expand/Collapse Old Sets"
+                                )
+                            }
+
+                            if (isOldSetsExpanded) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    setsList.forEachIndexed { idx, oldSet ->
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(oldSet.name.ifBlank { "Set ${idx + 1}" }, fontWeight = FontWeight.SemiBold)
+                                                    Text(
+                                                        text = "${oldSet.choices.size} choices",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { setsList.removeAt(idx) },
+                                                    modifier = Modifier.testTag("remove_legacy_set_$idx")
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Delete,
+                                                        contentDescription = "Remove old set",
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+            // SECTION 5: Options (Sets) for Food shops
             SectionCard(
                 title = "Options (Sets)",
                 helpText = "Sets let customers choose options such as flavor, drink, or add-ons. Example: set 'Drink' with Iced Tea (Free) and Coke (+₱10).",
@@ -1977,6 +2900,7 @@ fun ProductEditScreen(
                     }
                 }
             }
+            }
 
             // SECTION 6: Stock
             SectionCard(
@@ -1984,87 +2908,126 @@ fun ProductEditScreen(
                 helpText = "Manage in-stock availability and low stock inventory alerts.",
                 onHelpClick = { activeHelpDialogText = it }
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(if (inStock) "In stock" else "Sold out", fontWeight = FontWeight.Bold)
-                            Text(
-                                text = if (inStock) "Available to order when store is open" else "Marked as sold out on your menu",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                if (isConvenienceWithVariations && derivedVariantSummary != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier.fillMaxWidth().testTag("variations_stock_readonly")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (derivedVariantSummary.inStock) "In stock (${derivedVariantSummary.stockCount} total)" else "Sold out (0 total)",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Total stock comes from your variations.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
-                        Switch(
-                            checked = inStock,
-                            onCheckedChange = { inStock = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = customColors.accent,
-                                checkedTrackColor = customColors.accentTint
-                            )
+
+                        OutlinedTextField(
+                            value = lowStockThresholdText,
+                            onValueChange = { lowStockThresholdText = it },
+                            label = { Text("Low stock at (per variant)") },
+                            placeholder = { Text("5") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("low_stock_threshold_input")
                         )
                     }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                    // Track stock count toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Track stock count", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                text = "Alert when stock is low, and auto mark sold out at 0",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = trackStock,
-                            onCheckedChange = { trackStock = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = customColors.accent,
-                                checkedTrackColor = customColors.accentTint
-                            )
-                        )
-                    }
-
-                    if (trackStock) {
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedTextField(
-                                value = stockCountText,
-                                onValueChange = {
-                                    stockCountText = it
-                                    val count = it.toIntOrNull() ?: 0
-                                    if (count <= 0) {
-                                        inStock = false
-                                    }
-                                },
-                                label = { Text("Stock count") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                shape = RoundedCornerShape(12.dp),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f).testTag("stock_count_input")
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(if (inStock) "In stock" else "Sold out", fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (inStock) "Available to order when store is open" else "Marked as sold out on your menu",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = inStock,
+                                onCheckedChange = { inStock = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = customColors.accent,
+                                    checkedTrackColor = customColors.accentTint
+                                )
                             )
+                        }
 
-                            OutlinedTextField(
-                                value = lowStockThresholdText,
-                                onValueChange = { lowStockThresholdText = it },
-                                label = { Text("Low stock at") },
-                                placeholder = { Text("5") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                shape = RoundedCornerShape(12.dp),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f).testTag("low_stock_threshold_input")
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                        // Track stock count toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Track stock count", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = "Alert when stock is low, and auto mark sold out at 0",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = trackStock,
+                                onCheckedChange = { trackStock = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = customColors.accent,
+                                    checkedTrackColor = customColors.accentTint
+                                )
                             )
+                        }
+
+                        if (trackStock) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = stockCountText,
+                                    onValueChange = {
+                                        stockCountText = it
+                                        val count = it.toIntOrNull() ?: 0
+                                        if (count <= 0) {
+                                            inStock = false
+                                        }
+                                    },
+                                    label = { Text("Stock count") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    shape = RoundedCornerShape(12.dp),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f).testTag("stock_count_input")
+                                )
+
+                                OutlinedTextField(
+                                    value = lowStockThresholdText,
+                                    onValueChange = { lowStockThresholdText = it },
+                                    label = { Text("Low stock at") },
+                                    placeholder = { Text("5") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    shape = RoundedCornerShape(12.dp),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f).testTag("low_stock_threshold_input")
+                                )
+                            }
                         }
                     }
                 }
@@ -2141,7 +3104,9 @@ fun ProductEditScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("Unit") }, modifier = Modifier.weight(1f))
-                                OutlinedTextField(value = stockCountText, onValueChange = { stockCountText = it }, label = { Text("Stock") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+                                if (!isConvenienceWithVariations) {
+                                    OutlinedTextField(value = stockCountText, onValueChange = { stockCountText = it }, label = { Text("Stock") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+                                }
                             }
                         }
                     }
@@ -2412,6 +3377,40 @@ fun ProductEditScreen(
             }
         )
     }
+
+    if (showRemoveVariationsConfirm) {
+        val fallbackPrice = VariationUtils.computeDerivedFields(variantsState).priceMin
+        AlertDialog(
+            onDismissRequest = { showRemoveVariationsConfirm = false },
+            title = { Text("Remove all variations?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("This will clear all variations and combinations. The product price will be set to ${FormatUtils.formatCurrency(fallbackPrice)}.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        priceText = if (fallbackPrice > 0.0) formatEditablePrice(fallbackPrice) else "0"
+                        variationsEnabled = false
+                        variationsState = emptyList()
+                        variantsState = emptyList()
+                        draftVariationsForWizard = emptyList()
+                        draftVariantsForWizard = emptyList()
+                        variantSaleInputs.clear()
+                        showRemoveVariationsConfirm = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_remove_variations_btn")
+                ) {
+                    Text("Remove", color = MaterialTheme.colorScheme.onError)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveVariationsConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     if (showTimePickerForAvailStart) {
         TimePickerStepDialog(
             initialTime24 = availStartTime24,
@@ -2522,6 +3521,55 @@ fun ProductEditScreen(
         ) {
             DatePicker(state = datePickerState)
         }
+    }
+
+    if (showSaleStartDatePicker) {
+        SimpleDatePickerDialog(
+            initialDateYmd = saleStartDateStr,
+            onDismiss = { showSaleStartDatePicker = false },
+            onDateSelected = { picked ->
+                saleStartDateStr = picked
+                if (saleEndMode == "scheduled" && saleEndDateStr < picked) {
+                    saleEndDateStr = picked
+                }
+                showSaleStartDatePicker = false
+            }
+        )
+    }
+
+    if (showSaleStartTimePicker) {
+        PriceDropTimePickerDialog(
+            initialTime24 = saleStartTime24,
+            title = "Select Start Time",
+            onDismiss = { showSaleStartTimePicker = false },
+            onTimeSelected = { picked ->
+                saleStartTime24 = picked
+                showSaleStartTimePicker = false
+            }
+        )
+    }
+
+    if (showSaleEndDatePicker) {
+        SimpleDatePickerDialog(
+            initialDateYmd = saleEndDateStr,
+            onDismiss = { showSaleEndDatePicker = false },
+            onDateSelected = { picked ->
+                saleEndDateStr = picked
+                showSaleEndDatePicker = false
+            }
+        )
+    }
+
+    if (showSaleEndTimePicker) {
+        PriceDropTimePickerDialog(
+            initialTime24 = saleEndTime24,
+            title = "Select End Time",
+            onDismiss = { showSaleEndTimePicker = false },
+            onTimeSelected = { picked ->
+                saleEndTime24 = picked
+                showSaleEndTimePicker = false
+            }
+        )
     }
 }
 
