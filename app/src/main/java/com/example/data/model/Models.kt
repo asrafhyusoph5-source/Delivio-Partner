@@ -66,9 +66,6 @@ enum class FulfillmentType(val label: String) {
 }
 
 fun fulfillmentOf(order: Order): FulfillmentType {
-    if (order.serviceType.equals("request_rider", ignoreCase = true)) {
-        return FulfillmentType.DELIVERY
-    }
     val clean = order.fulfillment.trim().lowercase().replace("[\\s_\\-]".toRegex(), "")
     return if (clean == "pickup" || order.hasPickup) {
         FulfillmentType.PICK_UP
@@ -186,10 +183,10 @@ data class RiderRequest(
     val status: String = "Searching",
     val requestedAt: Long? = null,
     val createdAt: Long? = null,
-    val radiusKm: Double = 3.0,
-    val alertsSent: Int? = null,
     val requestedBy: String = "",
     val distanceKm: Double = 0.0,
+    val radiusKm: Double = 3.0,
+    val alertsSent: Int? = null,
     val deliveryFee: Double = 0.0,
     val note: String = "",
     val feePayer: String = "customer",
@@ -198,18 +195,12 @@ data class RiderRequest(
     val dropoffAddress: AddressLocation = AddressLocation(),
     val progressPercent: Float = 0f
 ) {
-    val effectiveSearchStartedAt: Long?
-        get() = createdAt ?: requestedAt
-
+    val effectiveCreatedAt: Long? get() = createdAt ?: requestedAt
     val isSearching: Boolean get() = status.equals("Searching", ignoreCase = true)
     val isExpired: Boolean get() = status.equals("Expired", ignoreCase = true)
     val isAssigned: Boolean get() = status.equals("Rider assigned", ignoreCase = true) || status.equals("Assigned", ignoreCase = true)
     val isArrived: Boolean get() = status.equals("Arrived at merchant", ignoreCase = true) || status.equals("Arrived", ignoreCase = true)
     val isPickedUp: Boolean get() = status.equals("Picked up", ignoreCase = true)
-    val isOnTheWay: Boolean
-        get() = status.equals("On the way", ignoreCase = true) ||
-                status.equals("On_the_way", ignoreCase = true) ||
-                status.equals("On the way to customer", ignoreCase = true)
     val isDelivered: Boolean get() = status.equals("Delivered", ignoreCase = true)
     val isCancelled: Boolean get() = status.equals("Cancelled", ignoreCase = true)
 }
@@ -276,10 +267,7 @@ data class Order(
     val merchantName: String = "",
     val branchName: String = "",
     val branchCode: String = "",
-    val chainId: String = "",
-    val recipientName: String = "",
-    val recipientPhone: String = "",
-    val riderPlate: String = ""
+    val chainId: String = ""
 ) {
     fun isChatOpen(): Boolean {
         val s = status.name
@@ -536,48 +524,8 @@ data class Order(
         }
     }
 
-    val isInstantRiderRequest: Boolean
-        get() = serviceType.equals("request_rider", ignoreCase = true)
-
-    val effectiveRecipientName: String
-        get() = recipientName.ifBlank { customerName }
-
-    val effectiveRecipientPhone: String
-        get() = recipientPhone.ifBlank { customerPhone }
-
-    val effectiveRiderVehicle: String
-        get() = riderVehicle.ifBlank { rider?.vehicleType ?: "" }.ifBlank { "Motorcycle" }
-
-    val effectiveRiderPlate: String
-        get() = riderPlate.ifBlank { rider?.vehiclePlate ?: "" }
-
-    fun instantSearchElapsedSeconds(now: Long = System.currentTimeMillis()): Long {
-        val startedAt = riderRequest?.effectiveSearchStartedAt ?: placedAtTimestamp
-        if (startedAt <= 0L) return 0L
-        return ((now - startedAt) / 1000L).coerceAtLeast(0L)
-    }
-
-    fun isInstantNoRiderYet(now: Long = System.currentTimeMillis()): Boolean {
-        if (!isInstantRiderRequest) return false
-        val req = riderRequest ?: return false
-        if (!req.isSearching) return false
-        val elapsed = instantSearchElapsedSeconds(now)
-        return elapsed in 90L until 300L
-    }
-
-    fun isInstantExpired(now: Long = System.currentTimeMillis()): Boolean {
-        if (!isInstantRiderRequest) return false
-        val req = riderRequest ?: return false
-        if (req.isExpired) return true
-        if (!req.isSearching) return false
-        return instantSearchElapsedSeconds(now) >= 300L
-    }
-
     fun isNoRiderYet(now: Long = System.currentTimeMillis()): Boolean {
         if (isPickUp) return false
-        if (isInstantRiderRequest) {
-            return isInstantNoRiderYet(now)
-        }
         val startBase = acceptedAt ?: riderRequest?.requestedAt ?: placedAtTimestamp
         val holdMs = effectiveHoldMinutes * 60 * 1000L
         val opt = deliveryOptionDisplay
@@ -608,17 +556,6 @@ data class Order(
 
     fun canRequestRiderAgain(now: Long = System.currentTimeMillis()): Boolean {
         if (isPickUp) return false
-        if (isInstantRiderRequest) {
-            if (status != OrderStatus.READY) return false
-            if (riderId.isNotBlank()) return false
-            val req = riderRequest ?: return false
-            val reqStatus = req.status.lowercase()
-            if (reqStatus in listOf("cancelled", "released", "rejected", "expired")) return true
-            if (reqStatus == "searching") {
-                return instantSearchElapsedSeconds(now) >= 90L
-            }
-            return false
-        }
         if (status != OrderStatus.PREPARING && status != OrderStatus.READY) return false
         if (riderId.isNotBlank()) return false
         val req = riderRequest ?: return false
@@ -643,16 +580,6 @@ data class RiderRequestErrorInfo(
     val errorMessage: String = "",
     val fieldsWritten: String = ""
 )
-
-data class FailedOrderReport(
-    val orderId: String,
-    val errorMessage: String = "",
-    val stackTrace: String = "",
-    val timestampMs: Long = System.currentTimeMillis()
-) {
-    val shortId: String
-        get() = orderId.ifBlank { "unknown" }
-}
 
 data class MenuItemModifier(
     val id: String = "",

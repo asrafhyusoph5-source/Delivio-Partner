@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
 import com.example.data.repository.MerchantRepository
+import com.example.util.CrashReportStore
 import com.example.util.MenuSyncEngine
 import com.example.util.MenuSyncResult
 import com.example.util.OutletMenuSnapshot
@@ -45,7 +46,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val settings = repository.settings
     val receiptDesign = repository.receiptDesign
     val orders = repository.orders
-    val failedOrderReports = repository.failedOrderReports
+    val unparseableOrderIds = repository.unparseableOrderIds
+    val crashReports = CrashReportStore.reports
     val newOrderAlert = repository.newOrderAlert
     val categories = repository.categories
     val mainCategories: StateFlow<List<MainCategoryOption>> = combine(
@@ -889,14 +891,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun reportFailedOrders() {
-        repository.reportFailedOrders { _, msg ->
-            showSnackbar(msg ?: "Issue reported. Thank you.")
-        }
-    }
-
-    fun dismissFailedOrderReports() {
-        repository.dismissFailedOrderReports()
+    fun clearCrashReports() {
+        CrashReportStore.clearReports(getApplication())
     }
 
     fun openManualBookingForm() {
@@ -907,6 +903,10 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     fun closeManualBookingForm() {
         _manualBookingError.value = null
         _showManualBookingForm.value = false
+    }
+
+    fun clearManualBookingError() {
+        _manualBookingError.value = null
     }
 
     fun bookRiderDirect(
@@ -1036,10 +1036,6 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     fun retryRiderRequest(orderId: String) {
         repository.retryRiderRequest(orderId) { success, error ->
             if (success) {
-                val updated = repository.orders.value.find { it.id == orderId }
-                if (updated != null && _requestRiderTarget.value?.id == orderId) {
-                    _requestRiderTarget.value = updated
-                }
                 SoundVibrationHelper.playClickHaptic(getApplication())
                 showSnackbar("Rider search restarted")
             } else {
@@ -1049,14 +1045,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun expireRiderRequest(orderId: String) {
-        repository.expireRiderRequest(orderId) { success, _ ->
-            if (success) {
-                val updated = repository.orders.value.find { it.id == orderId }
-                if (updated != null && _requestRiderTarget.value?.id == orderId) {
-                    _requestRiderTarget.value = updated
-                }
-            }
-        }
+        repository.expireRiderRequest(orderId)
     }
 
     fun cancelRiderRequest(orderId: String, reason: String = "Merchant cancelled rider request") {

@@ -10,8 +10,7 @@ object FormatUtils {
     }
 
     fun formatTimeAgo(timestamp: Long): String {
-        if (timestamp <= 0L) return "Just now"
-        val diff = (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
+        val diff = System.currentTimeMillis() - timestamp
         val minutes = TimeUnit.MILLISECONDS.toMinutes(diff)
         val hours = TimeUnit.MILLISECONDS.toHours(diff)
         return when {
@@ -26,13 +25,11 @@ object FormatUtils {
     }
 
     fun formatDateTime(timestamp: Long): String {
-        if (timestamp <= 0L) return "—"
         val sdf = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
         return sdf.format(Date(timestamp))
     }
 
     fun formatDate(timestamp: Long): String {
-        if (timestamp <= 0L) return "—"
         val sdf = SimpleDateFormat("MMM d, yyyy", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Manila")
         }
@@ -40,13 +37,11 @@ object FormatUtils {
     }
 
     fun formatScheduledDateTime(timestamp: Long): String {
-        if (timestamp <= 0L) return "—"
         val sdf = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
         return sdf.format(Date(timestamp))
     }
 
     fun formatScheduledTime(timestamp: Long): String {
-        if (timestamp <= 0L) return "—"
         val sdf = SimpleDateFormat("h:mm a", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Manila")
         }
@@ -59,13 +54,6 @@ object FormatUtils {
         val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining)
         val seconds = TimeUnit.MILLISECONDS.toSeconds(remaining) % 60
         return "%02d:%02d".format(minutes, seconds)
-    }
-
-    fun formatElapsedMmSs(elapsedSeconds: Long): String {
-        val safeSec = elapsedSeconds.coerceAtLeast(0L)
-        val mins = safeSec / 60L
-        val secs = safeSec % 60L
-        return "%02d:%02d".format(Locale.US, mins, secs)
     }
 
     fun parseDouble(value: Any?): Double? {
@@ -87,19 +75,7 @@ object FormatUtils {
         }
     }
 
-    fun parseLong(value: Any?): Long? {
-        return when (value) {
-            is Number -> value.toLong()
-            is String -> {
-                val cleaned = value.trim().replace(",", "")
-                cleaned.toLongOrNull() ?: cleaned.toDoubleOrNull()?.takeIf { it.isFinite() }?.toLong()
-            }
-            else -> null
-        }
-    }
-
     fun formatDateOnly(timestamp: Long): String {
-        if (timestamp <= 0L) return "—"
         val sdf = SimpleDateFormat("MMM d, yyyy", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Manila")
         }
@@ -109,44 +85,40 @@ object FormatUtils {
     fun parseTimestamp(value: Any?): Long? {
         return when (value) {
             is com.google.firebase.Timestamp -> value.toDate().time
-            is Number -> value.toLong()
             is Date -> value.time
+            is Number -> value.toDouble().takeIf { it.isFinite() }?.toLong()
             is Map<*, *> -> {
-                val secs = parseLong(value["seconds"] ?: value["_seconds"]) ?: return null
-                val nanos = parseLong(value["nanoseconds"] ?: value["_nanoseconds"]) ?: 0L
-                (secs * 1000L) + (nanos / 1_000_000L)
+                val sec = parseDouble(value["seconds"] ?: value["_seconds"]) ?: return null
+                val nano = parseDouble(value["nanoseconds"] ?: value["_nanoseconds"]) ?: 0.0
+                (sec * 1000.0 + nano / 1_000_000.0).toLong()
             }
             is String -> {
                 val trimmed = value.trim()
                 if (trimmed.isEmpty()) return null
                 trimmed.toLongOrNull()
                     ?: trimmed.toDoubleOrNull()?.takeIf { it.isFinite() }?.toLong()
-                    ?: parseIsoTimestamp(trimmed)
+                    ?: run {
+                        val patterns = listOf(
+                            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+                            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                            "yyyy-MM-dd'T'HH:mm:ssZ",
+                            "yyyy-MM-dd HH:mm:ss"
+                        )
+                        for (pattern in patterns) {
+                            try {
+                                val sdf = SimpleDateFormat(pattern, Locale.US).apply {
+                                    timeZone = TimeZone.getTimeZone("UTC")
+                                }
+                                val parsed = sdf.parse(trimmed)
+                                if (parsed != null) return@run parsed.time
+                            } catch (_: Exception) {
+                            }
+                        }
+                        null
+                    }
             }
             else -> null
         }
-    }
-
-    private fun parseIsoTimestamp(raw: String): Long? {
-        val patterns = listOf(
-            "yyyy-MM-dd'T'HH:mm:ss.SSSX",
-            "yyyy-MM-dd'T'HH:mm:ssX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd"
-        )
-        for (pattern in patterns) {
-            try {
-                val sdf = SimpleDateFormat(pattern, Locale.US).apply {
-                    timeZone = TimeZone.getTimeZone("UTC")
-                }
-                val date = sdf.parse(raw)
-                if (date != null) return date.time
-            } catch (_: Exception) {
-            }
-        }
-        return null
     }
 }

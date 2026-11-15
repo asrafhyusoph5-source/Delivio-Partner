@@ -65,7 +65,7 @@ fun isValidPhilippinePhone(phone: String): Boolean {
 fun ManualRiderBookingSheet(
     settings: MerchantSettings,
     isSubmitting: Boolean = false,
-    errorMessage: String? = null,
+    submissionError: String? = null,
     onBookRider: (
         recipientName: String,
         recipientPhone: String,
@@ -96,7 +96,7 @@ fun ManualRiderBookingSheet(
     var dropoffArea by remember { mutableStateOf("") }
     var whatToDeliver by remember { mutableStateOf("") }
     var relatedOrderNumber by remember { mutableStateOf("") }
-    var codAmountText by remember { mutableStateOf("0") }
+    var codAmountText by remember { mutableStateOf("") }
     var riderNote by remember { mutableStateOf("") }
 
     // Coordinates: Pickup (Store) and Dropoff (Recipient)
@@ -527,7 +527,7 @@ fun ManualRiderBookingSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Cash to collect from the recipient (P)
+                // Cash to collect from recipient (optional amount, defaults to 0)
                 OutlinedTextField(
                     value = codAmountText,
                     onValueChange = { codAmountText = it },
@@ -679,31 +679,32 @@ fun ManualRiderBookingSheet(
                 Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
             }
 
-            // 6. BOTTOM BAR WITH ERROR BANNER (WITH RETRY) & "BOOK RIDER" BUTTON
-            val submitBooking = {
-                val cod = codAmountText.trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                onBookRider(
-                    recipientName.trim(),
-                    recipientPhone.trim(),
-                    deliveryAddress.trim(),
-                    dropoffArea.ifBlank { "Drop-off Location" },
-                    dropoffLat,
-                    dropoffLng,
-                    whatToDeliver.trim(),
-                    relatedOrderNumber.trim(),
-                    cod,
-                    riderNote.trim(),
-                    distanceKm,
-                    deliveryFee,
-                    serviceFee
-                )
-            }
+            // 6. BOTTOM BAR WITH ERROR BANNER + RETRY + "BOOK RIDER" BUTTON
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp,
                 shadowElevation = 8.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
+                val submitRequest = {
+                    val cod = (codAmountText.trim().toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+                    onBookRider(
+                        recipientName.trim(),
+                        recipientPhone.trim(),
+                        deliveryAddress.trim(),
+                        dropoffArea.ifBlank { "Drop-off Location" },
+                        dropoffLat,
+                        dropoffLng,
+                        whatToDeliver.trim(),
+                        relatedOrderNumber.trim(),
+                        cod,
+                        riderNote.trim(),
+                        distanceKm,
+                        deliveryFee,
+                        serviceFee
+                    )
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -712,57 +713,54 @@ fun ManualRiderBookingSheet(
                         .padding(top = 12.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (!errorMessage.isNullOrBlank()) {
+                    if (!submissionError.isNullOrBlank()) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.errorContainer,
                             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("manual_booking_error_card")
+                                .testTag("manual_booking_error_banner")
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = "Request failed",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = submissionError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ErrorOutline,
-                                        contentDescription = "Error",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = errorMessage,
-                                        color = MaterialTheme.colorScheme.error,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                TextButton(
-                                    onClick = submitBooking,
-                                    enabled = !isSubmitting,
-                                    colors = ButtonDefaults.textButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.error
+                                )
+                                FilledTonalButton(
+                                    onClick = submitRequest,
+                                    enabled = isFormComplete && !isSubmitting,
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
                                     ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                     modifier = Modifier.testTag("manual_booking_retry_btn")
                                 ) {
-                                    Text("Retry", fontWeight = FontWeight.ExtraBold)
+                                    Text("Retry", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
                         }
                     }
 
                     Button(
-                        onClick = submitBooking,
+                        onClick = submitRequest,
                         enabled = isFormComplete && !isSubmitting,
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(

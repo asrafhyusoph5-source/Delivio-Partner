@@ -63,7 +63,6 @@ class MainActivity : ComponentActivity() {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val receiptDesign by viewModel.receiptDesign.collectAsStateWithLifecycle()
             val orders by viewModel.orders.collectAsStateWithLifecycle()
-            val failedOrderReports by viewModel.failedOrderReports.collectAsStateWithLifecycle()
             val newOrderAlert by viewModel.newOrderAlert.collectAsStateWithLifecycle()
             val categories by viewModel.categories.collectAsStateWithLifecycle()
             val mainCategories by viewModel.mainCategories.collectAsStateWithLifecycle()
@@ -106,7 +105,6 @@ class MainActivity : ComponentActivity() {
             val showSoldOutDurationTarget by viewModel.showSoldOutDurationTarget.collectAsStateWithLifecycle()
             val showChooseOrderDialog by viewModel.showChooseOrderDialog.collectAsStateWithLifecycle()
             val showManualBookingForm by viewModel.showManualBookingForm.collectAsStateWithLifecycle()
-            val manualBookingError by viewModel.manualBookingError.collectAsStateWithLifecycle()
             val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
             val showWalletScreen by viewModel.showWalletScreen.collectAsStateWithLifecycle()
             val showCashOutComingSoon by viewModel.showCashOutComingSoon.collectAsStateWithLifecycle()
@@ -179,6 +177,9 @@ class MainActivity : ComponentActivity() {
             val activeCities by viewModel.activeCities.collectAsStateWithLifecycle()
             val isCitiesLoading by viewModel.isCitiesLoading.collectAsStateWithLifecycle()
             val citiesError by viewModel.citiesError.collectAsStateWithLifecycle()
+            val unparseableOrderIds by viewModel.unparseableOrderIds.collectAsStateWithLifecycle()
+            val crashReports by viewModel.crashReports.collectAsStateWithLifecycle()
+            val manualBookingError by viewModel.manualBookingError.collectAsStateWithLifecycle()
 
             LaunchedEffect(Unit) {
                 viewModel.newIncomingMessageEvent.collect { thread ->
@@ -201,6 +202,7 @@ class MainActivity : ComponentActivity() {
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val coroutineScope = rememberCoroutineScope()
             var showHelpDialog by remember { mutableStateOf(false) }
+            var showCrashReportsDialog by remember { mutableStateOf(false) }
 
             DelivioPartnerTheme(
                 themeAccentHex = settings.themeAccentHex,
@@ -321,6 +323,8 @@ class MainActivity : ComponentActivity() {
                         onOpenOutlets = { viewModel.openOutletsSwitcher() },
                         showSecurityPinOption = isMultiOutlet,
                         onChangeOutletsPin = { viewModel.openChangePinDialog() },
+                        crashReports = crashReports,
+                        onClearCrashReports = { viewModel.clearCrashReports() },
                         onBack = { viewModel.closeSettings() }
                     )
                 } else if (showPrinterScreen) {
@@ -498,21 +502,19 @@ class MainActivity : ComponentActivity() {
                     )
                 } else if (activeChatOrder != null) {
                     // Full-screen Customer Chat view
-                    activeChatOrder?.let { chatOrder ->
-                        OrderChatScreen(
-                            order = chatOrder,
-                            messages = activeChatMessages,
-                            onSendMessage = { text ->
-                                viewModel.sendCustomerChatMessage(chatOrder, text) { success, err ->
-                                    if (!success) {
-                                        viewModel.showSnackbar(err ?: "Failed to send message")
-                                    }
+                    OrderChatScreen(
+                        order = activeChatOrder!!,
+                        messages = activeChatMessages,
+                        onSendMessage = { text ->
+                            viewModel.sendCustomerChatMessage(activeChatOrder!!, text) { success, err ->
+                                if (!success) {
+                                    viewModel.showSnackbar(err ?: "Failed to send message")
                                 }
-                            },
-                            onBack = { viewModel.closeCustomerChat() },
-                            currentTime = currentTime
-                        )
-                    }
+                            }
+                        },
+                        onBack = { viewModel.closeCustomerChat() },
+                        currentTime = currentTime
+                    )
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -655,11 +657,6 @@ class MainActivity : ComponentActivity() {
                                                 onOutletClick = { viewModel.openOutletsFromTopBar() }
                                             )
                                             OfflineBanner(isOnline = isOnline)
-                                            FailedOrdersBanner(
-                                                failedReports = failedOrderReports,
-                                                onReport = { viewModel.reportFailedOrders() },
-                                                onDismiss = { viewModel.dismissFailedOrderReports() }
-                                            )
                                             otherOutletOrderBanner?.let { bannerEvent ->
                                                 Surface(
                                                     color = com.example.ui.theme.DelivioYellow,
@@ -736,7 +733,9 @@ class MainActivity : ComponentActivity() {
                                                     onRequestRiderAgainClick = { viewModel.requestRiderAgain(it.id) },
                                                     currentTime = currentTime,
                                                     orderChats = orderChats,
-                                                    onOpenChat = { viewModel.openCustomerChat(it) }
+                                                    onOpenChat = { viewModel.openCustomerChat(it) },
+                                                    unparseableOrderIds = unparseableOrderIds,
+                                                    onReportUnparseableOrders = { showCrashReportsDialog = true }
                                                 )
                                             }
 
@@ -940,22 +939,22 @@ class MainActivity : ComponentActivity() {
 
                 // 4. Request Rider / Rider Tracking Modal
                 requestRiderTarget?.let { target ->
-                    val syncedTarget = orders.find { it.id == target.id } ?: target
+                    val liveOrder = orders.find { it.id == target.id } ?: target
                     RiderTrackingModal(
-                        order = syncedTarget,
+                        order = liveOrder,
                         merchantLocation = settings.storeLocation,
                         isSubmitting = isActionLoading,
                         onConfirmRequestRider = { distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr ->
-                            viewModel.confirmRequestRider(syncedTarget, distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr)
+                            viewModel.confirmRequestRider(liveOrder, distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr)
                         },
                         onRetryRiderRequest = {
-                            viewModel.retryRiderRequest(syncedTarget.id)
+                            viewModel.retryRiderRequest(liveOrder.id)
                         },
                         onCancelRiderRequest = {
-                            viewModel.cancelRiderRequest(syncedTarget.id)
+                            viewModel.cancelRiderRequest(liveOrder.id)
                         },
                         onExpireRiderRequest = {
-                            viewModel.expireRiderRequest(syncedTarget.id)
+                            viewModel.expireRiderRequest(liveOrder.id)
                         },
                         onOpenLocationPicker = {
                             viewModel.openMapLocation()
@@ -1101,7 +1100,7 @@ class MainActivity : ComponentActivity() {
                     ManualRiderBookingSheet(
                         settings = settings,
                         isSubmitting = isActionLoading,
-                        errorMessage = manualBookingError,
+                        submissionError = manualBookingError,
                         onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, sFee ->
                             viewModel.bookRiderDirect(
                                 recipientName = name,
@@ -1343,6 +1342,18 @@ class MainActivity : ComponentActivity() {
                                 Text("Close", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                             }
                         }
+                    )
+                }
+
+                // 22. Crash & Order Parse Reports Dialog
+                if (showCrashReportsDialog) {
+                    CrashReportsDialog(
+                        reports = crashReports,
+                        onClearAll = {
+                            viewModel.clearCrashReports()
+                            showCrashReportsDialog = false
+                        },
+                        onDismiss = { showCrashReportsDialog = false }
                     )
                 }
             }

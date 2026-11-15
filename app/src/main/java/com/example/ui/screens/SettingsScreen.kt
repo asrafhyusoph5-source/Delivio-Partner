@@ -29,9 +29,11 @@ import com.example.data.model.BusinessType
 import com.example.data.model.ChangeRequest
 import com.example.data.model.MerchantSettings
 import com.example.data.model.StaffMember
+import com.example.ui.components.CrashReportsDialog
 import com.example.ui.theme.DelivioYellow
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
+import com.example.util.CrashReportEntry
 import com.example.util.SoundVibrationHelper
 
 /**
@@ -78,6 +80,8 @@ fun SettingsScreen(
     onOpenOutlets: () -> Unit = {},
     showSecurityPinOption: Boolean = false,
     onChangeOutletsPin: () -> Unit = {},
+    crashReports: List<CrashReportEntry> = emptyList(),
+    onClearCrashReports: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -86,8 +90,9 @@ fun SettingsScreen(
     val customColors = LocalDelivioColors.current
     val density = LocalDensity.current
 
-    // Dialog state for Business Type Change Request
+    // Dialog state for Business Type Change Request & Crash Reports
     var showTypeChangeDialog by remember { mutableStateOf(false) }
+    var showCrashReportsDialog by remember { mutableStateOf(false) }
 
     // Consistent switch colors: yellow track with dark thumb when on, grey track when off
     val switchColors = SwitchDefaults.colors(
@@ -813,10 +818,79 @@ fun SettingsScreen(
                 }
             }
 
+            if (crashReports.isNotEmpty()) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.testTag("settings_help_section")
+                ) {
+                    Text(
+                        text = "HELP",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_help_card")
+                    ) {
+                        SettingsRow(
+                            icon = Icons.Default.BugReport,
+                            title = "Crash reports",
+                            subtitle = "${crashReports.size} stored report${if (crashReports.size == 1) "" else "s"}",
+                            onClick = { showCrashReportsDialog = true },
+                            trailingContent = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFFFEE2E2)
+                                    ) {
+                                        Text(
+                                            text = "${crashReports.size}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = StatusClosedRed,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.ChevronRight,
+                                        contentDescription = "Open Crash reports",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("settings_crash_reports_row")
+                        )
+                    }
+                }
+            }
+
             // Extra bottom padding (navigation bar height + 96 dp) so last card scrolls fully above bottom bars
             val navBarBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
             Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
         }
+    }
+
+    if (showCrashReportsDialog) {
+        CrashReportsDialog(
+            reports = crashReports,
+            onClearAll = {
+                onClearCrashReports()
+                showCrashReportsDialog = false
+            },
+            onDismiss = { showCrashReportsDialog = false }
+        )
     }
 
     // Business Type Change Request Dialog

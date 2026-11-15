@@ -9,6 +9,7 @@ import org.osmdroid.config.Configuration
 class DelivioApp : Application() {
 
     override fun onCreate() {
+        com.example.util.CrashReportStore.installUncaughtExceptionHandler(this)
         super.onCreate()
 
         // Configure osmdroid user agent for OpenStreetMap tile fetching

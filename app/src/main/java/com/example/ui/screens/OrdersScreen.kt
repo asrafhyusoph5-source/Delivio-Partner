@@ -193,6 +193,8 @@ fun OrdersScreen(
     currentTime: Long = System.currentTimeMillis(),
     orderChats: Map<String, OrderChatThread> = emptyMap(),
     onOpenChat: (Order) -> Unit = {},
+    unparseableOrderIds: List<String> = emptyList(),
+    onReportUnparseableOrders: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -254,8 +256,7 @@ fun OrdersScreen(
             byFulfillment.filter { ord ->
                 ord.formattedOrderNumber.lowercase().removePrefix("#").contains(q) ||
                 ord.orderNumber.lowercase().contains(q) ||
-                ord.customerName.lowercase().contains(q) ||
-                ord.effectiveRecipientName.lowercase().contains(q)
+                ord.customerName.lowercase().contains(q)
             }
         } else {
             byFulfillment
@@ -556,6 +557,68 @@ fun OrdersScreen(
             }
         }
 
+        if (unparseableOrderIds.isNotEmpty()) {
+            val formattedIds = unparseableOrderIds.joinToString(", ") { id ->
+                val clean = id.trim()
+                if (clean.length <= 8) "#$clean" else "#${clean.takeLast(6)}"
+            }
+            val bannerText = if (unparseableOrderIds.size == 1) {
+                "1 order could not be displayed ($formattedIds) - Report"
+            } else {
+                "${unparseableOrderIds.size} orders could not be displayed ($formattedIds) - Report"
+            }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFFFEF3C7),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
+                onClick = onReportUnparseableOrders,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .defaultMinSize(minHeight = 48.dp)
+                    .testTag("unparseable_orders_banner")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Order parse warning",
+                            tint = Color(0xFFB45309),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = bannerText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF92400E)
+                        )
+                    }
+                    TextButton(
+                        onClick = onReportUnparseableOrders,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.testTag("unparseable_orders_report_btn")
+                    ) {
+                        Text(
+                            text = "Report",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFB45309)
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(4.dp))
 
         // ==============================================================
@@ -717,16 +780,15 @@ fun OrderCard(
     var showItemDetails by remember { mutableStateOf(false) }
     var showOriginalItems by remember { mutableStateOf(false) }
 
-    // Elapsed time calculation: turns amber at >= 15 min, red at >= 30 min (only if timestamp present)
-    val elapsedMillis = if (order.placedAtTimestamp > 0L) (currentTime - order.placedAtTimestamp).coerceAtLeast(0L) else 0L
+    // Elapsed time calculation: turns amber at >= 15 min, red at >= 30 min
+    val elapsedMillis = (currentTime - order.placedAtTimestamp).coerceAtLeast(0L)
     val elapsedMinutes = elapsedMillis / 60000L
-    val timeAgoStr = if (order.placedAtTimestamp > 0L) FormatUtils.formatTimeAgo(order.placedAtTimestamp) else ""
-    val isWaitingLong = order.placedAtTimestamp > 0L && elapsedMinutes >= 15
-    val isOverdue = order.placedAtTimestamp > 0L && elapsedMinutes >= 30
+    val timeAgoStr = FormatUtils.formatTimeAgo(order.placedAtTimestamp)
+    val isWaitingLong = elapsedMinutes >= 15
+    val isOverdue = elapsedMinutes >= 30
 
-    // Customer / Recipient first name
-    val customerDisplayName = order.effectiveRecipientName.ifBlank { "Customer" }
-    val customerFirstName = customerDisplayName.trim().split(" ").firstOrNull()?.ifBlank { "Customer" } ?: "Customer"
+    // Customer first name
+    val customerFirstName = order.customerName.trim().split(" ").firstOrNull()?.ifBlank { "Customer" } ?: "Customer"
 
     // Item summary string
     val itemSummary = if (order.items.isNotEmpty()) {
@@ -737,16 +799,9 @@ fun OrderCard(
 
     // Payment chip info
     val paymentMethod = order.paymentMethod.lowercase()
-    val isCash = (paymentMethod.contains("cash") || paymentMethod.contains("cod") || order.paymentMethod.equals("COD", ignoreCase = true)) && !paymentMethod.contains("gcash")
+    val isCash = paymentMethod.contains("cash") || paymentMethod.contains("cod") || order.paymentMethod.equals("COD", ignoreCase = true)
     val isWallet = paymentMethod.contains("wallet")
     val (paymentBg, paymentColor, paymentLabel) = when {
-        order.isInstantRiderRequest && (isCash || (order.cashToCollect ?: 0.0) > 0.0) -> {
-            val collectAmt = order.cashToCollect ?: order.total
-            Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Cash: ${FormatUtils.formatCurrency(collectAmt)}")
-        }
-        order.isInstantRiderRequest -> {
-            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Paid")
-        }
         order.isPickUp && isCash -> {
             Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Cash: Pay at pickup")
         }
@@ -893,36 +948,6 @@ fun OrderCard(
                 ) {
                     FulfillmentChip(order = order)
 
-                    // INSTANT chip for Delivio Instant (request_rider); Delivery option chip otherwise
-                    if (order.isInstantRiderRequest) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFFEF3C7),
-                            modifier = Modifier.testTag("instant_chip_${order.id}")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    tint = Color(0xFFB45309),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "INSTANT",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFFB45309)
-                                )
-                            }
-                        }
-                    } else if (!order.isPickUp) {
-                        DeliveryOptionChip(deliveryOption = order.deliveryOption)
-                    }
-
                     if (order.isScheduled) {
                         ScheduledChip(order = order)
                     }
@@ -954,6 +979,38 @@ fun OrderCard(
                                 fontWeight = FontWeight.Bold,
                                 color = paymentColor
                             )
+                        }
+                    }
+
+                    // Delivery option chip (or INSTANT for Delivio Instant request_rider orders)
+                    if (!order.isPickUp) {
+                        if (order.serviceType.equals("request_rider", ignoreCase = true)) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFEF08A),
+                                modifier = Modifier.testTag("instant_chip_${order.id}")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = "Instant Delivery",
+                                        tint = Color(0xFF1A1A1A),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "INSTANT",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF1A1A1A)
+                                    )
+                                }
+                            }
+                        } else {
+                            DeliveryOptionChip(deliveryOption = order.deliveryOption)
                         }
                     }
 
@@ -1004,10 +1061,10 @@ fun OrderCard(
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            if (customerDisplayName.isNotBlank() && !customerDisplayName.equals(customerFirstName, ignoreCase = true)) {
+                            if (order.customerName.isNotBlank() && !order.customerName.equals(customerFirstName, ignoreCase = true)) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "($customerDisplayName)",
+                                    text = "(${order.customerName})",
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1062,12 +1119,11 @@ fun OrderCard(
                             )
                         }
 
-                        val callPhone = order.effectiveRecipientPhone
-                        if (callPhone.isNotBlank()) {
+                        if (order.customerPhone.isNotBlank()) {
                             IconButton(
                                 onClick = {
                                     val intent = Intent(Intent.ACTION_DIAL).apply {
-                                        data = Uri.parse("tel:$callPhone")
+                                        data = Uri.parse("tel:${order.customerPhone}")
                                     }
                                     context.startActivity(intent)
                                 },
@@ -1085,7 +1141,7 @@ fun OrderCard(
                 }
 
                 // ==============================================================
-                // 4. RIDER STATE ("Looking for a rider...", "Rider arriving", live status)
+                // 4. RIDER STATE ("Waiting for rider", "Rider arriving")
                 // ==============================================================
                 if (!order.isPickUp) {
                     val assignedRiderName = order.riderName.ifBlank { rider?.name ?: "" }
@@ -1093,45 +1149,16 @@ fun OrderCard(
                     val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
                         order.riderRequest?.status?.equals("On another delivery", ignoreCase = true) == true ||
                         order.riderRequest?.status?.equals("on_another_delivery", ignoreCase = true) == true
-                    val req = order.riderRequest
-                    val isInstantExpired = order.isInstantExpired(currentTime)
-                    val isInstantNoRiderYet = order.isInstantNoRiderYet(currentTime)
-                    val vehiclePart = order.effectiveRiderVehicle
-                    val platePart = order.effectiveRiderPlate
-                    val plateSuffix = if (platePart.isNotBlank()) " • $platePart" else ""
-                    val riderDetailSuffix = if (assignedRiderName.isNotBlank()) " ($assignedRiderName • $vehiclePart$plateSuffix)" else ""
 
                     val (riderBadgeBg, riderBadgeColor, riderStateLabel) = when {
-                        order.isInstantRiderRequest && isInstantExpired -> {
-                            Triple(Color(0xFFFEE2E2), Color(0xFFDC2626), "Expired — Tap to try again")
-                        }
-                        order.isInstantRiderRequest && req?.isSearching == true && !hasRider -> {
-                            if (isInstantNoRiderYet) {
-                                Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "No rider accepted yet — Tap to manage")
-                            } else {
-                                Triple(Color(0xFFEFF6FF), Color(0xFF1D4ED8), "Looking for a rider...")
-                            }
-                        }
                         !hasRider -> {
                             Triple(Color(0xFFEFF6FF), Color(0xFF1D4ED8), "Waiting for rider")
                         }
                         isOnAnotherDelivery -> {
                             Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Rider is delivering another order first")
                         }
-                        req?.isDelivered == true || order.status == OrderStatus.DELIVERED -> {
-                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Delivered$riderDetailSuffix")
-                        }
-                        req?.isPickedUp == true -> {
-                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Picked up$riderDetailSuffix")
-                        }
-                        req?.isArrived == true -> {
-                            Triple(Color(0xFFFEF3C7), Color(0xFFB45309), "Arrived at merchant$riderDetailSuffix")
-                        }
-                        req?.isOnTheWay == true || order.status == OrderStatus.RIDER_ON_THE_WAY -> {
-                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "On the way$riderDetailSuffix")
-                        }
-                        order.status == OrderStatus.READY -> {
-                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Rider arriving$riderDetailSuffix")
+                        order.status == OrderStatus.RIDER_ON_THE_WAY || order.status == OrderStatus.READY -> {
+                            Triple(Color(0xFFDCFCE7), Color(0xFF15803D), "Rider arriving${if (assignedRiderName.isNotBlank()) " ($assignedRiderName)" else ""}")
                         }
                         else -> {
                             Triple(Color(0xFFDBEAFE), Color(0xFF1E40AF), "Rider assigned • $assignedRiderName")
@@ -1143,14 +1170,7 @@ fun OrderCard(
                         shape = RoundedCornerShape(8.dp),
                         color = riderBadgeBg,
                         border = androidx.compose.foundation.BorderStroke(1.dp, riderBadgeColor.copy(alpha = 0.3f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .let { mod ->
-                                if (order.isInstantRiderRequest || order.isSearchingRider) {
-                                    mod.clickable { onRequestRider() }
-                                } else mod
-                            }
-                            .testTag("rider_state_strip_${order.id}")
+                        modifier = Modifier.fillMaxWidth().testTag("rider_state_strip_${order.id}")
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
