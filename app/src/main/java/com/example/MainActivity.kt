@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val receiptDesign by viewModel.receiptDesign.collectAsStateWithLifecycle()
             val orders by viewModel.orders.collectAsStateWithLifecycle()
+            val failedOrderReports by viewModel.failedOrderReports.collectAsStateWithLifecycle()
             val newOrderAlert by viewModel.newOrderAlert.collectAsStateWithLifecycle()
             val categories by viewModel.categories.collectAsStateWithLifecycle()
             val mainCategories by viewModel.mainCategories.collectAsStateWithLifecycle()
@@ -105,6 +106,7 @@ class MainActivity : ComponentActivity() {
             val showSoldOutDurationTarget by viewModel.showSoldOutDurationTarget.collectAsStateWithLifecycle()
             val showChooseOrderDialog by viewModel.showChooseOrderDialog.collectAsStateWithLifecycle()
             val showManualBookingForm by viewModel.showManualBookingForm.collectAsStateWithLifecycle()
+            val manualBookingError by viewModel.manualBookingError.collectAsStateWithLifecycle()
             val riderRequestError by viewModel.riderRequestError.collectAsStateWithLifecycle()
             val showWalletScreen by viewModel.showWalletScreen.collectAsStateWithLifecycle()
             val showCashOutComingSoon by viewModel.showCashOutComingSoon.collectAsStateWithLifecycle()
@@ -174,6 +176,10 @@ class MainActivity : ComponentActivity() {
             val menuSyncProgress by viewModel.menuSyncProgress.collectAsStateWithLifecycle()
             val menuSyncResult by viewModel.menuSyncResult.collectAsStateWithLifecycle()
 
+            val activeCities by viewModel.activeCities.collectAsStateWithLifecycle()
+            val isCitiesLoading by viewModel.isCitiesLoading.collectAsStateWithLifecycle()
+            val citiesError by viewModel.citiesError.collectAsStateWithLifecycle()
+
             LaunchedEffect(Unit) {
                 viewModel.newIncomingMessageEvent.collect { thread ->
                     viewModel.showSnackbar("New message on #${thread.orderNumber}")
@@ -186,13 +192,19 @@ class MainActivity : ComponentActivity() {
             val canAccessReviews = userRole in listOf("merchant", "owner", "partner", "manager")
 
             var isRegistering by remember { mutableStateOf(false) }
+            LaunchedEffect(isRegistering) {
+                if (isRegistering) {
+                    viewModel.loadActiveCities()
+                }
+            }
+
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val coroutineScope = rememberCoroutineScope()
             var showHelpDialog by remember { mutableStateOf(false) }
 
             DelivioPartnerTheme(
                 themeAccentHex = settings.themeAccentHex,
-                darkTheme = settings.isDarkMode
+                darkTheme = false
             ) {
                 if (currentUser == null) {
                     if (merchantApplication != null) {
@@ -218,6 +230,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
+                            cities = activeCities,
+                            isLoadingCities = isCitiesLoading,
+                            citiesError = citiesError,
+                            onRetryCities = { viewModel.loadActiveCities() },
                             isLoading = isAuthLoading,
                             errorMessage = authErrorMessage
                         )
@@ -290,7 +306,6 @@ class MainActivity : ComponentActivity() {
                         onOpenPrinter = { viewModel.openPrinterScreen() },
                         onOpenMapLocation = { viewModel.openMapLocation() },
                         onOpenStaffDialog = { viewModel.openStaffDialog() },
-                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
                         onCleanupExpiredChats = { onFinished ->
                             viewModel.cleanupExpiredChats(force = true) { count ->
                                 onFinished(count)
@@ -301,6 +316,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
+                        isMultiOutlet = isMultiOutlet,
+                        otherOutletsNewOrdersCount = otherOutletsNewOrdersCount,
+                        onOpenOutlets = { viewModel.openOutletsSwitcher() },
                         showSecurityPinOption = isMultiOutlet,
                         onChangeOutletsPin = { viewModel.openChangePinDialog() },
                         onBack = { viewModel.closeSettings() }
@@ -323,7 +341,6 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { viewModel.closeStoreProfile() },
                         onOpenColorPicker = { viewModel.openColorPicker() },
-                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
                         onOpenMapLocation = { viewModel.openMapLocation() }
                     )
                 } else if (showReviewsScreen) {
@@ -481,19 +498,21 @@ class MainActivity : ComponentActivity() {
                     )
                 } else if (activeChatOrder != null) {
                     // Full-screen Customer Chat view
-                    OrderChatScreen(
-                        order = activeChatOrder!!,
-                        messages = activeChatMessages,
-                        onSendMessage = { text ->
-                            viewModel.sendCustomerChatMessage(activeChatOrder!!, text) { success, err ->
-                                if (!success) {
-                                    viewModel.showSnackbar(err ?: "Failed to send message")
+                    activeChatOrder?.let { chatOrder ->
+                        OrderChatScreen(
+                            order = chatOrder,
+                            messages = activeChatMessages,
+                            onSendMessage = { text ->
+                                viewModel.sendCustomerChatMessage(chatOrder, text) { success, err ->
+                                    if (!success) {
+                                        viewModel.showSnackbar(err ?: "Failed to send message")
+                                    }
                                 }
-                            }
-                        },
-                        onBack = { viewModel.closeCustomerChat() },
-                        currentTime = currentTime
-                    )
+                            },
+                            onBack = { viewModel.closeCustomerChat() },
+                            currentTime = currentTime
+                        )
+                    }
                 } else if (selectedOrderDetailId != null) {
                     // Full-screen Order Detail view
                     val selectedOrder = orders.find { it.id == selectedOrderDetailId }
@@ -608,7 +627,7 @@ class MainActivity : ComponentActivity() {
                                         otherOutletsNewOrdersCount = otherOutletsNewOrdersCount,
                                         onOpenOutlets = {
                                             coroutineScope.launch { drawerState.close() }
-                                            viewModel.openOutletsSwitcher()
+                                            viewModel.openSettingsAndOutlets()
                                         }
                                     )
                                 }
@@ -632,16 +651,22 @@ class MainActivity : ComponentActivity() {
                                                 isServiceLocked = isServiceLocked,
                                                 serviceLockMessage = serviceLockMessage,
                                                 isMultiOutlet = isMultiOutlet,
-                                                onOutletClick = { viewModel.openOutletsSwitcher() }
+                                                otherOutletsNewOrdersCount = otherOutletsNewOrdersCount,
+                                                onOutletClick = { viewModel.openOutletsFromTopBar() }
                                             )
                                             OfflineBanner(isOnline = isOnline)
+                                            FailedOrdersBanner(
+                                                failedReports = failedOrderReports,
+                                                onReport = { viewModel.reportFailedOrders() },
+                                                onDismiss = { viewModel.dismissFailedOrderReports() }
+                                            )
                                             otherOutletOrderBanner?.let { bannerEvent ->
                                                 Surface(
                                                     color = com.example.ui.theme.DelivioYellow,
                                                     contentColor = androidx.compose.ui.graphics.Color(0xFF1A1A1A),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .clickable { viewModel.switchActiveOutlet(bannerEvent.merchantId) }
+                                                        .clickable { viewModel.requestSwitchOutlet(bannerEvent.merchantId) }
                                                         .testTag("other_outlet_order_banner")
                                                 ) {
                                                     Row(
@@ -915,18 +940,22 @@ class MainActivity : ComponentActivity() {
 
                 // 4. Request Rider / Rider Tracking Modal
                 requestRiderTarget?.let { target ->
+                    val syncedTarget = orders.find { it.id == target.id } ?: target
                     RiderTrackingModal(
-                        order = target,
+                        order = syncedTarget,
                         merchantLocation = settings.storeLocation,
                         isSubmitting = isActionLoading,
                         onConfirmRequestRider = { distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr ->
-                            viewModel.confirmRequestRider(target, distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr)
+                            viewModel.confirmRequestRider(syncedTarget, distanceKm, deliveryFee, note, dropLat, dropLng, dropAddr)
                         },
                         onRetryRiderRequest = {
-                            viewModel.retryRiderRequest(target.id)
+                            viewModel.retryRiderRequest(syncedTarget.id)
                         },
                         onCancelRiderRequest = {
-                            viewModel.cancelRiderRequest(target.id)
+                            viewModel.cancelRiderRequest(syncedTarget.id)
+                        },
+                        onExpireRiderRequest = {
+                            viewModel.expireRiderRequest(syncedTarget.id)
                         },
                         onOpenLocationPicker = {
                             viewModel.openMapLocation()
@@ -1072,6 +1101,7 @@ class MainActivity : ComponentActivity() {
                     ManualRiderBookingSheet(
                         settings = settings,
                         isSubmitting = isActionLoading,
+                        errorMessage = manualBookingError,
                         onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, sFee ->
                             viewModel.bookRiderDirect(
                                 recipientName = name,
@@ -1226,7 +1256,7 @@ class MainActivity : ComponentActivity() {
                         newOrderCountByOutlet = newOrderCountByOutlet,
                         currentTime = currentTime,
                         onDismiss = { viewModel.closeOutletsSheet() },
-                        onApplySingle = { targetId -> viewModel.switchActiveOutlet(targetId) },
+                        onApplySingle = { targetId -> viewModel.requestSwitchOutlet(targetId) },
                         onApplyMulti = { selectedIds ->
                             when (mode) {
                                 com.example.viewmodel.OutletsSheetMode.MULTI_DASHBOARD_FILTER -> viewModel.applyDashboardOutletFilter(selectedIds)

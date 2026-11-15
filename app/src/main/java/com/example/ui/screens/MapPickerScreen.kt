@@ -454,7 +454,7 @@ fun MapPickerScreen(
                                         .clickable {
                                             currentCenterLat = result.latitude
                                             currentCenterLng = result.longitude
-                                            currentAddress = result.displayName
+                                            currentAddress = result.formattedAddress.ifBlank { result.displayName.trim() }
                                             currentArea = result.area
                                             val p = GeoPoint(result.latitude, result.longitude)
                                             mapViewRef?.controller?.animateTo(p)
@@ -582,7 +582,7 @@ fun MapPickerScreen(
                             if (locationChangedAt != null) {
                                 showConfirmSaveDialog = true
                             } else {
-                                onConfirmLocation(currentCenterLat, currentCenterLng, currentAddress, currentArea)
+                                onConfirmLocation(currentCenterLat, currentCenterLng, currentAddress.trim(), currentArea)
                             }
                         },
                         enabled = !isLocked,
@@ -643,7 +643,7 @@ fun MapPickerScreen(
                 Button(
                     onClick = {
                         showConfirmSaveDialog = false
-                        onConfirmLocation(currentCenterLat, currentCenterLng, currentAddress, currentArea)
+                        onConfirmLocation(currentCenterLat, currentCenterLng, currentAddress.trim(), currentArea)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = customColors.accent, contentColor = customColors.onAccent)
                 ) {
@@ -681,7 +681,7 @@ fun MapPickerScreen(
                         if (urgentReason.trim().isNotBlank()) {
                             isSubmittingUrgent = true
                             onRequestUrgentChange(
-                                currentAddress,
+                                currentAddress.trim(),
                                 currentCenterLat,
                                 currentCenterLng,
                                 urgentReason.trim()

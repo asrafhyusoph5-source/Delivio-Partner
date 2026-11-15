@@ -25,7 +25,8 @@ fun MapLocationScreen(
             val updated = currentLocation.copy(
                 latitude = lat,
                 longitude = lng,
-                street = address
+                street = address.trim(),
+                city = ""
             )
             onSaveLocation(updated) { success, _ ->
                 if (success) {

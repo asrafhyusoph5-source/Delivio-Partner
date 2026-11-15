@@ -1,9 +1,17 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -11,13 +19,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ui.theme.DelivioYellow
 import com.example.util.OutletsPinHelper
 import com.example.util.PinVerifyResult
@@ -40,6 +51,7 @@ fun OutletsPinDialog(
     var pin1 by remember(mode) { mutableStateOf("") }
     var pin2 by remember(mode) { mutableStateOf("") }
     var oldPin by remember(mode) { mutableStateOf("") }
+    var activeField by remember(mode) { mutableIntStateOf(0) } // CREATE: 0=new, 1=confirm; CHANGE: 0=old, 1=new, 2=confirm
     var password by remember(mode) { mutableStateOf("") }
     var showSecret by remember(mode) { mutableStateOf(false) }
     var errorMsg by remember(mode) { mutableStateOf<String?>(null) }
@@ -63,10 +75,72 @@ fun OutletsPinDialog(
     }
 
     val subtitle = when (mode) {
-        PinModalMode.CREATE -> "Choose a 4 to 6 digit PIN to protect outlet switching and menu sync."
+        PinModalMode.CREATE -> "Choose a 4 to 6 digit PIN to protect outlets and menu sync."
         PinModalMode.ENTER -> "Enter your 4 to 6 digit Outlets PIN to continue."
         PinModalMode.FORGOT_PASSWORD -> "Confirm your Delivio Partner account password to set a new Outlets PIN."
         PinModalMode.CHANGE -> "Enter your current PIN, then choose a new 4 to 6 digit PIN."
+    }
+
+    val onDigitPress: (String) -> Unit = { digit ->
+        errorMsg = null
+        when (mode) {
+            PinModalMode.ENTER -> {
+                if (lockoutSeconds <= 0L && pin1.length < 6) {
+                    pin1 += digit
+                }
+            }
+            PinModalMode.CREATE -> {
+                if (activeField == 0 && pin1.length < 6) pin1 += digit
+                else if (activeField == 1 && pin2.length < 6) pin2 += digit
+            }
+            PinModalMode.CHANGE -> {
+                when (activeField) {
+                    0 -> if (oldPin.length < 6) oldPin += digit
+                    1 -> if (pin1.length < 6) pin1 += digit
+                    2 -> if (pin2.length < 6) pin2 += digit
+                }
+            }
+            PinModalMode.FORGOT_PASSWORD -> Unit
+        }
+    }
+
+    val onBackspacePress: () -> Unit = {
+        errorMsg = null
+        when (mode) {
+            PinModalMode.ENTER -> {
+                if (lockoutSeconds <= 0L && pin1.isNotEmpty()) pin1 = pin1.dropLast(1)
+            }
+            PinModalMode.CREATE -> {
+                if (activeField == 0 && pin1.isNotEmpty()) pin1 = pin1.dropLast(1)
+                else if (activeField == 1 && pin2.isNotEmpty()) pin2 = pin2.dropLast(1)
+            }
+            PinModalMode.CHANGE -> {
+                when (activeField) {
+                    0 -> if (oldPin.isNotEmpty()) oldPin = oldPin.dropLast(1)
+                    1 -> if (pin1.isNotEmpty()) pin1 = pin1.dropLast(1)
+                    2 -> if (pin2.isNotEmpty()) pin2 = pin2.dropLast(1)
+                }
+            }
+            PinModalMode.FORGOT_PASSWORD -> Unit
+        }
+    }
+
+    val onClearPress: () -> Unit = {
+        errorMsg = null
+        when (mode) {
+            PinModalMode.ENTER -> if (lockoutSeconds <= 0L) pin1 = ""
+            PinModalMode.CREATE -> {
+                if (activeField == 0) pin1 = "" else pin2 = ""
+            }
+            PinModalMode.CHANGE -> {
+                when (activeField) {
+                    0 -> oldPin = ""
+                    1 -> pin1 = ""
+                    2 -> pin2 = ""
+                }
+            }
+            PinModalMode.FORGOT_PASSWORD -> Unit
+        }
     }
 
     AlertDialog(
@@ -87,75 +161,27 @@ fun OutletsPinDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
                 )
 
-                val visTrans = if (showSecret) VisualTransformation.None else PasswordVisualTransformation()
-                val trailingToggle: @Composable () -> Unit = {
-                    IconButton(onClick = { showSecret = !showSecret }) {
-                        Icon(
-                            imageVector = if (showSecret) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showSecret) "Hide" else "Show"
-                        )
-                    }
-                }
-
                 when (mode) {
-                    PinModalMode.CREATE -> {
-                        OutlinedTextField(
-                            value = pin1,
-                            onValueChange = {
-                                val filtered = it.filter { ch -> ch.isDigit() }.take(6)
-                                pin1 = filtered
-                                errorMsg = null
-                            },
-                            label = { Text("New PIN (4-6 digits)") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            trailingIcon = trailingToggle,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_create_input")
-                        )
-                        OutlinedTextField(
-                            value = pin2,
-                            onValueChange = {
-                                val filtered = it.filter { ch -> ch.isDigit() }.take(6)
-                                pin2 = filtered
-                                errorMsg = null
-                            },
-                            label = { Text("Confirm PIN") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_create_confirm_input")
-                        )
-                    }
-
                     PinModalMode.ENTER -> {
-                        OutlinedTextField(
-                            value = pin1,
-                            onValueChange = {
-                                val filtered = it.filter { ch -> ch.isDigit() }.take(6)
-                                pin1 = filtered
-                                errorMsg = null
-                            },
-                            enabled = lockoutSeconds <= 0L,
-                            label = { Text("Outlets PIN") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            trailingIcon = trailingToggle,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        PinDotsRow(
+                            digitCount = pin1.length,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_enter_input")
+                                .padding(vertical = 4.dp)
+                                .testTag("pin_dots_row")
                         )
 
                         if (lockoutSeconds > 0L) {
@@ -165,9 +191,29 @@ fun OutletsPinDialog(
                                 text = "Too many wrong attempts. Try again in %d:%02d.".format(mins, secs),
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.testTag("pin_lockout_message")
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pin_lockout_message")
                             )
                         }
+
+                        if (!errorMsg.isNullOrBlank()) {
+                            Text(
+                                text = errorMsg!!,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pin_dialog_error")
+                            )
+                        }
+
+                        PinNumericKeypad(
+                            enabled = !isBusy && lockoutSeconds <= 0L,
+                            onDigit = onDigitPress,
+                            onBackspace = onBackspacePress,
+                            onClear = onClearPress
+                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -184,7 +230,108 @@ fun OutletsPinDialog(
                         }
                     }
 
+                    PinModalMode.CREATE -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            PinStepSelectorBox(
+                                label = "New PIN",
+                                digitCount = pin1.length,
+                                isSelected = activeField == 0,
+                                onClick = { activeField = 0 },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("pin_field_new")
+                            )
+                            PinStepSelectorBox(
+                                label = "Confirm PIN",
+                                digitCount = pin2.length,
+                                isSelected = activeField == 1,
+                                onClick = { activeField = 1 },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("pin_field_confirm")
+                            )
+                        }
+
+                        if (!errorMsg.isNullOrBlank()) {
+                            Text(
+                                text = errorMsg!!,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pin_dialog_error")
+                            )
+                        }
+
+                        PinNumericKeypad(
+                            enabled = !isBusy,
+                            onDigit = onDigitPress,
+                            onBackspace = onBackspacePress,
+                            onClear = onClearPress
+                        )
+                    }
+
+                    PinModalMode.CHANGE -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            PinStepSelectorBox(
+                                label = "Current",
+                                digitCount = oldPin.length,
+                                isSelected = activeField == 0,
+                                onClick = { activeField = 0 },
+                                dotSize = 9.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("pin_field_old")
+                            )
+                            PinStepSelectorBox(
+                                label = "New PIN",
+                                digitCount = pin1.length,
+                                isSelected = activeField == 1,
+                                onClick = { activeField = 1 },
+                                dotSize = 9.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("pin_field_new")
+                            )
+                            PinStepSelectorBox(
+                                label = "Confirm",
+                                digitCount = pin2.length,
+                                isSelected = activeField == 2,
+                                onClick = { activeField = 2 },
+                                dotSize = 9.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("pin_field_confirm")
+                            )
+                        }
+
+                        if (!errorMsg.isNullOrBlank()) {
+                            Text(
+                                text = errorMsg!!,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pin_dialog_error")
+                            )
+                        }
+
+                        PinNumericKeypad(
+                            enabled = !isBusy,
+                            onDigit = onDigitPress,
+                            onBackspace = onBackspacePress,
+                            onClear = onClearPress
+                        )
+                    }
+
                     PinModalMode.FORGOT_PASSWORD -> {
+                        val visTrans = if (showSecret) VisualTransformation.None else PasswordVisualTransformation()
                         OutlinedTextField(
                             value = password,
                             onValueChange = {
@@ -194,68 +341,31 @@ fun OutletsPinDialog(
                             label = { Text("Account Password") },
                             singleLine = true,
                             visualTransformation = visTrans,
-                            trailingIcon = trailingToggle,
+                            trailingIcon = {
+                                IconButton(onClick = { showSecret = !showSecret }) {
+                                    Icon(
+                                        imageVector = if (showSecret) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (showSecret) "Hide password" else "Show password"
+                                    )
+                                }
+                            },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("pin_forgot_password_input")
                         )
-                    }
 
-                    PinModalMode.CHANGE -> {
-                        OutlinedTextField(
-                            value = oldPin,
-                            onValueChange = {
-                                oldPin = it.filter { ch -> ch.isDigit() }.take(6)
-                                errorMsg = null
-                            },
-                            label = { Text("Current PIN") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            trailingIcon = trailingToggle,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_change_old_input")
-                        )
-                        OutlinedTextField(
-                            value = pin1,
-                            onValueChange = {
-                                pin1 = it.filter { ch -> ch.isDigit() }.take(6)
-                                errorMsg = null
-                            },
-                            label = { Text("New PIN (4-6 digits)") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_change_new_input")
-                        )
-                        OutlinedTextField(
-                            value = pin2,
-                            onValueChange = {
-                                pin2 = it.filter { ch -> ch.isDigit() }.take(6)
-                                errorMsg = null
-                            },
-                            label = { Text("Confirm New PIN") },
-                            singleLine = true,
-                            visualTransformation = visTrans,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("pin_change_confirm_input")
-                        )
+                        if (!errorMsg.isNullOrBlank()) {
+                            Text(
+                                text = errorMsg!!,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pin_dialog_error")
+                            )
+                        }
                     }
-                }
-
-                if (!errorMsg.isNullOrBlank()) {
-                    Text(
-                        text = errorMsg!!,
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.testTag("pin_dialog_error")
-                    )
                 }
             }
         },
@@ -277,10 +387,17 @@ fun OutletsPinDialog(
                     when (mode) {
                         PinModalMode.CREATE -> {
                             if (!OutletsPinHelper.isValidPinFormat(pin1)) {
+                                activeField = 0
                                 errorMsg = "PIN must be 4 to 6 digits."
                                 return@Button
                             }
+                            if (pin2.isEmpty()) {
+                                activeField = 1
+                                errorMsg = "Confirm your new PIN."
+                                return@Button
+                            }
                             if (pin1 != pin2) {
+                                activeField = 1
                                 errorMsg = "PINs do not match."
                                 return@Button
                             }
@@ -301,7 +418,8 @@ fun OutletsPinDialog(
                                 PinVerifyResult.Success -> Unit
                                 is PinVerifyResult.WrongPin -> {
                                     pin1 = ""
-                                    errorMsg = "Incorrect PIN. ${res.remainingAttempts} attempt(s) left."
+                                    val triesWord = if (res.remainingAttempts == 1) "try" else "tries"
+                                    errorMsg = "Wrong PIN. ${res.remainingAttempts} $triesWord left"
                                 }
                                 is PinVerifyResult.LockedOut -> {
                                     pin1 = ""
@@ -325,14 +443,22 @@ fun OutletsPinDialog(
 
                         PinModalMode.CHANGE -> {
                             if (!OutletsPinHelper.isValidPinFormat(oldPin)) {
+                                activeField = 0
                                 errorMsg = "Enter your current PIN."
                                 return@Button
                             }
                             if (!OutletsPinHelper.isValidPinFormat(pin1)) {
+                                activeField = 1
                                 errorMsg = "New PIN must be 4 to 6 digits."
                                 return@Button
                             }
+                            if (pin2.isEmpty()) {
+                                activeField = 2
+                                errorMsg = "Confirm your new PIN."
+                                return@Button
+                            }
                             if (pin1 != pin2) {
+                                activeField = 2
                                 errorMsg = "New PINs do not match."
                                 return@Button
                             }
@@ -381,4 +507,164 @@ fun OutletsPinDialog(
             .widthIn(max = 460.dp)
             .testTag("outlets_pin_dialog")
     )
+}
+
+@Composable
+private fun PinDotsRow(
+    digitCount: Int,
+    dotSize: Dp = 14.dp,
+    spacing: Dp = 10.dp,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(spacing, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (i in 0 until 6) {
+            val isFilled = i < digitCount
+            val isRequiredSlot = i < 4
+            val fillColor = when {
+                isFilled -> Color(0xFF1A1A1A)
+                else -> Color.Transparent
+            }
+            val borderColor = when {
+                isFilled -> Color(0xFF1A1A1A)
+                isRequiredSlot -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+            }
+            Box(
+                modifier = Modifier
+                    .size(dotSize)
+                    .clip(CircleShape)
+                    .background(fillColor)
+                    .border(width = 1.5.dp, color = borderColor, shape = CircleShape)
+                    .testTag("pin_dot_$i")
+            )
+        }
+    }
+}
+
+@Composable
+private fun PinStepSelectorBox(
+    label: String,
+    digitCount: Int,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    dotSize: Dp = 10.dp,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) DelivioYellow.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 1.dp,
+            color = if (isSelected) DelivioYellow else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+        ),
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+            PinDotsRow(
+                digitCount = digitCount,
+                dotSize = dotSize,
+                spacing = 5.dp
+            )
+        }
+    }
+}
+
+@Composable
+private fun PinNumericKeypad(
+    enabled: Boolean,
+    onDigit: (String) -> Unit,
+    onBackspace: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rows = listOf(
+        listOf("1", "2", "3"),
+        listOf("4", "5", "6"),
+        listOf("7", "8", "9"),
+        listOf("CLEAR", "0", "BACK")
+    )
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        rows.forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                row.forEach { key ->
+                    val tag = when (key) {
+                        "CLEAR" -> "pin_key_clear"
+                        "BACK" -> "pin_key_backspace"
+                        else -> "pin_key_$key"
+                    }
+                    Surface(
+                        onClick = {
+                            if (!enabled) return@Surface
+                            when (key) {
+                                "CLEAR" -> onClear()
+                                "BACK" -> onBackspace()
+                                else -> onDigit(key)
+                            }
+                        },
+                        enabled = enabled,
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (key == "CLEAR" || key == "BACK") {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.55f else 0.25f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.85f else 0.35f)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                            .height(50.dp)
+                            .testTag(tag)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            when (key) {
+                                "CLEAR" -> Text(
+                                    text = "Clear",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.4f)
+                                )
+                                "BACK" -> Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Backspace,
+                                    contentDescription = "Backspace",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.4f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                else -> Text(
+                                    text = key,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.4f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

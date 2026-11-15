@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -51,7 +50,7 @@ private const val THIRTY_DAYS_MS = 30L * 24 * 60 * 60 * 1000L
  * 1. Store identity (large round logo with edit badge, Logo URL, live preview using real loader callbacks, store name locked, description with 0/200 counter)
  * 2. Contact (owner name, phone with Philippine mobile number format hint, login email locked)
  * 3. Location (map preview, address, "Change location" with date it becomes available again if within 30 days)
- * 4. Brand and theme (accent color, dark mode switch styled uniformly)
+ * 4. Brand and theme (accent color)
  *
  * Banner URL is completely removed.
  * Validation only occurs after interaction.
@@ -65,13 +64,11 @@ fun StoreProfileScreen(
     onSave: (Map<String, Any>, onResult: (Boolean, String?) -> Unit) -> Unit,
     onBack: () -> Unit,
     onOpenColorPicker: () -> Unit = {},
-    onToggleDarkMode: (Boolean) -> Unit = {},
     onOpenMapLocation: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
     val density = LocalDensity.current
-    val isDark = isSystemInDarkTheme() || settings.isDarkMode
 
     var ownerNameInput by remember(settings.ownerName) { mutableStateOf(settings.ownerName) }
     var phoneInput by remember(settings.phone) { mutableStateOf(settings.phone) }
@@ -791,46 +788,6 @@ fun StoreProfileScreen(
                             }
                         }
                         Text("Change", fontWeight = FontWeight.Bold, color = customColors.accent, fontSize = 13.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Dark Mode Toggle
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (settings.isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
-                                contentDescription = null,
-                                tint = customColors.accent
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Dark Mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Text("High-contrast #121212 merchant palette", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-
-                        Switch(
-                            checked = settings.isDarkMode,
-                            onCheckedChange = { onToggleDarkMode(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF1A1A1A),
-                                checkedTrackColor = DelivioYellow,
-                                checkedBorderColor = Color.Transparent,
-                                uncheckedThumbColor = Color(0xFF757575),
-                                uncheckedTrackColor = if (isDark) Color(0xFF383838) else Color(0xFFE0E0E0),
-                                uncheckedBorderColor = Color.Transparent
-                            ),
-                            modifier = Modifier.testTag("dark_mode_switch")
-                        )
                     }
                 }
             }

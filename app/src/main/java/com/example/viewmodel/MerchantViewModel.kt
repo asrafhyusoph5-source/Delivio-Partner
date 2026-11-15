@@ -38,10 +38,14 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val merchantApplication = repository.merchantApplication
     val isAuthLoading = repository.isAuthLoading
     val authErrorMessage = repository.authErrorMessage
+    val activeCities = repository.activeCities
+    val isCitiesLoading = repository.isCitiesLoading
+    val citiesError = repository.citiesError
 
     val settings = repository.settings
     val receiptDesign = repository.receiptDesign
     val orders = repository.orders
+    val failedOrderReports = repository.failedOrderReports
     val newOrderAlert = repository.newOrderAlert
     val categories = repository.categories
     val mainCategories: StateFlow<List<MainCategoryOption>> = combine(
@@ -236,6 +240,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     private val _showManualBookingForm = MutableStateFlow(false)
     val showManualBookingForm: StateFlow<Boolean> = _showManualBookingForm.asStateFlow()
+
+    private val _manualBookingError = MutableStateFlow<String?>(null)
+    val manualBookingError: StateFlow<String?> = _manualBookingError.asStateFlow()
 
     private val _riderRequestError = MutableStateFlow<RiderRequestErrorInfo?>(null)
     val riderRequestError: StateFlow<RiderRequestErrorInfo?> = _riderRequestError.asStateFlow()
@@ -546,6 +553,10 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun sendPasswordReset(email: String, onResult: (Boolean, String?) -> Unit) {
         repository.sendPasswordReset(email, onResult)
+    }
+
+    fun loadActiveCities() {
+        repository.fetchActiveCities()
     }
 
     fun registerMerchant(
@@ -878,11 +889,23 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun reportFailedOrders() {
+        repository.reportFailedOrders { _, msg ->
+            showSnackbar(msg ?: "Issue reported. Thank you.")
+        }
+    }
+
+    fun dismissFailedOrderReports() {
+        repository.dismissFailedOrderReports()
+    }
+
     fun openManualBookingForm() {
+        _manualBookingError.value = null
         _showManualBookingForm.value = true
     }
 
     fun closeManualBookingForm() {
+        _manualBookingError.value = null
         _showManualBookingForm.value = false
     }
 
@@ -901,6 +924,7 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         deliveryFee: Double,
         serviceFee: Double
     ) {
+        _manualBookingError.value = null
         _isActionLoading.value = true
         repository.bookRiderDirect(
             recipientName = recipientName,
@@ -916,21 +940,19 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
             distanceKm = distanceKm,
             deliveryFee = deliveryFee,
             serviceFee = serviceFee
-        ) { success, error, fieldsWritten, _ ->
+        ) { success, error, _, createdOrder ->
             _isActionLoading.value = false
-            if (success) {
+            if (success && createdOrder != null) {
+                _manualBookingError.value = null
                 _showManualBookingForm.value = false
                 _currentTab.value = MerchantTab.ORDERS
                 _orderStatusFilter.value = "Ready"
+                _fulfillmentFilter.value = "Delivery"
+                _requestRiderTarget.value = createdOrder
                 SoundVibrationHelper.playClickHaptic(getApplication())
-                showSnackbar("Rider requested")
+                showSnackbar("Looking for a rider...")
             } else {
-                val formattedFields = formatFieldsToString(fieldsWritten)
-                _riderRequestError.value = RiderRequestErrorInfo(
-                    orderNumber = "Manual Booking",
-                    errorMessage = error ?: "Failed to write rider request to Firestore.",
-                    fieldsWritten = formattedFields
-                )
+                _manualBookingError.value = error ?: "Failed to write rider request to Firestore."
             }
         }
     }
@@ -1014,10 +1036,25 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     fun retryRiderRequest(orderId: String) {
         repository.retryRiderRequest(orderId) { success, error ->
             if (success) {
+                val updated = repository.orders.value.find { it.id == orderId }
+                if (updated != null && _requestRiderTarget.value?.id == orderId) {
+                    _requestRiderTarget.value = updated
+                }
                 SoundVibrationHelper.playClickHaptic(getApplication())
                 showSnackbar("Rider search restarted")
             } else {
                 showSnackbar(error ?: "Failed to retry rider request")
+            }
+        }
+    }
+
+    fun expireRiderRequest(orderId: String) {
+        repository.expireRiderRequest(orderId) { success, _ ->
+            if (success) {
+                val updated = repository.orders.value.find { it.id == orderId }
+                if (updated != null && _requestRiderTarget.value?.id == orderId) {
+                    _requestRiderTarget.value = updated
+                }
             }
         }
     }
@@ -1165,10 +1202,10 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun saveMenuItem(item: MenuItem, onResult: ((Boolean, String?) -> Unit)? = null) {
         val previousItem = if (item.id.isNotBlank()) menuItems.value.find { it.id == item.id } else null
-        val saleAutoEnded = previousItem?.saleActive == true &&
-            previousItem.salePrice != null &&
-            item.price <= previousItem.salePrice &&
-            !item.saleActive
+        val saleAutoEnded = previousItem?.saleActive == true && !item.saleActive && (
+            (!item.variationsEnabled && previousItem.salePrice != null && item.price <= previousItem.salePrice) ||
+                item.variationsEnabled
+            )
         repository.saveMenuItem(item) { success, errorMsg ->
             if (success) {
                 _editingMenuItem.value = null
@@ -1606,6 +1643,24 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         requestPinGatedAction(PendingPinAction.OpenOutletsSheet)
     }
 
+    fun openSettingsAndOutlets() {
+        _showSettingsScreen.value = true
+        requestPinGatedAction(PendingPinAction.OpenSettingsOutlets)
+    }
+
+    fun openOutletsFromTopBar() {
+        requestFreshPinForAction(PendingPinAction.OpenSettingsOutlets)
+    }
+
+    fun requestSwitchOutlet(targetMerchantId: String) {
+        if (!isMultiOutlet.value) return
+        if (targetMerchantId == activeMerchantId.value) {
+            _outletsSheetMode.value = null
+            return
+        }
+        requestFreshPinForAction(PendingPinAction.SwitchOutlet(targetMerchantId))
+    }
+
     fun openPushMenu() {
         requestPinGatedAction(PendingPinAction.OpenPushMenu)
     }
@@ -1662,9 +1717,28 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * Always asks for the PIN with no remembered unlock.
+     * Used every time an active outlet switch is triggered (Apply, Switch banner, top-bar chip).
+     */
+    private fun requestFreshPinForAction(action: PendingPinAction) {
+        if (!isMultiOutlet.value) return
+        pendingPinAction = action
+        _pinModalMode.value = if (!repository.hasOutletsPin()) {
+            PinModalMode.CREATE
+        } else {
+            PinModalMode.ENTER
+        }
+    }
+
     private fun performPendingPinAction(action: PendingPinAction) {
         when (action) {
             PendingPinAction.OpenOutletsSheet -> _outletsSheetMode.value = OutletsSheetMode.SINGLE_SWITCH
+            PendingPinAction.OpenSettingsOutlets -> {
+                _showSettingsScreen.value = true
+                _outletsSheetMode.value = OutletsSheetMode.SINGLE_SWITCH
+            }
+            is PendingPinAction.SwitchOutlet -> switchActiveOutlet(action.targetMerchantId)
             PendingPinAction.OpenPushMenu -> openMenuSyncModal(MenuSyncDialogMode.PUSH)
             PendingPinAction.OpenPullMenu -> openMenuSyncModal(MenuSyncDialogMode.PULL)
             PendingPinAction.OpenSyncMenu -> openMenuSyncModal(MenuSyncDialogMode.SYNC)
@@ -1919,6 +1993,8 @@ enum class PinModalMode {
 
 sealed interface PendingPinAction {
     data object OpenOutletsSheet : PendingPinAction
+    data object OpenSettingsOutlets : PendingPinAction
+    data class SwitchOutlet(val targetMerchantId: String) : PendingPinAction
     data object OpenPushMenu : PendingPinAction
     data object OpenPullMenu : PendingPinAction
     data object OpenSyncMenu : PendingPinAction

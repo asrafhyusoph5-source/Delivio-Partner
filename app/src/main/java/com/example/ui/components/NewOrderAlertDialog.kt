@@ -172,7 +172,7 @@ fun NewOrderAlertDialog(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = order.customerName,
+                                text = order.customerName.ifBlank { "Customer" },
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.bodyLarge
                             )

@@ -24,6 +24,7 @@ fun OsmMapView(
     isPicker: Boolean = false,
     markerTitle: String = "Location",
     onLocationPicked: ((lat: Double, lng: Double) -> Unit)? = null,
+    centerTrigger: Any? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -43,6 +44,7 @@ fun OsmMapView(
                 controller.setZoom(zoomLevel)
                 val startPoint = GeoPoint(latitude, longitude)
                 controller.setCenter(startPoint)
+                tag = centerTrigger
 
                 val marker = Marker(this).apply {
                     position = startPoint
@@ -76,6 +78,11 @@ fun OsmMapView(
             val marker = mapView.overlays.filterIsInstance<Marker>().firstOrNull()
             marker?.position = point
             marker?.title = markerTitle
+            if (centerTrigger != null && mapView.tag != centerTrigger) {
+                mapView.tag = centerTrigger
+                mapView.controller.setZoom(zoomLevel)
+                mapView.controller.setCenter(point)
+            }
             mapView.invalidate()
         },
         modifier = modifier

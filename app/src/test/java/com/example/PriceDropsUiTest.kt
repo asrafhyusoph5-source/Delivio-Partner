@@ -263,13 +263,13 @@ class PriceDropsUiTest {
     }
 
     @Test
-    fun productEditScreen_livePercentAndAutoEndSaleWhenRegularPriceLowered() {
+    fun productEditScreen_hidesPriceDropSection_preservesSaleFieldsAndAutoEndsWhenRegularPriceLowered() {
         val existingOnSale = MenuItem(
             id = "edit_sale",
             name = "Matcha Drink",
             price = 150.0,
             salePrice = 100.0,
-            saleStartsAt = null,
+            saleStartsAt = 1_690_000_000_000L,
             saleEndsAt = 1_800_000_000_000L,
             saleActive = true,
             categoryId = "drinks",
@@ -300,25 +300,36 @@ class PriceDropsUiTest {
             }
         }
 
-        // Initial discount for 150 -> 100 is -33%
-        composeRule.onNodeWithTag("product_edit_sale_pct").performScrollTo().assertTextContains("-33%")
+        // Price drop editor section is removed from Add / Edit Product
+        assertEquals(0, composeRule.onAllNodesWithTag("product_edit_sale_switch").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("product_edit_sale_price_input").fetchSemanticsNodes().size)
 
-        // Edit sale price to 60 -> live discount updates to -60%
-        composeRule.onNodeWithTag("product_edit_sale_price_input").performScrollTo().performTextReplacement("60")
+        // Raising regular price keeps all sale fields intact
+        composeRule.onNodeWithTag("menu_item_price_input").performScrollTo().performTextReplacement("200")
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("product_edit_sale_pct").assertTextContains("-60%")
+        assertEquals(0, composeRule.onAllNodesWithTag("sale_auto_end_warning").fetchSemanticsNodes().size)
 
-        // Now lower regular price below active sale price (60 -> set regular price to 50)
-        composeRule.onNodeWithTag("menu_item_price_input").performScrollTo().performTextReplacement("50")
+        composeRule.onNodeWithTag("save_menu_item_btn").assertIsEnabled().performClick()
+        composeRule.waitForIdle()
+        assertNotNull(savedItem)
+        assertEquals(200.0, savedItem!!.price, 0.001)
+        assertTrue(savedItem!!.saleActive)
+        assertEquals(100.0, savedItem!!.salePrice!!, 0.001)
+        assertEquals(1_690_000_000_000L, savedItem!!.saleStartsAt)
+        assertEquals(1_800_000_000_000L, savedItem!!.saleEndsAt)
+        assertEquals(null, noticeText)
+
+        // Lowering regular price <= active sale price (100 -> set regular price to 90) ends the sale and notifies
+        savedItem = null
+        composeRule.onNodeWithTag("menu_item_price_input").performScrollTo().performTextReplacement("90")
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("sale_auto_end_warning").performScrollTo().assertIsDisplayed()
 
-        // Tap Save Product -> saves regular price 50, ends sale, clears timestamps, and notifies merchant
         composeRule.onNodeWithTag("save_menu_item_btn").assertIsEnabled().performClick()
         composeRule.waitForIdle()
 
         assertNotNull(savedItem)
-        assertEquals(50.0, savedItem!!.price, 0.001)
+        assertEquals(90.0, savedItem!!.price, 0.001)
         assertFalse(savedItem!!.saleActive)
         assertNull(savedItem!!.saleStartsAt)
         assertNull(savedItem!!.saleEndsAt)

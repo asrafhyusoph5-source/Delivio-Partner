@@ -125,6 +125,7 @@ class OutletsPinSessionManager(
     }
 
     fun resetSession() {
+        currentOwnerUid = ""
         unlockedUntilMs = 0L
         backgroundStartedAtMs = 0L
         wrongAttempts = 0
@@ -223,7 +224,7 @@ class OutletsPinSessionManager(
             prefs.edit()
                 .putInt("outlets_pin_wrong_$currentOwnerUid", wrongAttempts)
                 .putLong("outlets_pin_lock_$currentOwnerUid", lockedOutUntilMs)
-                .apply()
+                .commit()
         }
     }
 }

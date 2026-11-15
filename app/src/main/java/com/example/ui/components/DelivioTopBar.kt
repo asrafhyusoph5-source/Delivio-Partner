@@ -43,6 +43,7 @@ fun DelivioTopBar(
     isServiceLocked: Boolean = false,
     serviceLockMessage: String? = null,
     isMultiOutlet: Boolean = false,
+    otherOutletsNewOrdersCount: Int = 0,
     onOutletClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -111,6 +112,16 @@ fun DelivioTopBar(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                                 ) {
+                                    if (otherOutletsNewOrdersCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(7.dp)
+                                                .clip(CircleShape)
+                                                .background(StatusClosedRed)
+                                                .testTag("topbar_outlet_red_dot")
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
                                     Text(
                                         text = settings.branchCode.ifBlank { "Switch" },
                                         fontSize = 10.sp,

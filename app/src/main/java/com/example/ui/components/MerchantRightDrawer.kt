@@ -3,7 +3,6 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -77,7 +76,6 @@ fun MerchantRightDrawer(
     val customColors = LocalDelivioColors.current
     val density = LocalDensity.current
     val effectiveOpen = BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
-    val isDark = isSystemInDarkTheme()
 
     Surface(
         modifier = modifier
@@ -386,14 +384,6 @@ fun MerchantRightDrawer(
                     modifier = Modifier.testTag("drawer_item_dashboard")
                 )
 
-                // Reports
-                DrawerListItem(
-                    icon = Icons.Default.BarChart,
-                    title = "Reports",
-                    onClick = onOpenReports,
-                    modifier = Modifier.testTag("drawer_item_reports")
-                )
-
                 // Vouchers
                 DrawerListItem(
                     icon = Icons.Default.ConfirmationNumber,
@@ -453,22 +443,13 @@ fun MerchantRightDrawer(
 
 
 
-                if (isMultiOutlet) {
-                    DrawerListItem(
-                        icon = Icons.Default.Store,
-                        title = "Outlets",
-                        badgeText = if (otherOutletsNewOrdersCount > 0) "$otherOutletsNewOrdersCount" else null,
-                        badgeColor = MaterialTheme.colorScheme.error,
-                        badgeTag = "drawer_outlets_badge",
-                        onClick = onOpenOutlets,
-                        modifier = Modifier.testTag("drawer_item_outlets")
-                    )
-                }
-
-                // Settings
+                // Settings (shows red dot when other outlets have new orders; tapping dot opens Settings > Outlets)
                 DrawerListItem(
                     icon = Icons.Default.Settings,
                     title = "Settings",
+                    showRedDot = isMultiOutlet && otherOutletsNewOrdersCount > 0,
+                    redDotTag = "drawer_settings_outlets_dot",
+                    onRedDotClick = onOpenOutlets,
                     onClick = onOpenSettings,
                     modifier = Modifier.testTag("drawer_item_settings")
                 )
@@ -628,6 +609,9 @@ private fun DrawerListItem(
     badgeText: String? = null,
     badgeColor: Color = MaterialTheme.colorScheme.primary,
     badgeTag: String? = null,
+    showRedDot: Boolean = false,
+    redDotTag: String? = null,
+    onRedDotClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -651,6 +635,24 @@ private fun DrawerListItem(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f)
         )
+        if (showRedDot) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .defaultMinSize(minWidth = 32.dp, minHeight = 32.dp)
+                    .clip(CircleShape)
+                    .then(if (onRedDotClick != null) Modifier.clickable(onClick = onRedDotClick) else Modifier)
+                    .then(if (redDotTag != null) Modifier.testTag(redDotTag) else Modifier)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(StatusClosedRed)
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+        }
         if (badgeText != null) {
             Surface(
                 shape = RoundedCornerShape(10.dp),

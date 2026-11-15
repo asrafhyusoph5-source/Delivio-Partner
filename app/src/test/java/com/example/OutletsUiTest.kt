@@ -97,23 +97,36 @@ class OutletsUiTest {
     }
 
     @Test
-    fun multiOutlet_showsTopBarChip_DrawerOutletsRow_AndLockedStoreProfileFields() {
+    fun multiOutlet_showsTopBarChipWithRedDot_andTriggersClick() {
+        var otherCount by mutableStateOf(2)
+        var chipClicked = false
         composeRule.setContent {
             DelivioPartnerTheme(darkTheme = false) {
                 DelivioTopBar(
                     settings = outletRizal,
                     onToggleOpen = {},
-                    isMultiOutlet = true
+                    isMultiOutlet = true,
+                    otherOutletsNewOrdersCount = otherCount,
+                    onOutletClick = { chipClicked = true }
                 )
             }
         }
         composeRule.onNodeWithText("Jollibee - Palawan Rizal").assertIsDisplayed()
         composeRule.onNodeWithTag("topbar_outlet_chip").assertIsDisplayed()
+        composeRule.onNodeWithTag("topbar_outlet_red_dot", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("topbar_outlet_chip").performClick()
+        assertTrue(chipClicked)
+
+        otherCount = 0
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("topbar_outlet_red_dot", useUnmergedTree = true).fetchSemanticsNodes().size)
     }
 
     @Test
-    fun multiOutlet_drawerShowsOutletsRowWithOtherBadge_singleOutletHidesIt() {
+    fun drawer_hidesOutletsAndDuplicateReportsRows_showsSettingsRedDotOnlyWhenMultiOutlet() {
         var multiOutlet by mutableStateOf(true)
+        var redDotClicked = false
         composeRule.setContent {
             DelivioPartnerTheme(darkTheme = false) {
                 MerchantRightDrawer(
@@ -140,23 +153,29 @@ class OutletsUiTest {
                     onOpenHelp = {},
                     onLogout = {},
                     isMultiOutlet = multiOutlet,
-                    otherOutletsNewOrdersCount = 3
+                    otherOutletsNewOrdersCount = 3,
+                    onOpenOutlets = { redDotClicked = true }
                 )
             }
         }
         composeRule.onNodeWithTag("drawer_branch_code_chip", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_item_outlets").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_outlets_badge", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tile_reports").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("drawer_item_reports").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("drawer_item_outlets").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("drawer_settings_outlets_dot", useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        assertTrue(redDotClicked)
 
         multiOutlet = false
         composeRule.waitForIdle()
-        assertEquals(0, composeRule.onAllNodesWithTag("drawer_item_outlets").fetchSemanticsNodes().size)
         assertEquals(0, composeRule.onAllNodesWithTag("drawer_branch_code_chip", useUnmergedTree = true).fetchSemanticsNodes().size)
-        assertEquals(0, composeRule.onAllNodesWithTag("drawer_outlets_badge", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("drawer_settings_outlets_dot", useUnmergedTree = true).fetchSemanticsNodes().size)
     }
 
     @Test
-    fun storeProfile_showsLockedBranchNameAndCode_andSettingsShowsChangePinOnlyForMultiOutlet() {
+    fun storeProfile_showsLockedBranchNameAndCode_andHidesDarkModeSwitch() {
         composeRule.setContent {
             DelivioPartnerTheme(darkTheme = false) {
                 StoreProfileScreen(
@@ -171,20 +190,38 @@ class OutletsUiTest {
         composeRule.onAllNodesWithText("Only the admin can change these").fetchSemanticsNodes().let {
             assertTrue(it.size >= 2)
         }
+        assertEquals(0, composeRule.onAllNodesWithTag("dark_mode_switch").fetchSemanticsNodes().size)
     }
 
     @Test
-    fun settingsScreen_hidesSecuritySectionWhenSingleOutlet_showsWhenMultiOutlet() {
+    fun settingsScreen_showsOutletsFirstWithoutDarkModeWhenMultiOutlet_hidesWhenSingleOutlet() {
+        var multi by mutableStateOf(true)
+        var outletsOpened = false
         composeRule.setContent {
             DelivioPartnerTheme(darkTheme = false) {
                 SettingsScreen(
                     settings = outletRizal,
-                    showSecurityPinOption = true,
+                    isMultiOutlet = multi,
+                    otherOutletsNewOrdersCount = 2,
+                    onOpenOutlets = { outletsOpened = true },
+                    showSecurityPinOption = multi,
                     onBack = {}
                 )
             }
         }
+        composeRule.onNodeWithTag("settings_outlets_header").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_outlets_row").assertIsDisplayed()
+        composeRule.onNodeWithText("Managing: Jollibee - Palawan Rizal").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_outlets_red_dot", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_outlets_row").performClick()
+        assertTrue(outletsOpened)
         composeRule.onNodeWithTag("settings_change_pin_row").performScrollTo().assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("settings_dark_mode_switch").fetchSemanticsNodes().size)
+
+        multi = false
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("settings_outlets_row").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("settings_change_pin_row").fetchSemanticsNodes().size)
     }
 
     @Test
@@ -236,6 +273,44 @@ class OutletsUiTest {
         }
         composeRule.onNodeWithTag("pin_lockout_message").assertIsDisplayed()
         composeRule.onNodeWithTag("pin_enter_submit_btn").assertIsNotEnabled()
+    }
+
+    @Test
+    fun outletsPinDialog_numericKeypadEntersDigits_showsTriesLeftAndForgotPin() {
+        var forgotClicked = false
+        var enteredPin: String? = null
+        composeRule.setContent {
+            DelivioPartnerTheme(darkTheme = false) {
+                OutletsPinDialog(
+                    mode = PinModalMode.ENTER,
+                    isLockedOutInitially = false,
+                    initialLockoutSeconds = 0L,
+                    onCheckLockoutSeconds = { 0L },
+                    onCreatePin = { _, _, _ -> },
+                    onEnterPin = { pin ->
+                        enteredPin = pin
+                        PinVerifyResult.WrongPin(3)
+                    },
+                    onForgotPinClick = { forgotClicked = true },
+                    onVerifyPasswordReset = { _, _ -> },
+                    onChangePin = { _, _, _, _ -> },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeRule.onNodeWithTag("pin_dots_row").assertIsDisplayed()
+        composeRule.onNodeWithTag("pin_key_1").performClick()
+        composeRule.onNodeWithTag("pin_key_2").performClick()
+        composeRule.onNodeWithTag("pin_key_3").performClick()
+        composeRule.onNodeWithTag("pin_key_4").performClick()
+        composeRule.onNodeWithTag("pin_enter_submit_btn").performClick()
+
+        assertEquals("1234", enteredPin)
+        composeRule.onNodeWithTag("pin_dialog_error").assertIsDisplayed()
+        composeRule.onNodeWithText("Wrong PIN. 3 tries left").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("pin_forgot_btn").performClick()
+        assertTrue(forgotClicked)
     }
 
     @Test
@@ -462,5 +537,39 @@ class OutletsUiTest {
         }
         composeRule.onNodeWithTag("reports_outlets_filter_chip").assertIsDisplayed()
         composeRule.onNodeWithTag("reports_per_outlet_breakdown").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun pinSessionManager_lockoutPersistsAcrossRestartAndRelogin() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val prefs = ctx.getSharedPreferences("test_pin_lockout", android.content.Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+
+        var now = 2_000_000L
+        val salt = "salt_xyz"
+        val hash = com.example.util.OutletsPinHelper.hashPin(salt, "2580")
+
+        val mgr1 = com.example.util.OutletsPinSessionManager(prefs = prefs, clock = { now })
+        mgr1.bindOwner("owner_abc")
+        repeat(4) {
+            assertTrue(mgr1.verifyPin("0000", salt, hash) is PinVerifyResult.WrongPin)
+        }
+        val fifth = mgr1.verifyPin("0000", salt, hash)
+        assertTrue(fifth is PinVerifyResult.LockedOut)
+        assertTrue(mgr1.isLockedOut())
+
+        // Simulate logout then login
+        mgr1.resetSession()
+        mgr1.bindOwner("owner_abc")
+        assertTrue(mgr1.isLockedOut())
+        assertTrue(mgr1.verifyPin("2580", salt, hash) is PinVerifyResult.LockedOut)
+
+        // Simulate app process restart with new manager instance
+        now += 60_000L // 1 minute later (still locked for ~4 min)
+        val mgr2 = com.example.util.OutletsPinSessionManager(prefs = prefs, clock = { now })
+        mgr2.bindOwner("owner_abc")
+        assertTrue(mgr2.isLockedOut())
+        assertTrue(mgr2.remainingLockoutSeconds() in 239L..240L)
+        assertTrue(mgr2.verifyPin("2580", salt, hash) is PinVerifyResult.LockedOut)
     }
 }

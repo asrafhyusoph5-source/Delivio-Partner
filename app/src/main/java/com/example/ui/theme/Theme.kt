@@ -36,50 +36,30 @@ val DelivioShapes = Shapes(
 @Composable
 fun DelivioPartnerTheme(
     themeAccentHex: String = "#FFC107",
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val accentColor = parseHexColor(themeAccentHex, DelivioYellow)
     val onAccentColor = getContrastTextColor(accentColor)
-    val accentTint = accentColor.copy(alpha = if (darkTheme) 0.22f else 0.15f)
+    val accentTint = accentColor.copy(alpha = 0.15f)
 
-    val colorScheme = if (darkTheme) {
-        darkColorScheme(
-            primary = accentColor,
-            onPrimary = onAccentColor,
-            primaryContainer = accentColor.copy(alpha = 0.25f),
-            onPrimaryContainer = accentColor,
-            secondary = accentColor,
-            onSecondary = onAccentColor,
-            background = DarkBackground,
-            onBackground = Color(0xFFEEEEEE),
-            surface = DarkSurface,
-            onSurface = Color(0xFFF5F5F5),
-            surfaceVariant = DarkSurfaceVariant,
-            onSurfaceVariant = Color(0xFFB0B0B0),
-            outline = DarkOutline,
-            error = StatusClosedRed,
-            onError = Color.White
-        )
-    } else {
-        lightColorScheme(
-            primary = accentColor,
-            onPrimary = onAccentColor,
-            primaryContainer = accentTint,
-            onPrimaryContainer = if (accentColor == DelivioYellow) Color(0xFF785400) else accentColor,
-            secondary = accentColor,
-            onSecondary = onAccentColor,
-            background = LightBackground,
-            onBackground = Color(0xFF1F2937),
-            surface = LightSurface,
-            onSurface = Color(0xFF111827),
-            surfaceVariant = LightSurfaceVariant,
-            onSurfaceVariant = Color(0xFF4B5563),
-            outline = LightOutline,
-            error = StatusClosedRed,
-            onError = Color.White
-        )
-    }
+    val colorScheme = lightColorScheme(
+        primary = accentColor,
+        onPrimary = onAccentColor,
+        primaryContainer = accentTint,
+        onPrimaryContainer = if (accentColor == DelivioYellow) Color(0xFF785400) else accentColor,
+        secondary = accentColor,
+        onSecondary = onAccentColor,
+        background = LightBackground,
+        onBackground = Color(0xFF1F2937),
+        surface = LightSurface,
+        onSurface = Color(0xFF111827),
+        surfaceVariant = LightSurfaceVariant,
+        onSurfaceVariant = Color(0xFF4B5563),
+        outline = LightOutline,
+        error = StatusClosedRed,
+        onError = Color.White
+    )
 
     val customColors = DelivioCustomColors(
         accent = accentColor,

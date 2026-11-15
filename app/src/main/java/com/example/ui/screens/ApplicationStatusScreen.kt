@@ -34,7 +34,6 @@ fun ApplicationStatusScreen(
     var phone by remember { mutableStateOf(application.phone) }
     var address by remember { mutableStateOf(application.address) }
     var logoUrl by remember { mutableStateOf(application.logoUrl) }
-    var storePhotoUrl by remember { mutableStateOf(application.storePhotoUrl) }
     var permitUrl by remember { mutableStateOf(application.permitUrl) }
     var dtiSecUrl by remember { mutableStateOf(application.dtiSecUrl) }
     var barangayUrl by remember { mutableStateOf(application.barangayUrl) }
@@ -204,6 +203,9 @@ fun ApplicationStatusScreen(
                     DetailRow("Email", application.email)
                     DetailRow("Phone", application.phone)
                     DetailRow("Business Type", if (application.businessType == "food") "Food & Dining" else "Convenience")
+                    if (application.city.isNotBlank()) {
+                        DetailRow("City / Municipality", application.city)
+                    }
                     DetailRow("Address", application.address)
                 }
             }
@@ -268,8 +270,7 @@ fun ApplicationStatusScreen(
                                     address = address,
                                     permitUrl = permitUrl,
                                     dtiSecUrl = dtiSecUrl,
-                                    logoUrl = logoUrl,
-                                    storePhotoUrl = storePhotoUrl
+                                    logoUrl = logoUrl
                                 )
                                 onResubmit(updated)
                                 isEditing = false

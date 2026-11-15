@@ -65,6 +65,7 @@ fun isValidPhilippinePhone(phone: String): Boolean {
 fun ManualRiderBookingSheet(
     settings: MerchantSettings,
     isSubmitting: Boolean = false,
+    errorMessage: String? = null,
     onBookRider: (
         recipientName: String,
         recipientPhone: String,
@@ -95,7 +96,7 @@ fun ManualRiderBookingSheet(
     var dropoffArea by remember { mutableStateOf("") }
     var whatToDeliver by remember { mutableStateOf("") }
     var relatedOrderNumber by remember { mutableStateOf("") }
-    var codAmountText by remember { mutableStateOf("") }
+    var codAmountText by remember { mutableStateOf("0") }
     var riderNote by remember { mutableStateOf("") }
 
     // Coordinates: Pickup (Store) and Dropoff (Recipient)
@@ -526,17 +527,19 @@ fun ManualRiderBookingSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Cash to collect from recipient (optional amount)
+                // Cash to collect from the recipient (P)
                 OutlinedTextField(
                     value = codAmountText,
                     onValueChange = { codAmountText = it },
-                    label = { Text("Cash to collect from recipient (optional)") },
-                    placeholder = { Text("0.00") },
+                    label = { Text("Cash to collect from the recipient (P)") },
+                    placeholder = { Text("0") },
                     leadingIcon = { Text("₱", fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 12.dp)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("cash_to_collect_input")
                 )
 
                 // Note for rider
@@ -676,7 +679,25 @@ fun ManualRiderBookingSheet(
                 Spacer(modifier = Modifier.height(navBarBottomDp + 96.dp))
             }
 
-            // 6. BOTTOM BAR WITH "BOOK RIDER" BUTTON
+            // 6. BOTTOM BAR WITH ERROR BANNER (WITH RETRY) & "BOOK RIDER" BUTTON
+            val submitBooking = {
+                val cod = codAmountText.trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                onBookRider(
+                    recipientName.trim(),
+                    recipientPhone.trim(),
+                    deliveryAddress.trim(),
+                    dropoffArea.ifBlank { "Drop-off Location" },
+                    dropoffLat,
+                    dropoffLng,
+                    whatToDeliver.trim(),
+                    relatedOrderNumber.trim(),
+                    cod,
+                    riderNote.trim(),
+                    distanceKm,
+                    deliveryFee,
+                    serviceFee
+                )
+            }
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp,
@@ -688,27 +709,60 @@ fun ManualRiderBookingSheet(
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .padding(horizontal = 20.dp)
-                        .padding(top = 12.dp, bottom = 16.dp)
+                        .padding(top = 12.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (!errorMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("manual_booking_error_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ErrorOutline,
+                                        contentDescription = "Error",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = errorMessage,
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = submitBooking,
+                                    enabled = !isSubmitting,
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    ),
+                                    modifier = Modifier.testTag("manual_booking_retry_btn")
+                                ) {
+                                    Text("Retry", fontWeight = FontWeight.ExtraBold)
+                                }
+                            }
+                        }
+                    }
+
                     Button(
-                        onClick = {
-                            val cod = codAmountText.toDoubleOrNull() ?: 0.0
-                            onBookRider(
-                                recipientName.trim(),
-                                recipientPhone.trim(),
-                                deliveryAddress.trim(),
-                                dropoffArea.ifBlank { "Drop-off Location" },
-                                dropoffLat,
-                                dropoffLng,
-                                whatToDeliver.trim(),
-                                relatedOrderNumber.trim(),
-                                cod,
-                                riderNote.trim(),
-                                distanceKm,
-                                deliveryFee,
-                                serviceFee
-                            )
-                        },
+                        onClick = submitBooking,
                         enabled = isFormComplete && !isSubmitting,
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(

@@ -3,7 +3,6 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -32,17 +31,20 @@ import com.example.data.model.MerchantSettings
 import com.example.data.model.StaffMember
 import com.example.ui.theme.DelivioYellow
 import com.example.ui.theme.LocalDelivioColors
+import com.example.ui.theme.StatusClosedRed
 import com.example.util.SoundVibrationHelper
 
 /**
  * Redesigned Settings screen with grouped cards and small grey section titles:
+ * - OUTLETS (multi-outlet only): Currently managing outlet row + new order red dot
  * - STORE: Business hours, Business type (locked chip + request change / pending chip),
  *          Store map location (pickup point), Staff accounts & roles
  * - ORDERS: Default prep time chips (10m, 15m, 20m, 30m; selected is yellow),
  *           New order sound switch with "Test" link, Haptic vibration alert switch
  * - PRINTER: Bluetooth receipt printer (scan, pair, test print),
  *            Receipt paper width chips (58 mm and 80 mm)
- * - APPEARANCE: Dark Mode toggle
+ * - DATA & STORAGE: Delete expired chats
+ * - SECURITY (multi-outlet only): Change Outlets PIN
  *
  * All switches use the same style: yellow track with a dark thumb when on, grey track when off.
  * Selected chips are always yellow with dark text.
@@ -70,8 +72,10 @@ fun SettingsScreen(
     onOpenPrinter: () -> Unit = {},
     onOpenMapLocation: () -> Unit = {},
     onOpenStaffDialog: () -> Unit = {},
-    onToggleDarkMode: (Boolean) -> Unit = {},
     onCleanupExpiredChats: ((Int) -> Unit) -> Unit = { it(0) },
+    isMultiOutlet: Boolean = false,
+    otherOutletsNewOrdersCount: Int = 0,
+    onOpenOutlets: () -> Unit = {},
     showSecurityPinOption: Boolean = false,
     onChangeOutletsPin: () -> Unit = {},
     onBack: () -> Unit,
@@ -81,7 +85,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
     val density = LocalDensity.current
-    val isDark = isSystemInDarkTheme() || settings.isDarkMode
 
     // Dialog state for Business Type Change Request
     var showTypeChangeDialog by remember { mutableStateOf(false) }
@@ -92,7 +95,7 @@ fun SettingsScreen(
         checkedTrackColor = DelivioYellow,
         checkedBorderColor = Color.Transparent,
         uncheckedThumbColor = Color(0xFF757575),
-        uncheckedTrackColor = if (isDark) Color(0xFF383838) else Color(0xFFE0E0E0),
+        uncheckedTrackColor = Color(0xFFE0E0E0),
         uncheckedBorderColor = Color.Transparent
     )
 
@@ -134,6 +137,66 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // ==============================================================
+            // 0. OUTLETS SECTION (multi-outlet owners only)
+            // ==============================================================
+            if (isMultiOutlet) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "OUTLETS",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .testTag("settings_outlets_header")
+                    )
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_outlets_card")
+                    ) {
+                        val managingDisplay = settings.displayName.ifBlank {
+                            settings.storeName.ifBlank { "Current Outlet" }
+                        }
+                        SettingsRow(
+                            icon = Icons.Default.Store,
+                            title = "Outlets",
+                            subtitle = "Managing: $managingDisplay",
+                            onClick = onOpenOutlets,
+                            trailingContent = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (otherOutletsNewOrdersCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(9.dp)
+                                                .clip(CircleShape)
+                                                .background(StatusClosedRed)
+                                                .testTag("settings_outlets_red_dot")
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.ChevronRight,
+                                        contentDescription = "Open Outlets",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("settings_outlets_row")
+                        )
+                    }
+                }
+            }
+
             // ==============================================================
             // 1. STORE SECTION
             // ==============================================================
@@ -649,43 +712,6 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("settings_paper_width_row")
                         )
                     }
-                }
-            }
-
-            // ==============================================================
-            // 4. APPEARANCE SECTION
-            // ==============================================================
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "APPEARANCE",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp)
-                )
-
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("settings_appearance_card")
-                ) {
-                    SettingsRow(
-                        icon = Icons.Default.DarkMode,
-                        title = "Dark Mode",
-                        subtitle = "High-contrast #121212 merchant palette",
-                        trailingContent = {
-                            Switch(
-                                checked = settings.isDarkMode,
-                                onCheckedChange = { onToggleDarkMode(it) },
-                                colors = switchColors,
-                                modifier = Modifier.testTag("settings_dark_mode_switch")
-                            )
-                        },
-                        modifier = Modifier.testTag("settings_dark_mode_row")
-                    )
                 }
             }
 

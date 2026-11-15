@@ -22,7 +22,8 @@ data class NominatimResult(
     val displayName: String,
     val latitude: Double,
     val longitude: Double,
-    val area: String = ""
+    val area: String = "",
+    val formattedAddress: String = ""
 )
 
 data class ReverseGeocodeResult(
@@ -38,6 +39,82 @@ object OsmRouteHelper {
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
             .build()
+    }
+
+    private fun JSONObject?.optTrimmedString(key: String): String? {
+        if (this == null || isNull(key)) return null
+        val value = optString(key, "").trim()
+        return value.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Builds an address string from geocoder parts in order:
+     * 1. road and house number
+     * 2. barangay or suburb or neighbourhood
+     * 3. city or town or municipality
+     * 4. province
+     * Removes empty parts and repeated parts (ignoring capitals), keeps at most 4,
+     * and falls back to a trimmed display name only when nothing else exists.
+     */
+    fun buildGeocoderAddress(
+        road: String? = null,
+        houseNumber: String? = null,
+        barangay: String? = null,
+        suburb: String? = null,
+        neighbourhood: String? = null,
+        city: String? = null,
+        town: String? = null,
+        municipality: String? = null,
+        province: String? = null,
+        displayName: String? = null
+    ): String {
+        val cleanRoad = road?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanHouseNumber = houseNumber?.trim()?.takeIf { it.isNotEmpty() }
+        val streetPart = when {
+            cleanHouseNumber != null && cleanRoad != null -> {
+                if (cleanHouseNumber.equals(cleanRoad, ignoreCase = true)) cleanRoad
+                else "$cleanHouseNumber $cleanRoad"
+            }
+            cleanRoad != null -> cleanRoad
+            cleanHouseNumber != null -> cleanHouseNumber
+            else -> null
+        }
+
+        val localityPart = barangay?.trim()?.takeIf { it.isNotEmpty() }
+            ?: suburb?.trim()?.takeIf { it.isNotEmpty() }
+            ?: neighbourhood?.trim()?.takeIf { it.isNotEmpty() }
+
+        val cityPart = city?.trim()?.takeIf { it.isNotEmpty() }
+            ?: town?.trim()?.takeIf { it.isNotEmpty() }
+            ?: municipality?.trim()?.takeIf { it.isNotEmpty() }
+
+        val provincePart = province?.trim()?.takeIf { it.isNotEmpty() }
+
+        val seen = HashSet<String>()
+        val parts = listOfNotNull(streetPart, localityPart, cityPart, provincePart)
+            .filter { seen.add(it.lowercase(java.util.Locale.ROOT)) }
+            .take(4)
+
+        return if (parts.isNotEmpty()) {
+            parts.joinToString(", ")
+        } else {
+            displayName?.trim().orEmpty()
+        }
+    }
+
+    fun formatGeocoderAddress(addressObj: JSONObject?, displayName: String?): String {
+        return buildGeocoderAddress(
+            road = addressObj.optTrimmedString("road"),
+            houseNumber = addressObj.optTrimmedString("house_number"),
+            barangay = addressObj.optTrimmedString("barangay"),
+            suburb = addressObj.optTrimmedString("suburb"),
+            neighbourhood = addressObj.optTrimmedString("neighbourhood"),
+            city = addressObj.optTrimmedString("city"),
+            town = addressObj.optTrimmedString("town"),
+            municipality = addressObj.optTrimmedString("municipality"),
+            province = addressObj.optTrimmedString("province"),
+            displayName = displayName
+        )
     }
 
     fun calculateStraightLineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -135,21 +212,24 @@ object OsmRouteHelper {
             val results = mutableListOf<NominatimResult>()
             for (i in 0 until array.length()) {
                 val item = array.getJSONObject(i)
-                val displayName = item.optString("display_name", "")
+                val displayName = if (item.isNull("display_name")) "" else item.optString("display_name", "")
                 val lat = item.optDouble("lat", 0.0)
                 val lon = item.optDouble("lon", 0.0)
                 val addrObj = item.optJSONObject("address")
-                val areaName = addrObj?.optString("suburb")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("neighbourhood")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("quarter")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("residential")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("city_district")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("city")?.takeIf { it.isNotBlank() }
-                    ?: addrObj?.optString("town")?.takeIf { it.isNotBlank() }
+                val areaName = addrObj.optTrimmedString("barangay")
+                    ?: addrObj.optTrimmedString("suburb")
+                    ?: addrObj.optTrimmedString("neighbourhood")
+                    ?: addrObj.optTrimmedString("quarter")
+                    ?: addrObj.optTrimmedString("residential")
+                    ?: addrObj.optTrimmedString("city_district")
+                    ?: addrObj.optTrimmedString("city")
+                    ?: addrObj.optTrimmedString("town")
+                    ?: addrObj.optTrimmedString("municipality")
                     ?: ""
+                val formatted = formatGeocoderAddress(addrObj, displayName)
 
                 if (lat != 0.0 && lon != 0.0) {
-                    results.add(NominatimResult(displayName, lat, lon, areaName))
+                    results.add(NominatimResult(displayName.trim(), lat, lon, areaName, formatted))
                 }
             }
             results
@@ -171,38 +251,35 @@ object OsmRouteHelper {
             val response = httpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 return@withContext ReverseGeocodeResult(
-                    formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                    formattedAddress = "Location (%.5f, %.5f)".format(java.util.Locale.US, lat, lng),
                     area = "Custom Pin"
                 )
             }
 
             val body = response.body?.string() ?: return@withContext ReverseGeocodeResult(
-                formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                formattedAddress = "Location (%.5f, %.5f)".format(java.util.Locale.US, lat, lng),
                 area = "Custom Pin"
             )
             val json = JSONObject(body)
-            val displayName = json.optString("display_name", "")
+            val displayName = if (json.isNull("display_name")) "" else json.optString("display_name", "")
             val addrObj = json.optJSONObject("address")
 
-            val suburb = addrObj?.optString("suburb")?.takeIf { it.isNotBlank() }
-            val neighbourhood = addrObj?.optString("neighbourhood")?.takeIf { it.isNotBlank() }
-            val quarter = addrObj?.optString("quarter")?.takeIf { it.isNotBlank() }
-            val residential = addrObj?.optString("residential")?.takeIf { it.isNotBlank() }
-            val cityDistrict = addrObj?.optString("city_district")?.takeIf { it.isNotBlank() }
-            val city = addrObj?.optString("city")?.takeIf { it.isNotBlank() }
-                ?: addrObj?.optString("town")?.takeIf { it.isNotBlank() }
-                ?: addrObj?.optString("municipality")?.takeIf { it.isNotBlank() }
+            val barangay = addrObj.optTrimmedString("barangay")
+            val suburb = addrObj.optTrimmedString("suburb")
+            val neighbourhood = addrObj.optTrimmedString("neighbourhood")
+            val quarter = addrObj.optTrimmedString("quarter")
+            val residential = addrObj.optTrimmedString("residential")
+            val cityDistrict = addrObj.optTrimmedString("city_district")
+            val city = addrObj.optTrimmedString("city")
+                ?: addrObj.optTrimmedString("town")
+                ?: addrObj.optTrimmedString("municipality")
                 ?: ""
 
-            val area = suburb ?: neighbourhood ?: quarter ?: residential ?: cityDistrict ?: city ?: "Selected Area"
+            val area = barangay ?: suburb ?: neighbourhood ?: quarter ?: residential ?: cityDistrict
+                ?: city.ifBlank { "Selected Area" }
 
-            val road = addrObj?.optString("road")?.takeIf { it.isNotBlank() }
-            val houseNum = addrObj?.optString("house_number")?.takeIf { it.isNotBlank() }
-            val formatted = when {
-                road != null && city.isNotBlank() -> if (houseNum != null) "$houseNum $road, $city" else "$road, $city"
-                displayName.isNotBlank() -> displayName
-                else -> "Location (%.5f, %.5f)".format(lat, lng)
-            }
+            val formatted = formatGeocoderAddress(addrObj, displayName)
+                .ifBlank { "Location (%.5f, %.5f)".format(java.util.Locale.US, lat, lng) }
 
             ReverseGeocodeResult(
                 formattedAddress = formatted,
@@ -212,7 +289,7 @@ object OsmRouteHelper {
         } catch (e: Exception) {
             Log.w("OsmRouteHelper", "Reverse geocode failed: ${e.localizedMessage}")
             ReverseGeocodeResult(
-                formattedAddress = "Location (%.5f, %.5f)".format(lat, lng),
+                formattedAddress = "Location (%.5f, %.5f)".format(java.util.Locale.US, lat, lng),
                 area = "Pinned Location"
             )
         }

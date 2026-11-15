@@ -47,6 +47,7 @@ fun RiderTrackingModal(
     onConfirmRequestRider: (distanceKm: Double, deliveryFee: Double, note: String, dropoffLat: Double?, dropoffLng: Double?, dropoffAddress: String?) -> Unit,
     onRetryRiderRequest: () -> Unit,
     onCancelRiderRequest: () -> Unit,
+    onExpireRiderRequest: () -> Unit = {},
     onOpenLocationPicker: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
@@ -116,18 +117,39 @@ fun RiderTrackingModal(
     }
 
     // Live elapsed timer for Searching state
-    var elapsedSeconds by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(riderRequest?.requestedAt) {
-        val requestedAt = riderRequest?.requestedAt
-        if (requestedAt != null) {
-            while (true) {
-                elapsedSeconds = (System.currentTimeMillis() - requestedAt) / 1000L
+    val searchStart = riderRequest?.effectiveSearchStartedAt ?: order.placedAtTimestamp
+    var elapsedSeconds by remember(order.id, searchStart) {
+        mutableLongStateOf(
+            if (searchStart > 0L) ((System.currentTimeMillis() - searchStart) / 1000L).coerceAtLeast(0L) else 0L
+        )
+    }
+    var expireDispatched by remember(order.id, searchStart) { mutableStateOf(false) }
+
+    LaunchedEffect(order.id, searchStart, riderRequest?.status) {
+        if (riderRequest?.isSearching == true && searchStart > 0L) {
+            while (riderRequest.isSearching) {
+                val now = System.currentTimeMillis()
+                val sec = ((now - searchStart) / 1000L).coerceAtLeast(0L)
+                elapsedSeconds = sec
+                if (order.isInstantRiderRequest && sec >= 300L && !expireDispatched) {
+                    expireDispatched = true
+                    onExpireRiderRequest()
+                }
                 kotlinx.coroutines.delay(1000L)
             }
         }
     }
     val elapsedMinutes = elapsedSeconds / 60
-    val showNoRiderYet = riderRequest?.isSearching == true && order.isNoRiderYet(System.currentTimeMillis())
+    val showInstantNoRiderYet = order.isInstantRiderRequest &&
+            riderRequest?.isSearching == true &&
+            elapsedSeconds in 90L until 300L
+    val showInstantExpired = order.isInstantRiderRequest &&
+            (riderRequest?.isExpired == true || (riderRequest?.isSearching == true && elapsedSeconds >= 300L))
+    val showNoRiderYet = if (order.isInstantRiderRequest) {
+        showInstantNoRiderYet
+    } else {
+        riderRequest?.isSearching == true && order.isNoRiderYet(System.currentTimeMillis())
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -420,16 +442,17 @@ fun RiderTrackingModal(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
-                                    Text(order.customerName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                    Text(order.customerPhone.ifBlank { "No phone provided" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(order.effectiveRecipientName.ifBlank { "Customer" }, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                    Text(order.effectiveRecipientPhone.ifBlank { "No phone provided" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
 
-                            if (order.customerPhone.isNotBlank()) {
+                            val callPhone = order.effectiveRecipientPhone
+                            if (callPhone.isNotBlank()) {
                                 IconButton(
                                     onClick = {
                                         val intent = Intent(Intent.ACTION_DIAL).apply {
-                                            data = Uri.parse("tel:${order.customerPhone}")
+                                            data = Uri.parse("tel:$callPhone")
                                         }
                                         context.startActivity(intent)
                                     },
@@ -462,22 +485,23 @@ fun RiderTrackingModal(
                             Text("$distanceKm km", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                         }
 
-                        if (deliveryRate != null && order.deliveryFee <= 0.0) {
+                        val rateVal = deliveryRate
+                        if (rateVal != null && order.deliveryFee <= 0.0) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Base Fare (incl. ${deliveryRate!!.includedKm} km):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(FormatUtils.formatCurrency(deliveryRate!!.baseFare), style = MaterialTheme.typography.bodySmall)
+                                Text("Base Fare (incl. ${rateVal.includedKm} km):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(FormatUtils.formatCurrency(rateVal.baseFare), style = MaterialTheme.typography.bodySmall)
                             }
-                            if (distanceKm > deliveryRate!!.includedKm) {
-                                val extraKm = distanceKm - deliveryRate!!.includedKm
+                            if (distanceKm > rateVal.includedKm) {
+                                val extraKm = distanceKm - rateVal.includedKm
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Extra Distance (${"%.1f".format(extraKm)} km @ ${FormatUtils.formatCurrency(deliveryRate!!.perKmRate)}/km):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(FormatUtils.formatCurrency(extraKm * deliveryRate!!.perKmRate), style = MaterialTheme.typography.bodySmall)
+                                    Text("Extra Distance (${"%.1f".format(extraKm)} km @ ${FormatUtils.formatCurrency(rateVal.perKmRate)}/km):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(FormatUtils.formatCurrency(extraKm * rateVal.perKmRate), style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                             Row(
@@ -485,7 +509,7 @@ fun RiderTrackingModal(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text("Service Fee:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(FormatUtils.formatCurrency(deliveryRate!!.serviceFee), style = MaterialTheme.typography.bodySmall)
+                                Text(FormatUtils.formatCurrency(rateVal.serviceFee), style = MaterialTheme.typography.bodySmall)
                             }
                         }
 
@@ -593,11 +617,20 @@ fun RiderTrackingModal(
                     }
 
                     // Live Status Badge
-                    val statusText = riderRequest.status
+                    val statusText = when {
+                        showInstantExpired -> "Expired"
+                        riderRequest.isSearching && order.isInstantRiderRequest && showInstantNoRiderYet -> "No rider yet"
+                        riderRequest.isOnTheWay || order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
+                        riderRequest.isArrived -> "Arrived at merchant"
+                        riderRequest.isPickedUp -> "Picked up"
+                        riderRequest.isDelivered || order.status == OrderStatus.DELIVERED -> "Delivered"
+                        else -> riderRequest.status
+                    }
                     val badgeColor = when (statusText.lowercase()) {
-                        "rider assigned", "assigned" -> customColors.accent
-                        "arrived at merchant", "arrived" -> StatusWarningAmber
-                        "picked up" -> StatusOpenGreen
+                        "rider assigned", "assigned", "on the way" -> customColors.accent
+                        "arrived at merchant", "arrived", "no rider yet" -> StatusWarningAmber
+                        "picked up", "delivered" -> StatusOpenGreen
+                        "expired", "cancelled" -> StatusClosedRed
                         else -> customColors.accent
                     }
                     Box(
@@ -639,8 +672,216 @@ fun RiderTrackingModal(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                if (riderRequest.isSearching) {
-                    // SEARCHING STATE CARD
+                if (showInstantExpired) {
+                    // EXPIRED STATE CARD (5 minutes elapsed with no acceptance)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("instant_rider_expired_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.TimerOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "Expired",
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 16.sp,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Text(
+                                            text = "No rider accepted within 5 minutes",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "05:00",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.testTag("rider_search_timer")
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onDismiss,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Close", fontWeight = FontWeight.Bold)
+                                }
+                                Button(
+                                    onClick = onRetryRiderRequest,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = customColors.accent,
+                                        contentColor = customColors.onAccent
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("try_again_rider_btn")
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Try again", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                } else if (riderRequest.isSearching && order.isInstantRiderRequest) {
+                    // INSTANT SEARCHING STATE CARD
+                    val alerts = riderRequest.alertsSent
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("instant_rider_searching_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (showInstantNoRiderYet) StatusWarningAmber.copy(alpha = 0.14f)
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (!showInstantNoRiderYet) {
+                                        CircularProgressIndicator(
+                                            color = customColors.accent,
+                                            modifier = Modifier.size(32.dp),
+                                            strokeWidth = 3.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(14.dp))
+                                        Column {
+                                            Text(
+                                                text = "Looking for a rider...",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 15.sp,
+                                                modifier = Modifier.testTag("looking_for_rider_text")
+                                            )
+                                            val subtitle = if (alerts != null) {
+                                                "Rider alerts sent: $alerts • ${riderRequest.radiusKm} km radius"
+                                            } else {
+                                                "Searching within ${riderRequest.radiusKm} km radius"
+                                            }
+                                            Text(
+                                                text = subtitle,
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = StatusWarningAmber,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(14.dp))
+                                        Column {
+                                            Text(
+                                                text = "No rider accepted yet",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 15.sp,
+                                                color = StatusWarningAmber,
+                                                modifier = Modifier.testTag("no_rider_accepted_yet_text")
+                                            )
+                                            val subtitle = if (alerts != null) {
+                                                "Rider alerts sent: $alerts • Tap Try again to widen radius"
+                                            } else {
+                                                "Tap Try again to widen the search radius"
+                                            }
+                                            Text(
+                                                text = subtitle,
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface
+                                ) {
+                                    Text(
+                                        text = FormatUtils.formatElapsedMmSs(elapsedSeconds),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp,
+                                        color = if (showInstantNoRiderYet) StatusWarningAmber else customColors.accent,
+                                        modifier = Modifier
+                                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                                            .testTag("rider_search_timer")
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onCancelRiderRequest,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("cancel_rider_request_btn")
+                                ) {
+                                    Text(
+                                        text = if (showInstantNoRiderYet) "Cancel" else "Cancel request",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                if (showInstantNoRiderYet) {
+                                    Button(
+                                        onClick = onRetryRiderRequest,
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = customColors.accent,
+                                            contentColor = customColors.onAccent
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("try_again_rider_btn")
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Try again", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (riderRequest.isSearching) {
+                    // REGULAR SEARCHING STATE CARD
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -707,7 +948,7 @@ fun RiderTrackingModal(
                                 }
                             }
 
-                            // Show Retry & Cancel request buttons if 5 min passed, or Cancel button
+                            // Show Retry & Cancel request buttons if threshold passed, or Cancel button
                             Spacer(modifier = Modifier.height(14.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -745,9 +986,20 @@ fun RiderTrackingModal(
                     val rider = riderRequest.rider ?: order.rider
                     val rName = order.riderName.ifBlank { rider?.name ?: "Assigned Rider" }
                     val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
+                    val rVehicle = order.effectiveRiderVehicle
+                    val rPlate = order.effectiveRiderPlate
+                    val liveStatus = when {
+                        riderRequest.isDelivered || order.status == OrderStatus.DELIVERED -> "Delivered"
+                        riderRequest.isPickedUp -> "Picked up"
+                        riderRequest.isArrived -> "Arrived at merchant"
+                        riderRequest.isOnTheWay || order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
+                        else -> riderRequest.status.ifBlank { "Rider assigned" }
+                    }
 
                     Card(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("assigned_rider_card"),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                         border = CardDefaults.outlinedCardBorder()
@@ -780,11 +1032,24 @@ fun RiderTrackingModal(
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
+                                    if (rPhone.isNotBlank()) {
+                                        Text(
+                                            text = rPhone,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    val vehicleLine = if (rPlate.isNotBlank()) "$rVehicle • $rPlate" else rVehicle
                                     Text(
-                                        text = "Status: ${riderRequest.status}",
+                                        text = vehicleLine,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = liveStatus,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = customColors.accent,
-                                        fontWeight = FontWeight.SemiBold
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
 

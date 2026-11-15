@@ -66,7 +66,7 @@ fun OrderDetailScreen(
             onDismissRequest = { showConfirmPickedUpDialog = false },
             title = { Text("Mark Order as Picked Up?") },
             text = {
-                Text("Confirm that customer \"${order.customerName}\" has picked up order ${order.formattedOrderNumber}. This will complete the order.")
+                Text("Confirm that customer \"${order.effectiveRecipientName.ifBlank { "Customer" }}\" has picked up order ${order.formattedOrderNumber}. This will complete the order.")
             },
             confirmButton = {
                 Button(
@@ -117,13 +117,28 @@ fun OrderDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             FulfillmentChip(order = order)
+                            if (order.isInstantRiderRequest) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFFEF3C7),
+                                    modifier = Modifier.testTag("detail_instant_chip")
+                                ) {
+                                    Text(
+                                        text = "INSTANT",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFFB45309),
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    )
+                                }
+                            } else if (!order.isPickUp) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                DeliveryOptionChip(deliveryOption = order.deliveryOption)
+                            }
                             if (order.isScheduled) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 ScheduledChip(order = order)
-                            }
-                            if (!order.isPickUp) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                DeliveryOptionChip(deliveryOption = order.deliveryOption)
                             }
                             if (order.isEdited) {
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -520,6 +535,8 @@ fun OrderDetailScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                val recName = order.effectiveRecipientName.ifBlank { "Customer" }
+                val recPhone = order.effectiveRecipientPhone
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -544,12 +561,12 @@ fun OrderDetailScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = order.customerName,
+                                    text = recName,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = order.customerPhone,
+                                    text = recPhone.ifBlank { "No phone provided" },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -568,21 +585,22 @@ fun OrderDetailScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                             }
 
-                            // Call Customer Button (enabled once order placed)
-                            FilledIconButton(
-                                onClick = {
-                                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                                        data = Uri.parse("tel:${order.customerPhone}")
-                                    }
-                                    context.startActivity(intent)
-                                },
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = StatusOpenGreen,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.testTag("call_customer_btn")
-                            ) {
-                                Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                            if (recPhone.isNotBlank()) {
+                                FilledIconButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                            data = Uri.parse("tel:$recPhone")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = StatusOpenGreen,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.testTag("call_customer_btn")
+                                ) {
+                                    Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                                }
                             }
                         }
                     }
@@ -649,17 +667,26 @@ fun OrderDetailScreen(
             }
 
             // Searching for Rider Card (Delivery only)
-            if (!order.isPickUp && order.isSearchingRider) {
-                val isNoRiderYet = order.isNoRiderYet(currentTime)
+            if (!order.isPickUp && (order.isSearchingRider || order.isInstantExpired(currentTime))) {
+                val isExpired = order.isInstantExpired(currentTime)
+                val isNoRiderYet = !isExpired && order.isNoRiderYet(currentTime)
+                val rNote = order.riderRequest?.note.orEmpty()
                 Card(
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (isNoRiderYet) StatusWarningAmber.copy(alpha = 0.15f)
-                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                        containerColor = when {
+                            isExpired -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                            isNoRiderYet -> StatusWarningAmber.copy(alpha = 0.15f)
+                            else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                        }
                     ),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        if (isNoRiderYet) StatusWarningAmber else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        when {
+                            isExpired -> MaterialTheme.colorScheme.error
+                            isNoRiderYet -> StatusWarningAmber
+                            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        }
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -673,7 +700,21 @@ fun OrderDetailScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (isNoRiderYet) {
+                                if (isExpired) {
+                                    Icon(
+                                        imageVector = Icons.Default.TimerOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "Expired",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 15.sp,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                } else if (isNoRiderYet) {
                                     Icon(
                                         imageVector = Icons.Default.Warning,
                                         contentDescription = null,
@@ -682,7 +723,7 @@ fun OrderDetailScreen(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = "No rider yet",
+                                        text = if (order.isInstantRiderRequest) "No rider accepted yet" else "No rider yet",
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 15.sp,
                                         color = StatusWarningAmber
@@ -695,19 +736,21 @@ fun OrderDetailScreen(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = "Searching for rider...",
+                                        text = if (order.isInstantRiderRequest) "Looking for a rider..." else "Searching for rider...",
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 15.sp,
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                             }
-                            order.riderRequest?.requestedAt?.let { t ->
-                                Text(
-                                    text = FormatUtils.formatTimeAgo(t),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            (order.riderRequest?.effectiveSearchStartedAt)?.let { t ->
+                                if (t > 0L) {
+                                    Text(
+                                        text = FormatUtils.formatTimeAgo(t),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                         if (order.isRiderBatchHoldActive(currentTime)) {
@@ -725,10 +768,10 @@ fun OrderDetailScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        if (!order.riderRequest?.note.isNullOrBlank()) {
+                        if (rNote.isNotBlank()) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Note for Rider: ${order.riderRequest!!.note}",
+                                text = "Note for Rider: $rNote",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -746,7 +789,7 @@ fun OrderDetailScreen(
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Request rider again", fontWeight = FontWeight.Bold)
+                                Text(if (order.isInstantRiderRequest) "Try again" else "Request rider again", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -759,14 +802,19 @@ fun OrderDetailScreen(
                 val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
                     order.riderRequest?.status?.equals("On another delivery", ignoreCase = true) == true ||
                     order.riderRequest?.status?.equals("on_another_delivery", ignoreCase = true) == true
-                val currentRiderStatus = order.riderRequest?.status ?: when {
+                val reqStatus = order.riderRequest
+                val currentRiderStatus = when {
+                    reqStatus?.isDelivered == true || order.status == OrderStatus.DELIVERED -> "Delivered"
+                    reqStatus?.isPickedUp == true -> "Picked up"
+                    reqStatus?.isArrived == true -> "Arrived at merchant"
+                    reqStatus?.isOnTheWay == true || order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
                     isOnAnotherDelivery -> "On another delivery"
-                    order.status == OrderStatus.RIDER_ON_THE_WAY -> "On the way"
+                    !reqStatus?.status.isNullOrBlank() -> reqStatus?.status ?: "Rider assigned"
                     else -> "Rider assigned"
                 }
-                val vehicleAndPlate = order.riderVehicle?.ifBlank { null }
-                    ?: rider?.vehiclePlate?.ifBlank { null }
-                    ?: "Motorcycle"
+                val rVehicle = order.effectiveRiderVehicle
+                val rPlate = order.effectiveRiderPlate
+                val vehicleAndPlate = if (rPlate.isNotBlank()) "$rVehicle • $rPlate" else rVehicle
 
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -801,6 +849,13 @@ fun OrderDetailScreen(
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
+                                    if (rPhone.isNotBlank()) {
+                                        Text(
+                                            text = rPhone,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     Text(
                                         text = vehicleAndPlate,
                                         style = MaterialTheme.typography.bodySmall,

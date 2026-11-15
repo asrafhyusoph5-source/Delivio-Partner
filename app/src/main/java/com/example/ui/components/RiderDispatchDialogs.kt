@@ -185,6 +185,7 @@ fun ChooseOrderForDispatchDialog(
 @Composable
 fun RiderRequestErrorDialog(
     errorInfo: RiderRequestErrorInfo,
+    onRetry: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -257,6 +258,16 @@ fun RiderRequestErrorDialog(
                 }
             }
         },
+        dismissButton = if (onRetry != null) {
+            {
+                OutlinedButton(
+                    onClick = onRetry,
+                    modifier = Modifier.testTag("rider_error_retry_btn")
+                ) {
+                    Text("Retry", fontWeight = FontWeight.Bold)
+                }
+            }
+        } else null,
         confirmButton = {
             Button(
                 onClick = onDismiss,
