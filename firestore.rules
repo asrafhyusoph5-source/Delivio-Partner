@@ -19,6 +19,19 @@ service cloud.firestore {
     function isSupport() { return isAdmin() || isSubAdmin('support'); }
     function isFinance() { return isAdmin() || isSubAdmin('finance'); }
     function isBackoffice() { return isSupport() || isFinance(); }
+    function orderIsOpen(o) {
+      return !(o.status.lower() in ['delivered', 'completed', 'cancelled', 'canceled', 'rejected']);
+    }
+    function chatMember(c) {
+      return request.auth.uid == c.customerId
+        || (c.channel == 'merchant' && canManage(c.get('merchantId', '')))
+        || (c.channel == 'rider' && request.auth.uid == c.get('riderId', ''));
+    }
+    function chatRoleOk(c, role) {
+      return (role == 'customer' && request.auth.uid == c.customerId)
+        || (role == 'merchant' && c.channel == 'merchant' && canManage(c.get('merchantId', '')))
+        || (role == 'rider' && c.channel == 'rider' && request.auth.uid == c.get('riderId', ''));
+    }
     function isStaffOf(mid) {
       return myRole() == 'staff'
         && myDoc().get('merchantId', '') == mid
@@ -71,7 +84,7 @@ service cloud.firestore {
     }
     function riderMayTake(svc, veh) {
       return riderDoc().get('allowedServices', []).hasAny([svc])
-        && (svc != 'taxi' || veh == riderDoc().get('vehicleType', ''));
+        && (svc != 'taxi' || veh.lower() == riderDoc().get('vehicleType', '').lower());
     }
     function merchantLinkedCustomerUid() {
       return isMerchant() && exists(/databases/$(db)/documents/merchants/$(request.auth.uid))
@@ -112,7 +125,7 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isBackoffice()
-        || (isMerchant() && resource.data.merchantId == request.auth.uid)
+        || (isMerchant() && resource.data.get('merchantId', null) != null && isMerchantOwner(resource.data.merchantId))
         || (isRider() && linkedCustomerUid() == uid)
         || (isMerchant() && merchantLinkedCustomerUid() == uid));
       allow create: if isAdmin() || signedIn() && (
@@ -123,7 +136,8 @@ service cloud.firestore {
           && request.resource.data.walletBalance == 0)
         || (isMerchant()
           && request.resource.data.role == 'staff'
-          && request.resource.data.merchantId == request.auth.uid
+          && request.resource.data.get('merchantId', null) != null
+          && isMerchantOwner(request.resource.data.merchantId)
           && request.resource.data.status == 'active')
         || (request.auth.uid == uid
           && request.resource.data.role == 'subadmin'
@@ -137,7 +151,8 @@ service cloud.firestore {
         || (request.auth.uid == uid
             && !touches(['role','email','status','walletBalance','createdAt','merchantId','staffRole','adminRole']))
         || (isMerchant() && resource.data.role == 'staff'
-            && resource.data.merchantId == request.auth.uid
+            && resource.data.get('merchantId', null) != null
+            && isMerchantOwner(resource.data.merchantId)
             && onlyChanges(['status','staffRole','name','phone']))
         || (request.auth.uid == uid
             && onlyChanges(['walletBalance'])
@@ -173,7 +188,8 @@ service cloud.firestore {
             && request.resource.data.walletBalance <= resource.data.get('walletBalance', 0) + refundOrder().get('walletAdjustDue', 0) + 0.01
             && request.resource.data.walletBalance >= resource.data.get('walletBalance', 0) + refundOrder().get('walletAdjustDue', 0) - 0.01);
       allow delete: if isAdmin()
-        || (isMerchant() && resource.data.role == 'staff' && resource.data.merchantId == request.auth.uid);
+        || (isMerchant() && resource.data.role == 'staff'
+            && resource.data.get('merchantId', null) != null && isMerchantOwner(resource.data.merchantId));
       match /favorites/{fid} {
         allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
       }
@@ -202,19 +218,19 @@ service cloud.firestore {
     }
 
     match /changeRequests/{rid} {
-      allow create: if isMerchant() && request.resource.data.merchantId == request.auth.uid
+      allow create: if isMerchant() && isMerchantOwner(request.resource.data.get('merchantId', null))
         && request.resource.data.status == 'Pending';
-      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isAdmin());
+      allow read: if signedIn() && (isMerchantOwner(resource.data.get('merchantId', null)) || isAdmin());
       allow update, delete: if isAdmin();
     }
 
     match /promoRequests/{pid} {
-      allow create: if isMerchant() && request.resource.data.merchantId == request.auth.uid
+      allow create: if isMerchant() && isMerchantOwner(request.resource.data.get('merchantId', null))
         && request.resource.data.status == 'Pending';
-      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isAdmin());
+      allow read: if signedIn() && (isMerchantOwner(resource.data.get('merchantId', null)) || isAdmin());
       allow update: if isAdmin();
       allow delete: if isAdmin()
-        || (isMerchant() && resource.data.merchantId == request.auth.uid && resource.data.status == 'Pending');
+        || (isMerchant() && isMerchantOwner(resource.data.get('merchantId', null)) && resource.data.status == 'Pending');
     }
 
     match /merchants/{mid} {
@@ -223,14 +239,32 @@ service cloud.firestore {
       allow update: if isAdmin() || (canManage(mid)
         && !touches(['status','type','typeLocked','cityId','commissionRate','ownerUid','name','email','createdAt','walletBalance','linkedCustomerUid','linkedCustomerEmail','linkedAt','specialRadius','chainId','chainName','isBranch'])
         && (!touches(['branchName', 'branchCode', 'branchSetupDone'])
-            || (resource.data.get('branchSetupDone', false) != true
-                && request.resource.data.get('branchSetupDone', false) == true))
+            || (resource.data.get('branchSetupDone', true) == false
+                && request.resource.data.get('branchSetupDone', false) == true
+                && request.resource.data.get('branchName', '') is string
+                && request.resource.data.branchName.size() >= 2
+                && request.resource.data.branchName.size() <= 40
+                && request.resource.data.get('branchCode', '') is string
+                && request.resource.data.branchCode.matches('[A-Z0-9]{2,10}')))
         && (!touches(['lat', 'lng', 'address', 'storeLocation'])
             || (request.resource.data.get('locationChangedAt', null) == request.time
                 && (resource.data.get('locationChangedAt', null) == null
                     || request.time >= resource.data.locationChangedAt + duration.value(30, 'd'))))
         && (!touches(['locationChangedAt'])
-            || request.resource.data.get('locationChangedAt', null) == request.time));
+            || request.resource.data.get('locationChangedAt', null) == request.time))
+        || (signedIn() && myRole() == 'customer'
+            && onlyChanges(['ratingSum', 'ratingCount', 'lastReviewOrderId'])
+            && request.resource.data.lastReviewOrderId is string
+            && !exists(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId))
+            && existsAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId))
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.customerId == request.auth.uid
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.get('merchantId', null) == mid
+            && get(/databases/$(db)/documents/orders/$(request.resource.data.lastReviewOrderId)).data.get('merchantId', null) == mid
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.get('ratingMerchant', 0) is number
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.get('ratingMerchant', 0) >= 1
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.get('ratingMerchant', 0) <= 5
+            && request.resource.data.ratingCount == resource.data.get('ratingCount', 0) + 1
+            && request.resource.data.ratingSum == resource.data.get('ratingSum', 0) + getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant);
       match /categories/{cid} {
         allow read: if signedIn();
         allow write: if isAdmin() || canManage(mid);
@@ -421,8 +455,36 @@ service cloud.firestore {
 
     match /promoCodes/{code} {
       allow get: if signedIn();
-      allow list, create, delete: if isAdmin();
+      allow list: if isAdmin()
+        || (signedIn() && resource.data.visibility == 'public' && resource.data.active == true);
+      allow create: if isAdmin()
+        || (signedIn()
+            && request.resource.data.get('merchantId', null) is string
+            && canManage(request.resource.data.merchantId)
+            && merchantActive(request.resource.data.merchantId)
+            && request.resource.data.get('source', '') == 'merchant'
+            && request.resource.data.get('fundedBy', '') == 'merchant'
+            && code.matches('[A-Z0-9]{4,16}')
+            && request.resource.data.get('usedCount', 0) == 0
+            && request.resource.data.get('lastRedemptionId', null) == null
+            && request.resource.data.type in ['percent', 'fixed']
+            && request.resource.data.value is number
+            && request.resource.data.value > 0
+            && (request.resource.data.type == 'fixed' || request.resource.data.value <= 100)
+            && request.resource.data.visibility in ['public', 'private']);
+      allow delete: if isAdmin()
+        || (resource.data.get('merchantId', null) != null
+            && canManage(resource.data.merchantId));
       allow update: if isAdmin()
+        || (resource.data.get('merchantId', null) != null
+            && canManage(resource.data.merchantId)
+            && request.resource.data.get('merchantId', null) == resource.data.merchantId
+            && !touches(['merchantId', 'source', 'fundedBy', 'usedCount', 'lastRedemptionId'])
+            && request.resource.data.type in ['percent', 'fixed']
+            && request.resource.data.value is number
+            && request.resource.data.value > 0
+            && (request.resource.data.type == 'fixed' || request.resource.data.value <= 100)
+            && request.resource.data.visibility in ['public', 'private'])
         || (signedIn() && myRole() == 'customer'
             && onlyChanges(['usedCount', 'lastRedemptionId'])
             && resource.data.get('active', false) == true
@@ -438,7 +500,8 @@ service cloud.firestore {
     }
 
     match /promoRedemptions/{rid} {
-      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isAdmin()
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
       allow create: if signedIn() && myRole() == 'customer'
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.code is string
@@ -449,8 +512,72 @@ service cloud.firestore {
         && (get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.get('expiresAt', null) == null
             || get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.expiresAt > request.time)
         && request.resource.data.discount is number
-        && request.resource.data.discount >= 0;
+        && request.resource.data.discount >= 0
+        && (get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.get('merchantId', null) == null
+            || get(/databases/$(db)/documents/promoCodes/$(request.resource.data.code)).data.merchantId
+               == request.resource.data.get('merchantId', null));
       allow update, delete: if isAdmin();
+    }
+
+    match /orderChats/{chatId} {
+      allow read: if signedIn() && (isSupport() || chatMember(resource.data));
+      allow create: if signedIn()
+        && request.resource.data.orderId is string
+        && request.resource.data.channel in ['merchant', 'rider']
+        && exists(/databases/$(db)/documents/orders/$(request.resource.data.orderId))
+        && orderIsOpen(get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data)
+        && get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('customerId', null)
+           == request.resource.data.customerId
+        && request.resource.data.expireAt is timestamp
+        && ((request.resource.data.channel == 'merchant'
+              && chatId == request.resource.data.orderId + '_merchant'
+              && get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('merchantId', null)
+                 == request.resource.data.merchantId
+              && (request.auth.uid == request.resource.data.customerId
+                  || canManage(request.resource.data.merchantId)))
+            || (request.resource.data.channel == 'rider'
+              && chatId == request.resource.data.orderId + '_rider_' + request.resource.data.riderId
+              && get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('riderId', null)
+                 == request.resource.data.riderId
+              && (request.auth.uid == request.resource.data.customerId
+                  || request.auth.uid == request.resource.data.riderId)));
+      allow update: if signedIn() && chatMember(resource.data)
+        && onlyChanges(['lastMessageAt', 'lastMessageText', 'lastSenderRole', 'expireAt',
+                        'customerReadAt', 'partnerReadAt'])
+        && (onlyChanges(['customerReadAt', 'partnerReadAt'])
+            || orderIsOpen(get(/databases/$(db)/documents/orders/$(resource.data.orderId)).data));
+      allow delete: if isAdmin()
+        || (signedIn() && chatMember(resource.data) && resource.data.expireAt < request.time);
+
+      match /chatMessages/{mid} {
+        allow read: if signedIn()
+          && (isSupport() || chatMember(get(/databases/$(db)/documents/orderChats/$(chatId)).data));
+        allow create: if signedIn()
+          && existsAfter(/databases/$(db)/documents/orderChats/$(chatId))
+          && orderIsOpen(get(/databases/$(db)/documents/orders/$(getAfter(/databases/$(db)/documents/orderChats/$(chatId)).data.orderId)).data)
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.senderRole in ['customer', 'merchant', 'rider']
+          && chatRoleOk(getAfter(/databases/$(db)/documents/orderChats/$(chatId)).data, request.resource.data.senderRole)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expireAt is timestamp
+          && request.resource.data.expireAt <= request.time + duration.value(11, 'd')
+          && ((request.resource.data.type == 'text'
+                && request.resource.data.text is string
+                && request.resource.data.text.size() >= 1
+                && request.resource.data.text.size() <= 1000
+                && !request.resource.data.keys().hasAny(['image']))
+              || (request.resource.data.type == 'image'
+                  && request.resource.data.image is string
+                  && request.resource.data.image.size() <= 400000
+                  && ((request.resource.data.senderRole == 'customer'
+                       && getAfter(/databases/$(db)/documents/orderChats/$(chatId)).data.channel == 'rider')
+                      || (request.resource.data.senderRole == 'rider'
+                          && request.resource.data.get('source', '') == 'camera'))));
+        allow update: if false;
+        allow delete: if isAdmin()
+          || (signedIn() && resource.data.expireAt < request.time
+              && chatMember(get(/databases/$(db)/documents/orderChats/$(chatId)).data));
+      }
     }
 
     match /fraudFlags/{fid} {
@@ -496,6 +623,7 @@ service cloud.firestore {
         || resource.data.get('customerId', null) == request.auth.uid
         || (isRider() && linkedCustomerUid() != '' && resource.data.get('customerId', '') == linkedCustomerUid())
         || resource.data.get('merchantId', null) == request.auth.uid
+        || (isMerchant() && isMerchantOwner(resource.data.get('merchantId', null)))
         || (isMerchant() && merchantLinkedCustomerUid() != '' && resource.data.get('customerId', '') == merchantLinkedCustomerUid())
         || isFinance());
       allow write: if isAdmin();
@@ -505,7 +633,8 @@ service cloud.firestore {
       allow write: if isFinance();
     }
     match /merchantPayouts/{id} {
-      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid || isFinance());
+      allow read: if signedIn() && (resource.data.merchantId == request.auth.uid
+        || isMerchantOwner(resource.data.get('merchantId', null)) || isFinance());
       allow write: if isFinance();
     }
 
