@@ -285,6 +285,49 @@ service cloud.firestore {
         allow read: if signedIn();
         allow write: if isAdmin() || canManage(mid);
       }
+      match /posOrders/{oid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow create: if canManage(mid)
+          && request.resource.data.get('source', '') == 'pos'
+          && request.resource.data.get('shopId', '') == mid
+          && request.resource.data.get('type', '') in ['dine_in', 'take_out']
+          && request.resource.data.get('total', null) is number
+          && request.resource.data.get('createdAt', null) == request.time
+          && get(/databases/$(db)/documents/merchants/$(mid)).data.get('status', 'active') == 'active';
+        allow update: if isAdmin()
+          || (canManage(mid)
+              && request.resource.data.get('shopId', '') == resource.data.get('shopId', '')
+              && (resource.data.get('status', '') in ['open', 'sent', 'held']
+                  || !touches(['items', 'subtotal', 'discountTotal', 'discounts', 'serviceCharge',
+                               'vatAmount', 'total', 'payments', 'number', 'type', 'tableId',
+                               'cashierId', 'createdAt', 'shiftId'])));
+        allow delete: if isAdmin();
+      }
+      match /posTables/{tid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow write: if isAdmin() || canManage(mid);
+      }
+      match /posShifts/{sid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow create, update: if isAdmin() || canManage(mid);
+        allow delete: if isAdmin();
+      }
+      match /posCounters/{cid} {
+        allow read, write: if isAdmin() || canManage(mid);
+      }
+      match /posSettings/{sid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow write: if isAdmin() || isMerchantOwner(mid);
+      }
+      match /posStaff/{uid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow write: if isAdmin() || isMerchantOwner(mid);
+      }
+      match /posLogs/{lid} {
+        allow read: if isAdmin() || canManage(mid);
+        allow create: if canManage(mid);
+        allow update, delete: if isAdmin();
+      }
       match /inboxReads/{rid} {
         allow read, write: if isAdmin() || canManage(mid);
       }
