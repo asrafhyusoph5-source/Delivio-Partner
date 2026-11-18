@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.*
@@ -71,6 +72,8 @@ fun MerchantRightDrawer(
     isMultiOutlet: Boolean = false,
     otherOutletsNewOrdersCount: Int = 0,
     onOpenOutlets: () -> Unit = {},
+    showDelivioPos: Boolean = false,
+    onOpenDelivioPos: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -368,6 +371,18 @@ fun MerchantRightDrawer(
                     modifier = Modifier.testTag("drawer_item_orders")
                 )
 
+                // Delivio POS (visible only when settings/appLinks posEnabled == true and posUrl is valid https; visible to staff too)
+                if (showDelivioPos) {
+                    DrawerListItem(
+                        icon = Icons.Default.PointOfSale,
+                        title = "Delivio POS",
+                        subtitle = "Counter sales and orders",
+                        trailingIcon = Icons.AutoMirrored.Filled.OpenInNew,
+                        onClick = onOpenDelivioPos,
+                        modifier = Modifier.testTag("drawer_item_delivio_pos")
+                    )
+                }
+
                 // Menu
                 DrawerListItem(
                     icon = Icons.Default.RestaurantMenu,
@@ -606,6 +621,8 @@ private fun DrawerListItem(
     icon: ImageVector,
     title: String,
     onClick: () -> Unit,
+    subtitle: String? = null,
+    trailingIcon: ImageVector = Icons.Default.ChevronRight,
     badgeText: String? = null,
     badgeColor: Color = MaterialTheme.colorScheme.primary,
     badgeTag: String? = null,
@@ -617,6 +634,7 @@ private fun DrawerListItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
@@ -629,12 +647,23 @@ private fun DrawerListItem(
             modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(14.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         if (showRedDot) {
             Box(
                 contentAlignment = Alignment.Center,
@@ -670,7 +699,7 @@ private fun DrawerListItem(
             Spacer(modifier = Modifier.width(6.dp))
         }
         Icon(
-            imageVector = Icons.Default.ChevronRight,
+            imageVector = trailingIcon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.size(16.dp)

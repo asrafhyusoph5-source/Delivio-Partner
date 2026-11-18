@@ -9,6 +9,7 @@ import com.example.util.CrashReportStore
 import com.example.util.MenuSyncEngine
 import com.example.util.MenuSyncResult
 import com.example.util.OutletMenuSnapshot
+import com.example.util.PosAnalyticsEngine
 import com.example.util.PinVerifyResult
 import com.example.util.PlatformOrderStatuses
 import com.example.util.SoundVibrationHelper
@@ -78,6 +79,33 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val riderReviews = repository.riderReviews
     val riderAverageRating = repository.riderAverageRating
     val riderReviewsCount = repository.riderReviewsCount
+    val platformPosSettings = repository.platformPosSettings
+    val appLinksSettings = repository.appLinksSettings
+
+    // POS Analytics State (Dashboard + Reports)
+    private val _dashboardPosOrders = MutableStateFlow<List<PosOrder>>(emptyList())
+    val dashboardPosOrders: StateFlow<List<PosOrder>> = _dashboardPosOrders.asStateFlow()
+
+    private val _dashboardHasAnyPosOrders = MutableStateFlow(false)
+    val dashboardHasAnyPosOrders: StateFlow<Boolean> = _dashboardHasAnyPosOrders.asStateFlow()
+
+    private val _reportsPosOrders = MutableStateFlow<List<PosOrder>>(emptyList())
+    val reportsPosOrders: StateFlow<List<PosOrder>> = _reportsPosOrders.asStateFlow()
+
+    private val _reportsPrevPosOrders = MutableStateFlow<List<PosOrder>>(emptyList())
+    val reportsPrevPosOrders: StateFlow<List<PosOrder>> = _reportsPrevPosOrders.asStateFlow()
+
+    private val _reportsPosShifts = MutableStateFlow<List<PosShift>>(emptyList())
+    val reportsPosShifts: StateFlow<List<PosShift>> = _reportsPosShifts.asStateFlow()
+
+    private val _reportsPosLogs = MutableStateFlow<List<PosLog>>(emptyList())
+    val reportsPosLogs: StateFlow<List<PosLog>> = _reportsPosLogs.asStateFlow()
+
+    private val _isReportsPosLoading = MutableStateFlow(false)
+    val isReportsPosLoading: StateFlow<Boolean> = _isReportsPosLoading.asStateFlow()
+
+    private var dashboardPosJob: Job? = null
+    private var reportsPosJob: Job? = null
 
     // Multi-outlet flows
     val activeMerchantId = repository.merchantId
@@ -420,6 +448,89 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun closeReports() {
         _showReportsScreen.value = false
+    }
+
+    fun refreshDashboardPos(outletIds: List<String>, nowMs: Long = _currentTime.value) {
+        val cleanIds = outletIds.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.isEmpty()) {
+            _dashboardPosOrders.value = emptyList()
+            _dashboardHasAnyPosOrders.value = false
+            return
+        }
+        dashboardPosJob?.cancel()
+        dashboardPosJob = viewModelScope.launch {
+            val tz = PosAnalyticsEngine.resolveTimeZone(
+                platformPosSettings.value.timezone.ifBlank { settings.value.timezone }
+            )
+            val (todayStart, todayEnd) = PosAnalyticsEngine.computeTodayBounds(nowMs, tz)
+            val bundle = repository.posRepository.loadPosDataForPeriod(
+                outletIds = cleanIds,
+                startMs = todayStart,
+                endMs = todayEnd,
+                currentTime = nowMs,
+                tz = tz,
+                includeShiftsAndLogs = false
+            )
+            _dashboardPosOrders.value = bundle.orders
+            val hasAny = bundle.orders.isNotEmpty() || repository.posRepository.hasAnyPosOrdersForOutlets(cleanIds)
+            _dashboardHasAnyPosOrders.value = hasAny
+        }
+    }
+
+    fun loadReportsPosData(
+        outletIds: List<String>,
+        startMs: Long,
+        endMs: Long,
+        prevStartMs: Long,
+        prevEndMs: Long,
+        nowMs: Long = _currentTime.value
+    ) {
+        val cleanIds = outletIds.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.isEmpty()) {
+            _reportsPosOrders.value = emptyList()
+            _reportsPrevPosOrders.value = emptyList()
+            _reportsPosShifts.value = emptyList()
+            _reportsPosLogs.value = emptyList()
+            _isReportsPosLoading.value = false
+            return
+        }
+        reportsPosJob?.cancel()
+        reportsPosJob = viewModelScope.launch {
+            _isReportsPosLoading.value = true
+            try {
+                val tz = PosAnalyticsEngine.resolveTimeZone(
+                    platformPosSettings.value.timezone.ifBlank { settings.value.timezone }
+                )
+                val currDeferred = async {
+                    repository.posRepository.loadPosDataForPeriod(
+                        outletIds = cleanIds,
+                        startMs = startMs,
+                        endMs = endMs,
+                        currentTime = nowMs,
+                        tz = tz,
+                        includeShiftsAndLogs = true
+                    )
+                }
+                val prevDeferred = async {
+                    repository.posRepository.loadPosDataForPeriod(
+                        outletIds = cleanIds,
+                        startMs = prevStartMs,
+                        endMs = prevEndMs,
+                        currentTime = nowMs,
+                        tz = tz,
+                        includeShiftsAndLogs = false
+                    )
+                }
+                val curr = currDeferred.await()
+                val prev = prevDeferred.await()
+                _reportsPosOrders.value = curr.orders
+                _reportsPosShifts.value = curr.shifts
+                _reportsPosLogs.value = curr.logs
+                _reportsPrevPosOrders.value = prev.orders
+            } finally {
+                _isReportsPosLoading.value = false
+            }
+        }
     }
 
     fun checkCustomerHasPriorDeliveredOrder(
@@ -1798,6 +1909,12 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         _dashboardCombinedReviews.value = emptyList()
         _reportsSelectedOutletIds.value = emptySet()
         _reportsCombinedOrders.value = emptyList()
+        _dashboardPosOrders.value = emptyList()
+        _dashboardHasAnyPosOrders.value = false
+        _reportsPosOrders.value = emptyList()
+        _reportsPrevPosOrders.value = emptyList()
+        _reportsPosShifts.value = emptyList()
+        _reportsPosLogs.value = emptyList()
         if (target != null) {
             showSnackbar("Switched to ${target.displayName}")
         }

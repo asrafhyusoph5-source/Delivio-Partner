@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,8 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.data.model.*
+import com.example.ui.components.*
 import com.example.ui.theme.DelivioYellow
 import com.example.util.FormatUtils
+import com.example.util.PosAnalyticsEngine
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -81,86 +84,41 @@ fun ReportsScreen(
     selectedOutletIds: Set<String> = emptySet(),
     isCombinedLoading: Boolean = false,
     onOpenOutletsFilter: () -> Unit = {},
+    posOrders: List<PosOrder> = emptyList(),
+    prevPosOrders: List<PosOrder> = emptyList(),
+    posShifts: List<PosShift> = emptyList(),
+    posLogs: List<PosLog> = emptyList(),
+    isPosLoading: Boolean = false,
+    platformTimezone: String = "",
+    onPeriodOrRangeChanged: (startMs: Long, endMs: Long, prevStartMs: Long, prevEndMs: Long) -> Unit = { _, _, _, _ -> },
+    initialSourceFilter: SalesSourceFilter = SalesSourceFilter.ALL,
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
     val context = LocalContext.current
 
+    var selectedSource by remember { mutableStateOf(initialSourceFilter) }
     var selectedPeriod by remember { mutableStateOf(ReportPeriod.TODAY) }
     var customStartMs by remember { mutableLongStateOf(currentTime - 14 * 86400000L) }
     var customEndMs by remember { mutableLongStateOf(currentTime) }
     var lastRefreshedTime by remember { mutableLongStateOf(currentTime) }
-    var isRefreshing by remember { mutableStateOf(false) }
     var missingIndexLink by remember { mutableStateOf<String?>(null) }
 
-    val tz = remember(settings.timezone) {
-        TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
+    val tz = remember(platformTimezone, settings.timezone) {
+        PosAnalyticsEngine.resolveTimeZone(platformTimezone.ifBlank { settings.timezone })
     }
 
     // Compute period ranges (current period and preceding comparison period of equal length)
     val (periodRange, prevPeriodRange) = remember(selectedPeriod, customStartMs, customEndMs, currentTime, tz) {
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = currentTime }
-        when (selectedPeriod) {
-            ReportPeriod.TODAY -> {
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                val start = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59); cal.set(Calendar.MILLISECOND, 999)
-                val end = cal.timeInMillis
-                val prevStart = start - 86400000L
-                val prevEnd = start - 1L
-                (start to end) to (prevStart to prevEnd)
-            }
-            ReportPeriod.LAST_7_DAYS -> {
-                cal.add(Calendar.DAY_OF_YEAR, -6)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                val start = cal.timeInMillis
-                val end = currentTime
-                val duration = end - start
-                val prevStart = start - duration
-                val prevEnd = start - 1L
-                (start to end) to (prevStart to prevEnd)
-            }
-            ReportPeriod.LAST_30_DAYS -> {
-                cal.add(Calendar.DAY_OF_YEAR, -29)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                val start = cal.timeInMillis
-                val end = currentTime
-                val duration = end - start
-                val prevStart = start - duration
-                val prevEnd = start - 1L
-                (start to end) to (prevStart to prevEnd)
-            }
-            ReportPeriod.PREVIOUS_MONTH -> {
-                cal.set(Calendar.DAY_OF_MONTH, 1)
-                cal.add(Calendar.MONTH, -1)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                val start = cal.timeInMillis
-                val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
-                cal.set(Calendar.DAY_OF_MONTH, maxDay)
-                cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59); cal.set(Calendar.MILLISECOND, 999)
-                val end = cal.timeInMillis
-
-                val prevCal = Calendar.getInstance(tz).apply {
-                    timeInMillis = start
-                    add(Calendar.MONTH, -1)
-                }
-                val prevStart = prevCal.timeInMillis
-                val prevEnd = start - 1L
-                (start to end) to (prevStart to prevEnd)
-            }
-            ReportPeriod.CUSTOM -> {
-                val start = customStartMs
-                val end = customEndMs
-                val duration = (end - start).coerceAtLeast(86400000L)
-                val prevStart = start - duration
-                val prevEnd = start - 1L
-                (start to end) to (prevStart to prevEnd)
-            }
-        }
+        PosAnalyticsEngine.computePeriodRanges(selectedPeriod, customStartMs, customEndMs, currentTime, tz)
     }
 
     val (startMs, endMs) = periodRange
     val (prevStartMs, prevEndMs) = prevPeriodRange
+
+    LaunchedEffect(startMs, endMs, prevStartMs, prevEndMs, selectedOutletIds) {
+        onPeriodOrRangeChanged(startMs, endMs, prevStartMs, prevEndMs)
+    }
 
     // Filter orders for current period and comparison period (product orders, excluding rider requests and split children)
     val periodOrders = remember(orders, startMs, endMs) {
@@ -247,7 +205,33 @@ fun ReportsScreen(
     val newPercentage = if (totalCustomerOrders > 0) (newCustomerOrdersCount.toDouble() / totalCustomerOrders * 100).roundToInt() else 0
     val returningPercentage = if (totalCustomerOrders > 0) 100 - newPercentage else 0
 
-    // 3. Orders by Day
+    // POS period data (only "paid" or "refunded" orders with paidAt count)
+    val countedPosOrders = remember(posOrders, startMs, endMs) {
+        PosAnalyticsEngine.filterCountedPosSales(posOrders, startMs, endMs)
+    }
+    val prevCountedPosOrders = remember(prevPosOrders, prevStartMs, prevEndMs) {
+        PosAnalyticsEngine.filterCountedPosSales(prevPosOrders, prevStartMs, prevEndMs)
+    }
+    val onlineSummary = remember(deliveredPeriodOrders) { PosAnalyticsEngine.computeOnlineSummary(deliveredPeriodOrders) }
+    val prevOnlineSummary = remember(prevDeliveredOrders) { PosAnalyticsEngine.computeOnlineSummary(prevDeliveredOrders) }
+    val posSummary = remember(countedPosOrders) { PosAnalyticsEngine.computePosSummary(countedPosOrders) }
+    val prevPosSummary = remember(prevCountedPosOrders) { PosAnalyticsEngine.computePosSummary(prevCountedPosOrders) }
+    val combinedSummary = remember(onlineSummary, posSummary) { PosAnalyticsEngine.combineSummaries(onlineSummary, posSummary) }
+    val prevCombinedSummary = remember(prevOnlineSummary, prevPosSummary) { PosAnalyticsEngine.combineSummaries(prevOnlineSummary, prevPosSummary) }
+    val onlineVsPosSplit = remember(onlineSummary, posSummary) { PosAnalyticsEngine.computeOnlineVsPosSplit(onlineSummary, posSummary) }
+
+    val activePosSummary = when (selectedSource) {
+        SalesSourceFilter.ALL -> combinedSummary
+        SalesSourceFilter.IN_STORE_POS -> posSummary
+        SalesSourceFilter.DELIVIO_ONLINE -> onlineSummary
+    }
+    val activePrevSummary = when (selectedSource) {
+        SalesSourceFilter.ALL -> prevCombinedSummary
+        SalesSourceFilter.IN_STORE_POS -> prevPosSummary
+        SalesSourceFilter.DELIVIO_ONLINE -> prevOnlineSummary
+    }
+
+    // 3. Orders by Day (Online-only & Combined/POS)
     val dayFmt = remember(tz) { SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = tz } }
     val dayDisplayFmt = remember(tz) { SimpleDateFormat("MMM d", Locale.US).apply { timeZone = tz } }
     val dayOfWeekFmt = remember(tz) { SimpleDateFormat("EEEE", Locale.US).apply { timeZone = tz } }
@@ -277,9 +261,26 @@ fun ReportsScreen(
         list
     }
 
+    val combinedDailyList = remember(selectedSource, deliveredPeriodOrders, countedPosOrders, startMs, endMs, tz) {
+        PosAnalyticsEngine.buildDailyBreakdown(
+            onlineDelivered = if (selectedSource == SalesSourceFilter.IN_STORE_POS) emptyList() else deliveredPeriodOrders,
+            countedPos = if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) emptyList() else countedPosOrders,
+            startMs = startMs,
+            endMs = endMs,
+            tz = tz
+        )
+    }
+    val activeDayDataList = remember(selectedSource, ordersByDayList, combinedDailyList) {
+        if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) {
+            ordersByDayList
+        } else {
+            combinedDailyList.map { it.toDayData() }
+        }
+    }
+
     // Best day of week
-    val bestDayOfWeek = remember(ordersByDayList) {
-        val byDow = ordersByDayList.groupBy { it.dayOfWeek }
+    val bestDayOfWeek = remember(activeDayDataList) {
+        val byDow = activeDayDataList.groupBy { it.dayOfWeek }
         byDow.maxByOrNull { (_, days) -> days.sumOf { it.subtotal } }?.let { (dow, days) ->
             dow to (days.sumOf { it.subtotal } to days.sumOf { it.orders })
         }
@@ -309,39 +310,36 @@ fun ReportsScreen(
         hourlyDataList.maxByOrNull { it.orders }?.takeIf { it.orders > 0 }
     }
 
-    // 5. Top Products, Slow Movers & Per-Variant Sales Breakdown
-    val (topProducts, slowMovers, variantSalesMap) = remember(deliveredPeriodOrders, menuItems) {
-        val salesMap = mutableMapOf<String, Pair<Int, Double>>()
-        val vMap = mutableMapOf<String, MutableMap<String, Pair<Int, Double>>>()
-        deliveredPeriodOrders.forEach { ord ->
-            ord.items.forEach { itm ->
-                val itemUnit = if (itm.unitPrice > 0.0) itm.unitPrice else itm.basePrice
-                val lineRev = itm.quantity * itemUnit
-                val curr = salesMap[itm.name] ?: (0 to 0.0)
-                salesMap[itm.name] = (curr.first + itm.quantity) to (curr.second + lineRev)
-                if (itm.variantLabel.isNotBlank()) {
-                    val prodVariants = vMap.getOrPut(itm.name) { mutableMapOf() }
-                    val vCurr = prodVariants[itm.variantLabel] ?: (0 to 0.0)
-                    prodVariants[itm.variantLabel] = (vCurr.first + itm.quantity) to (vCurr.second + lineRev)
-                }
-            }
-        }
-        val sortedDesc = salesMap.map { (name, pair) ->
-            ProductStat(name, pair.first, pair.second)
-        }.sortedByDescending { it.quantity }
+    val stackedHourlyData = remember(selectedSource, periodOrders, countedPosOrders, tz) {
+        PosAnalyticsEngine.buildHourlyStackedData(
+            onlineOrders = if (selectedSource == SalesSourceFilter.IN_STORE_POS) emptyList() else periodOrders,
+            countedPosOrders = if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) emptyList() else countedPosOrders,
+            tz = tz
+        )
+    }
+    val stackedPeakHour = remember(stackedHourlyData) {
+        stackedHourlyData.maxByOrNull { it.totalOrders }?.takeIf { it.totalOrders > 0 }
+    }
 
-        val top = sortedDesc.take(5)
-
-        // Slow movers: items from menu with lowest sales
-        val allMenuNames = menuItems.filter { it.businessType == settings.businessType }.map { it.name }.distinct()
-        val slow = allMenuNames.map { name ->
-            val sold = salesMap[name] ?: (0 to 0.0)
-            ProductStat(name, sold.first, sold.second)
-        }.sortedBy { it.quantity }.take(5)
-
-        Triple(top, slow, vMap.mapValues { it.value.toMap() })
+    // 5. Top Products, Slow Movers & Per-Variant Sales Breakdown (excludes voided POS lines)
+    val (topProducts, slowMovers, variantSalesMap) = remember(selectedSource, deliveredPeriodOrders, countedPosOrders, menuItems, settings.businessType) {
+        PosAnalyticsEngine.computeProductStats(
+            source = selectedSource,
+            deliveredOnlineOrders = deliveredPeriodOrders,
+            countedPosOrders = countedPosOrders,
+            menuItems = menuItems,
+            businessType = settings.businessType
+        )
     }
     var selectedVariantProduct by remember { mutableStateOf<String?>(null) }
+
+    // POS Analytics Breakdowns
+    val posPaymentStats = remember(countedPosOrders) { PosAnalyticsEngine.computePosPaymentBreakdown(countedPosOrders) }
+    val posOrderTypeStats = remember(countedPosOrders) { PosAnalyticsEngine.computePosOrderTypeBreakdown(countedPosOrders) }
+    val posDiscountsByKind = remember(countedPosOrders) { PosAnalyticsEngine.computePosDiscountsByKind(countedPosOrders) }
+    val posVoidsAndRefunds = remember(posLogs, startMs, endMs) { PosAnalyticsEngine.computeVoidsAndRefundsFromLogs(posLogs, startMs, endMs) }
+    val posCashierPerf = remember(countedPosOrders) { PosAnalyticsEngine.computeCashierPerformance(countedPosOrders) }
+    val posPeriodShifts = remember(posShifts, startMs, endMs) { PosAnalyticsEngine.filterShiftsForPeriod(posShifts, startMs, endMs) }
 
     // 6. Order Types & Payment Types
     val deliveryOrdersCount = remember(periodOrders) { periodOrders.count { it.fulfillment.contains("delivery", ignoreCase = true) } }
@@ -408,120 +406,61 @@ fun ReportsScreen(
             ?.let { (code, list) -> code to (list.size to list.sumOf { it.discount }) }
     }
 
-    // CSV Export Handler
+    // CSV Export Handler (respects active source segment, period, and selected outlets)
     fun exportFullReportCsv() {
         try {
             val reportsDir = File(context.cacheDir, "reports")
             if (!reportsDir.exists()) reportsDir.mkdirs()
-            val filename = "delivio_report_${selectedPeriod.name.lowercase()}_${System.currentTimeMillis()}.csv"
+            val filename = "delivio_report_${selectedSource.name.lowercase()}_${selectedPeriod.name.lowercase()}_${System.currentTimeMillis()}.csv"
             val csvFile = File(reportsDir, filename)
 
-            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply { timeZone = tz }
-            csvFile.bufferedWriter().use { writer ->
-                writer.appendLine("DELIVIO PARTNER - ANALYTICS & PERFORMANCE REPORT")
-                writer.appendLine("Shop Name,${settings.displayName}")
-                if (isMultiOutlet && selectedOutletIds.size > 1) {
-                    val selectedNames = outlets.filter { it.merchantId in selectedOutletIds }.joinToString(" | ") { it.displayName }
-                    writer.appendLine("Outlets Included,$selectedNames")
-                }
-                writer.appendLine("Period,${selectedPeriod.title} (${FormatUtils.formatDate(startMs)} - ${FormatUtils.formatDate(endMs)})")
-                writer.appendLine("Generated At,${sdf.format(Date(currentTime))}")
-                writer.appendLine()
-                if (isMultiOutlet && selectedOutletIds.size > 1) {
-                    writer.appendLine("PER-OUTLET BREAKDOWN")
-                    writer.appendLine("Outlet,Code,Delivered Orders,Net Sales")
-                    outlets.filter { it.merchantId in selectedOutletIds }.forEach { outlet ->
-                        val oDelivered = deliveredPeriodOrders.filter { it.merchantId == outlet.merchantId }
-                        writer.appendLine("\"${outlet.displayName}\",\"${outlet.branchCode}\",${oDelivered.size},${FormatUtils.formatCurrency(oDelivered.sumOf { it.netSales })}")
-                    }
-                    writer.appendLine()
-                }
-
-                // Sales Summary
-                writer.appendLine("SALES SUMMARY (Subtotals Only)")
-                writer.appendLine("Metric,Current Period,Previous Period,Change (%)")
-                writer.appendLine("Subtotal Sales,${FormatUtils.formatCurrency(subtotalSales)},${FormatUtils.formatCurrency(prevSubtotalSales)},${computePercentChange(subtotalSales, prevSubtotalSales)?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine("Vouchers Given,${FormatUtils.formatCurrency(vouchersGiven)},${FormatUtils.formatCurrency(prevVouchersGiven)},${computePercentChange(vouchersGiven, prevVouchersGiven)?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine("Net Sales,${FormatUtils.formatCurrency(netSales)},${FormatUtils.formatCurrency(prevNetSales)},${computePercentChange(netSales, prevNetSales)?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine("Completed Orders,$ordersCount,$prevOrdersCount,${computePercentChange(ordersCount.toDouble(), prevOrdersCount.toDouble())?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine("Average Order Value,${FormatUtils.formatCurrency(aov)},${FormatUtils.formatCurrency(prevAov)},${computePercentChange(aov, prevAov)?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine("Items Sold,$itemsSold,$prevItemsSold,${computePercentChange(itemsSold.toDouble(), prevItemsSold.toDouble())?.let { "%.1f%%".format(it) } ?: "-"}")
-                writer.appendLine()
-
-                // New vs Returning Customers
-                writer.appendLine("NEW VS RETURNING CUSTOMERS")
-                writer.appendLine("Category,Orders Count,Percentage (%)")
-                writer.appendLine("New Customers,$newCustomerOrdersCount,$newPercentage%")
-                writer.appendLine("Returning Customers,$returningCustomerOrdersCount,$returningPercentage%")
-                writer.appendLine()
-
-                // Orders by Day
-                writer.appendLine("ORDERS BY DAY")
-                writer.appendLine("Date,Day of Week,Orders Count,Net Sales")
-                ordersByDayList.forEach { d ->
-                    writer.appendLine("\"${d.dateKey}\",\"${d.dayOfWeek}\",${d.orders},${d.subtotal}")
-                }
-                writer.appendLine()
-
-                // Hourly Breakdown
-                writer.appendLine("HOURLY ORDER DISTRIBUTION")
-                writer.appendLine("Hour,Orders")
-                hourlyDataList.forEach { h ->
-                    writer.appendLine("\"${h.label}\",${h.orders}")
-                }
-                writer.appendLine()
-
-                // Top Products
-                writer.appendLine("TOP PRODUCTS")
-                writer.appendLine("Rank,Product Name,Quantity Sold,Subtotal Revenue")
-                topProducts.forEachIndexed { idx, p ->
-                    writer.appendLine("${idx + 1},\"${p.name.replace("\"", "\"\"")}\",${p.quantity},${p.revenue}")
-                }
-                writer.appendLine()
-
-                // Slow Movers
-                writer.appendLine("SLOW MOVERS")
-                writer.appendLine("Product Name,Quantity Sold,Subtotal Revenue")
-                slowMovers.forEach { p ->
-                    writer.appendLine("\"${p.name.replace("\"", "\"\"")}\",${p.quantity},${p.revenue}")
-                }
-                writer.appendLine()
-
-                // Service Quality & Fulfillment
-                writer.appendLine("SERVICE QUALITY & FULFILLMENT")
-                writer.appendLine("Metric,Value")
-                writer.appendLine("Accept Rate,${acceptRatePercent?.let { "$it%" } ?: "No data"} ($acceptedCount of $qualifyingAcceptOrders)")
-                writer.appendLine("Orders Rejected by Shop,$rejectedCount")
-                writer.appendLine("Orders Expired with No Response,$expiredCount")
-                writer.appendLine("Average Prep Time,${avgPrepMinutes?.let { "%.1f mins".format(it) } ?: "No data"}")
-                writer.appendLine("Late Orders (> ${targetPrepTime}m),$lateOrdersCount")
-                writer.appendLine("Store Rating,${"%.1f".format(averageRating)} ($reviewsCount reviews)")
-                writer.appendLine("Delivery Orders,$deliveryOrdersCount")
-                writer.appendLine("Pick Up Orders,$pickupOrdersCount")
-                writer.appendLine("Scheduled Orders,$scheduledOrdersCount")
-                writer.appendLine("Cash Orders,$cashOrdersCount")
-                writer.appendLine("Online Orders,$onlineOrdersCount")
-                writer.appendLine("Wallet Orders,$walletOrdersCount")
-                writer.appendLine()
-
-                // Vouchers
-                writer.appendLine("VOUCHERS SUBSIDY")
-                writer.appendLine("Total Redemptions,$vouchersRedeemedCount")
-                writer.appendLine("Total Discount Subsidized,${FormatUtils.formatCurrency(vouchersDiscountTotal)}")
-                writer.appendLine("Orders with Voucher,$ordersWithVoucherCount")
-                writer.appendLine("Top Voucher,${topVoucher?.first ?: "None"}")
-                writer.appendLine()
-
-                // Mandatory disclaimer
-                writer.appendLine("DISCLAIMER")
-                writer.appendLine("Reports show product subtotals only. Delivery fees tips and platform fees are excluded.")
-            }
+            val csvContent = PosAnalyticsEngine.buildReportCsv(
+                source = selectedSource,
+                settings = settings,
+                periodTitle = selectedPeriod.title,
+                startMs = startMs,
+                endMs = endMs,
+                currentTime = currentTime,
+                tz = tz,
+                isMultiOutlet = isMultiOutlet,
+                outlets = outlets,
+                selectedOutletIds = selectedOutletIds,
+                deliveredOnlineOrders = deliveredPeriodOrders,
+                prevDeliveredOnlineOrders = prevDeliveredOrders,
+                countedPosOrders = countedPosOrders,
+                prevCountedPosOrders = prevCountedPosOrders,
+                posShifts = posShifts,
+                posLogs = posLogs,
+                menuItems = menuItems,
+                newCustomerOrdersCount = newCustomerOrdersCount,
+                returningCustomerOrdersCount = returningCustomerOrdersCount,
+                newPercentage = newPercentage,
+                returningPercentage = returningPercentage,
+                acceptRatePercent = acceptRatePercent,
+                acceptedCount = acceptedCount,
+                qualifyingAcceptOrders = qualifyingAcceptOrders,
+                rejectedCount = rejectedCount,
+                expiredCount = expiredCount,
+                avgPrepMinutes = avgPrepMinutes,
+                targetPrepTime = targetPrepTime,
+                lateOrdersCount = lateOrdersCount,
+                averageRating = averageRating,
+                reviewsCount = reviewsCount,
+                deliveryOrdersCount = deliveryOrdersCount,
+                pickupOrdersCount = pickupOrdersCount,
+                scheduledOrdersCount = scheduledOrdersCount,
+                vouchersRedeemedCount = vouchersRedeemedCount,
+                vouchersDiscountTotal = vouchersDiscountTotal,
+                ordersWithVoucherCount = ordersWithVoucherCount,
+                topVoucher = topVoucher
+            )
+            csvFile.writeText(csvContent, Charsets.UTF_8)
 
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", csvFile)
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "Delivio Report - ${selectedPeriod.title}")
+                putExtra(Intent.EXTRA_SUBJECT, "Delivio Report (${selectedSource.label}) - ${selectedPeriod.title}")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(intent, "Export Report CSV"))
@@ -550,6 +489,7 @@ fun ReportsScreen(
                                     .size(12.dp)
                                     .clickable {
                                         lastRefreshedTime = System.currentTimeMillis()
+                                        onPeriodOrRangeChanged(startMs, endMs, prevStartMs, prevEndMs)
                                         Toast.makeText(context, "Reports updated", Toast.LENGTH_SHORT).show()
                                     }
                             )
@@ -596,7 +536,13 @@ fun ReportsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (isMultiOutlet) {
+            // Top Source Segmented Control: "All sales" | "Delivio online" | "In-store (POS)"
+            SalesSourceSegmentedControl(
+                selectedSource = selectedSource,
+                onSelectSource = { selectedSource = it }
+            )
+
+            if (isMultiOutlet || isPosLoading) {
                 val filterText = when {
                     selectedOutletIds.size <= 1 -> "Outlets: This outlet"
                     selectedOutletIds.size >= outlets.size -> "Outlets: All (${outlets.size})"
@@ -607,20 +553,24 @@ fun ReportsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    FilterChip(
-                        selected = selectedOutletIds.size > 1,
-                        onClick = onOpenOutletsFilter,
-                        leadingIcon = {
-                            Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                        label = { Text(filterText, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = DelivioYellow,
-                            selectedLabelColor = Color(0xFF1A1A1A)
-                        ),
-                        modifier = Modifier.testTag("reports_outlets_filter_chip")
-                    )
-                    if (isCombinedLoading) {
+                    if (isMultiOutlet) {
+                        FilterChip(
+                            selected = selectedOutletIds.size > 1,
+                            onClick = onOpenOutletsFilter,
+                            leadingIcon = {
+                                Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
+                            },
+                            label = { Text(filterText, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = DelivioYellow,
+                                selectedLabelColor = Color(0xFF1A1A1A)
+                            ),
+                            modifier = Modifier.testTag("reports_outlets_filter_chip")
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+                    if (isCombinedLoading || isPosLoading) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = DelivioYellow)
                     }
                 }
@@ -628,7 +578,9 @@ fun ReportsScreen(
 
             // 1. Timeframe Filter Chips
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ReportPeriod.values().forEach { period ->
@@ -642,12 +594,14 @@ fun ReportsScreen(
                                 DatePickerDialog(context, { _, y, m, d ->
                                     val startCal = Calendar.getInstance(tz).apply {
                                         set(y, m, d, 0, 0, 0)
+                                        set(Calendar.MILLISECOND, 0)
                                     }
                                     customStartMs = startCal.timeInMillis
                                     // Then pick end date
                                     DatePickerDialog(context, { _, y2, m2, d2 ->
                                         val endCal = Calendar.getInstance(tz).apply {
                                             set(y2, m2, d2, 23, 59, 59)
+                                            set(Calendar.MILLISECOND, 999)
                                         }
                                         customEndMs = endCal.timeInMillis
                                         selectedPeriod = ReportPeriod.CUSTOM
@@ -696,140 +650,176 @@ fun ReportsScreen(
                 }
             }
 
-            // 2. Section: New vs. Returning Customers
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth().testTag("new_vs_returning_card")
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text(
-                        text = "New vs. Returning Customers",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
+            // Split Bar for "All sales": Delivio online vs In-store
+            if (selectedSource == SalesSourceFilter.ALL) {
+                OnlineVsPosSplitCard(split = onlineVsPosSplit)
+            }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Donut Chart
-                        Box(
-                            modifier = Modifier.size(110.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            DonutCustomerChart(
-                                newPercentage = newPercentage.toFloat(),
-                                returningPercentage = returningPercentage.toFloat(),
-                                modifier = Modifier.fillMaxSize()
+            // 2. Section: New vs. Returning Customers (Delivio-only; add note for in-store)
+            if (selectedSource != SalesSourceFilter.IN_STORE_POS) {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("new_vs_returning_card")
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "New vs. Returning Customers",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
                             )
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            if (selectedSource == SalesSourceFilter.ALL) {
                                 Text(
-                                    text = "$totalCustomerOrders",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 18.sp
+                                    text = "Delivio online only • In-store customers are not tracked",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag("pos_customers_not_tracked_note")
                                 )
-                                Text("Orders", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
 
-                        // Counts and Legend
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(DelivioYellow))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            // Donut Chart
+                            Box(
+                                modifier = Modifier.size(110.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                DonutCustomerChart(
+                                    newPercentage = newPercentage.toFloat(),
+                                    returningPercentage = returningPercentage.toFloat(),
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
-                                        text = "New Customers: $newCustomerOrdersCount orders ($newPercentage%)",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodyMedium
+                                        text = "$totalCustomerOrders",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 18.sp
                                     )
-                                    Text("First order with your shop", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Orders", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(Color(0xFF8B5CF6)))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                            // Counts and Legend
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(DelivioYellow))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = "New Customers: $newCustomerOrdersCount orders ($newPercentage%)",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text("First order with your shop", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(Color(0xFF8B5CF6)))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = "Returning Customers: $returningCustomerOrdersCount orders ($returningPercentage%)",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text("Repeat orders from past diners", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        // Two Advice Cards
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Advice 1: Returning Customers
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(
-                                        text = "Returning Customers: $returningCustomerOrdersCount orders ($returningPercentage%)",
+                                        text = "Looking for more returning customers?",
                                         fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodyMedium
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    Text("Repeat orders from past diners", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text = "Reply to feedback and keep food quality consistent.",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    OutlinedButton(
+                                        onClick = onOpenReviews,
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Text("Ratings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            // Advice 2: New Customers
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        text = "Looking for more new customers?",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Offer an attractive voucher for first-time buyers.",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Button(
+                                        onClick = onCreateVoucher,
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = DelivioYellow, contentColor = Color(0xFF1A1A1A)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Text("Create voucher", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                     }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                    // Two Advice Cards
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth().testTag("pos_customers_not_tracked_note")
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Advice 1: Returning Customers
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = "Looking for more returning customers?",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Reply to feedback and keep food quality consistent.",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                OutlinedButton(
-                                    onClick = onOpenReviews,
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(30.dp)
-                                ) {
-                                    Text("Ratings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-
-                        // Advice 2: New Customers
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = "Looking for more new customers?",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Offer an attractive voucher for first-time buyers.",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Button(
-                                    onClick = onCreateVoucher,
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = DelivioYellow, contentColor = Color(0xFF1A1A1A)),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(30.dp)
-                                ) {
-                                    Text("Create voucher", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
+                        Icon(Icons.Default.Info, contentDescription = null, tint = PosBrandBlue, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "New vs. Returning Customers: In-store customers are not tracked.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -843,56 +833,118 @@ fun ReportsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Sales Overview",
+                        text = when (selectedSource) {
+                            SalesSourceFilter.ALL -> "Sales Summary (All sales)"
+                            SalesSourceFilter.IN_STORE_POS -> "Sales Summary (In-store POS)"
+                            SalesSourceFilter.DELIVIO_ONLINE -> "Sales Overview"
+                        },
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MetricChangeCard(
-                                title = "Subtotal Sales",
-                                value = FormatUtils.formatCurrency(subtotalSales),
-                                changePercent = computePercentChange(subtotalSales, prevSubtotalSales),
-                                modifier = Modifier.weight(1f)
-                            )
-                            MetricChangeCard(
-                                title = "Vouchers Given",
-                                value = "-₱${FormatUtils.formatCurrency(vouchersGiven)}",
-                                changePercent = computePercentChange(vouchersGiven, prevVouchersGiven),
-                                isNegativeBenefit = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                    if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Subtotal Sales",
+                                    value = FormatUtils.formatCurrency(subtotalSales),
+                                    changePercent = computePercentChange(subtotalSales, prevSubtotalSales),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Vouchers Given",
+                                    value = "-₱${FormatUtils.formatCurrency(vouchersGiven)}",
+                                    changePercent = computePercentChange(vouchersGiven, prevVouchersGiven),
+                                    isNegativeBenefit = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MetricChangeCard(
-                                title = "Net Sales",
-                                value = FormatUtils.formatCurrency(netSales),
-                                changePercent = computePercentChange(netSales, prevNetSales),
-                                isHighlighted = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            MetricChangeCard(
-                                title = "Orders",
-                                value = "$ordersCount",
-                                changePercent = computePercentChange(ordersCount.toDouble(), prevOrdersCount.toDouble()),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Net Sales",
+                                    value = FormatUtils.formatCurrency(netSales),
+                                    changePercent = computePercentChange(netSales, prevNetSales),
+                                    isHighlighted = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Orders",
+                                    value = "$ordersCount",
+                                    changePercent = computePercentChange(ordersCount.toDouble(), prevOrdersCount.toDouble()),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MetricChangeCard(
-                                title = "Avg Order Value",
-                                value = FormatUtils.formatCurrency(aov),
-                                changePercent = computePercentChange(aov, prevAov),
-                                modifier = Modifier.weight(1f)
-                            )
-                            MetricChangeCard(
-                                title = "Items Sold",
-                                value = "$itemsSold",
-                                changePercent = computePercentChange(itemsSold.toDouble(), prevItemsSold.toDouble()),
-                                modifier = Modifier.weight(1f)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Avg Order Value",
+                                    value = FormatUtils.formatCurrency(aov),
+                                    changePercent = computePercentChange(aov, prevAov),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Items Sold",
+                                    value = "$itemsSold",
+                                    changePercent = computePercentChange(itemsSold.toDouble(), prevItemsSold.toDouble()),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Item Sales",
+                                    value = FormatUtils.formatCurrency(activePosSummary.itemSales),
+                                    changePercent = computePercentChange(activePosSummary.itemSales, activePrevSummary.itemSales),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Discounts",
+                                    value = "-${FormatUtils.formatCurrency(activePosSummary.discounts)}",
+                                    changePercent = computePercentChange(activePosSummary.discounts, activePrevSummary.discounts),
+                                    isNegativeBenefit = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Refunds",
+                                    value = "-${FormatUtils.formatCurrency(activePosSummary.refunds)}",
+                                    changePercent = computePercentChange(activePosSummary.refunds, activePrevSummary.refunds),
+                                    isNegativeBenefit = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Net Sales",
+                                    value = FormatUtils.formatCurrency(activePosSummary.netSales),
+                                    changePercent = computePercentChange(activePosSummary.netSales, activePrevSummary.netSales),
+                                    isHighlighted = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                MetricChangeCard(
+                                    title = "Orders",
+                                    value = "${activePosSummary.ordersCount}",
+                                    changePercent = computePercentChange(activePosSummary.ordersCount.toDouble(), activePrevSummary.ordersCount.toDouble()),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MetricChangeCard(
+                                    title = "Average Order",
+                                    value = FormatUtils.formatCurrency(activePosSummary.averageOrder),
+                                    changePercent = computePercentChange(activePosSummary.averageOrder, activePrevSummary.averageOrder),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            PosSeparateFeesRow(
+                                tips = activePosSummary.tips,
+                                serviceCharge = activePosSummary.serviceCharge,
+                                vatAmount = activePosSummary.vatAmount
                             )
                         }
                     }
@@ -900,10 +952,11 @@ fun ReportsScreen(
             }
 
             if (isMultiOutlet && selectedOutletIds.size > 1) {
-                val breakdown = remember(outlets, selectedOutletIds, deliveredPeriodOrders) {
+                val breakdown = remember(selectedSource, outlets, selectedOutletIds, deliveredPeriodOrders, countedPosOrders) {
                     outlets.filter { it.merchantId in selectedOutletIds }.map { outlet ->
-                        val oDelivered = deliveredPeriodOrders.filter { it.merchantId == outlet.merchantId }
-                        Triple(outlet, oDelivered.size, oDelivered.sumOf { it.netSales })
+                        val oDelivered = if (selectedSource == SalesSourceFilter.IN_STORE_POS) emptyList() else deliveredPeriodOrders.filter { it.merchantId == outlet.merchantId }
+                        val pCounted = if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) emptyList() else countedPosOrders.filter { it.shopId == outlet.merchantId }
+                        Triple(outlet, oDelivered.size + pCounted.size, oDelivered.sumOf { it.netSales } + pCounted.sumOf { it.netSales })
                     }
                 }
                 Card(
@@ -933,14 +986,14 @@ fun ReportsScreen(
                                     Text(
                                         text = listOfNotNull(
                                             outlet.branchCode.takeIf { it.isNotBlank() },
-                                            "$count delivered"
+                                            "$count orders"
                                         ).joinToString(" • "),
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Text(
-                                    text = "₱${FormatUtils.formatCurrency(net)}",
+                                    text = FormatUtils.formatCurrency(net),
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 14.sp,
                                     color = Color(0xFF1A1A1A)
@@ -960,22 +1013,28 @@ fun ReportsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Orders by Day",
+                        text = if (selectedSource == SalesSourceFilter.IN_STORE_POS) "Sales by Day (POS)" else "Orders by Day",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium
                     )
 
                     var selectedDayIndex by remember { mutableStateOf<Int?>(null) }
                     selectedDayIndex?.let { idx ->
-                        if (idx in ordersByDayList.indices) {
-                            val day = ordersByDayList[idx]
+                        if (idx in activeDayDataList.indices) {
+                            val day = activeDayDataList[idx]
+                            val comb = combinedDailyList.getOrNull(idx)
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = DelivioYellow.copy(alpha = 0.2f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
+                                val detailText = if (selectedSource == SalesSourceFilter.ALL && comb != null) {
+                                    "${day.dayOfWeek}, ${day.displayLabel}: ${comb.onlineOrders} online + ${comb.posOrders} POS (${FormatUtils.formatCurrency(day.subtotal)})"
+                                } else {
+                                    "${day.dayOfWeek}, ${day.displayLabel}: ${day.orders} orders (${FormatUtils.formatCurrency(day.subtotal)})"
+                                }
                                 Text(
-                                    text = "${day.dayOfWeek}, ${day.displayLabel}: ${day.orders} orders (₱${FormatUtils.formatCurrency(day.subtotal)})",
+                                    text = detailText,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(8.dp),
@@ -985,13 +1044,13 @@ fun ReportsScreen(
                         }
                     }
 
-                    if (ordersByDayList.all { it.orders == 0 }) {
+                    if (activeDayDataList.all { it.orders == 0 }) {
                         Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
                             Text("No orders recorded during this period.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                         }
                     } else {
                         DailyBarChart(
-                            days = ordersByDayList,
+                            days = activeDayDataList,
                             selectedIndex = selectedDayIndex,
                             onSelectIndex = { selectedDayIndex = it },
                             modifier = Modifier.fillMaxWidth().height(130.dp)
@@ -1013,7 +1072,7 @@ fun ReportsScreen(
                                     Icon(Icons.Default.Star, contentDescription = null, tint = DelivioYellow, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Best day of the week: $dow (${pair.second} orders • ₱${FormatUtils.formatCurrency(pair.first)})",
+                                        text = "Best day of the week: $dow (${pair.second} orders • ${FormatUtils.formatCurrency(pair.first)})",
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 12.sp
                                     )
@@ -1038,13 +1097,18 @@ fun ReportsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Orders by Hour",
+                            text = if (selectedSource == SalesSourceFilter.IN_STORE_POS) "Sales by Hour (POS)" else "Orders by Hour",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleMedium
                         )
-                        peakHour?.let {
+                        val activePeak = if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) {
+                            peakHour?.let { it.label to it.orders }
+                        } else {
+                            stackedPeakHour?.let { it.label to it.totalOrders }
+                        }
+                        activePeak?.let { (lbl, cnt) ->
                             Text(
-                                text = "Peak: ${it.label} (${it.orders} orders)",
+                                text = "Peak: $lbl ($cnt orders)",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -1052,10 +1116,20 @@ fun ReportsScreen(
                         }
                     }
 
-                    HourlyBarChart(
-                        hours = hourlyDataList,
-                        modifier = Modifier.fillMaxWidth().height(130.dp)
-                    )
+                    if (selectedSource == SalesSourceFilter.DELIVIO_ONLINE) {
+                        HourlyBarChart(
+                            hours = hourlyDataList,
+                            modifier = Modifier.fillMaxWidth().height(130.dp)
+                        )
+                    } else {
+                        StackedHourlyBarChart(
+                            hours = stackedHourlyData,
+                            onlineColor = DelivioYellow,
+                            posColor = PosBrandBlue,
+                            showPosLegend = selectedSource == SalesSourceFilter.ALL,
+                            emptyText = "No orders recorded in this period"
+                        )
+                    }
                 }
             }
 
@@ -1150,183 +1224,199 @@ fun ReportsScreen(
                 }
             }
 
-            // 7. Section: Order Types & Payment Types
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text(
-                        text = "Fulfillment & Payment Methods",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
+            // POS Sections (shown in In-store POS view, and in All sales when POS activity exists)
+            val showPosBreakdownCards = selectedSource == SalesSourceFilter.IN_STORE_POS ||
+                (selectedSource == SalesSourceFilter.ALL && (countedPosOrders.isNotEmpty() || posPeriodShifts.isNotEmpty() || posLogs.isNotEmpty()))
 
-                    // Fulfillment Types Progress Bars
-                    val totalFulfill = (deliveryOrdersCount + pickupOrdersCount).coerceAtLeast(1)
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Delivery vs. Pick Up", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Delivery: $deliveryOrdersCount (${(deliveryOrdersCount * 100 / totalFulfill)}%) • Pick Up: $pickupOrdersCount", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        LinearProgressIndicator(
-                            progress = { deliveryOrdersCount.toFloat() / totalFulfill },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                            color = DelivioYellow,
-                            trackColor = Color(0xFF8B5CF6)
-                        )
-                        if (scheduledOrdersCount > 0) {
-                            Text("Includes $scheduledOrdersCount scheduled advance orders", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                    // Payment Types Progress Bars
-                    val totalPay = (cashOrdersCount + onlineOrdersCount + walletOrdersCount).coerceAtLeast(1)
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Payment Methods", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Cash: $cashOrdersCount • Online: $onlineOrdersCount • Wallet: $walletOrdersCount", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        LinearProgressIndicator(
-                            progress = { cashOrdersCount.toFloat() / totalPay },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                            color = Color(0xFF4CAF50),
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    }
-                }
+            if (showPosBreakdownCards) {
+                PosPaymentMethodsCard(paymentStats = posPaymentStats)
+                PosOrderTypesCard(orderTypeStats = posOrderTypeStats)
+                PosDiscountsByKindCard(discounts = posDiscountsByKind)
+                PosVoidsAndRefundsCard(summary = posVoidsAndRefunds, tz = tz)
+                PosCashierPerformanceCard(cashiers = posCashierPerf)
+                PosShiftSummariesCard(shifts = posPeriodShifts, tz = tz)
             }
 
-            // 8. Section: Service Quality
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Service Quality & Operations",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
+            // Delivio Online Fulfillment, Service Quality & Vouchers (shown in Online & All sales)
+            if (selectedSource != SalesSourceFilter.IN_STORE_POS) {
+                // 7. Section: Order Types & Payment Types
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Text(
+                            text = if (selectedSource == SalesSourceFilter.ALL) "Online Fulfillment & Payment Methods" else "Fulfillment & Payment Methods",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        QualityStatBox(
-                            title = "Accept Rate",
-                            value = acceptRatePercent?.let { "$it%" } ?: "No data",
-                            subtitle = if (qualifyingAcceptOrders > 0) "$acceptedCount of $qualifyingAcceptOrders" else "No orders",
-                            modifier = Modifier.weight(1f)
-                        )
-                        QualityStatBox(
-                            title = "Avg Prep Time",
-                            value = avgPrepMinutes?.let { "${it.roundToInt()} mins" } ?: "No data",
-                            subtitle = "Target: <${targetPrepTime}m",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        QualityStatBox(
-                            title = "Late Orders",
-                            value = "$lateOrdersCount",
-                            subtitle = "> Target prep time",
-                            modifier = Modifier.weight(1f)
-                        )
-                        QualityStatBox(
-                            title = "Rejected / Expired",
-                            value = "$rejectedCount / $expiredCount",
-                            subtitle = "Shop reject / timeout",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    // Star Rating Distribution
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Customer Rating Distribution", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    val totalRev = reviewsCount.coerceAtLeast(1)
-                    (5 downTo 1).forEach { stars ->
-                        val count = starDistribution[stars] ?: 0
-                        val pct = (count.toFloat() / totalRev)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("$stars★", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+                        // Fulfillment Types Progress Bars
+                        val totalFulfill = (deliveryOrdersCount + pickupOrdersCount).coerceAtLeast(1)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Delivery vs. Pick Up", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Delivery: $deliveryOrdersCount (${(deliveryOrdersCount * 100 / totalFulfill)}%) • Pick Up: $pickupOrdersCount", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             LinearProgressIndicator(
-                                progress = { pct },
-                                modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                progress = { deliveryOrdersCount.toFloat() / totalFulfill },
+                                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
                                 color = DelivioYellow,
+                                trackColor = Color(0xFF8B5CF6)
+                            )
+                            if (scheduledOrdersCount > 0) {
+                                Text("Includes $scheduledOrdersCount scheduled advance orders", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        // Payment Types Progress Bars
+                        val totalPay = (cashOrdersCount + onlineOrdersCount + walletOrdersCount).coerceAtLeast(1)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Payment Methods", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Cash: $cashOrdersCount • Online: $onlineOrdersCount • Wallet: $walletOrdersCount", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            LinearProgressIndicator(
+                                progress = { cashOrdersCount.toFloat() / totalPay },
+                                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                                color = Color(0xFF4CAF50),
                                 trackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("$count", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(24.dp))
                         }
                     }
+                }
 
-                    if (cancellationsByReason.isNotEmpty()) {
+                // 8. Section: Service Quality
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Service Quality & Operations",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            QualityStatBox(
+                                title = "Accept Rate",
+                                value = acceptRatePercent?.let { "$it%" } ?: "No data",
+                                subtitle = if (qualifyingAcceptOrders > 0) "$acceptedCount of $qualifyingAcceptOrders" else "No orders",
+                                modifier = Modifier.weight(1f)
+                            )
+                            QualityStatBox(
+                                title = "Avg Prep Time",
+                                value = avgPrepMinutes?.let { "${it.roundToInt()} mins" } ?: "No data",
+                                subtitle = "Target: <${targetPrepTime}m",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            QualityStatBox(
+                                title = "Late Orders",
+                                value = "$lateOrdersCount",
+                                subtitle = "> Target prep time",
+                                modifier = Modifier.weight(1f)
+                            )
+                            QualityStatBox(
+                                title = "Rejected / Expired",
+                                value = "$rejectedCount / $expiredCount",
+                                subtitle = "Shop reject / timeout",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        // Star Rating Distribution
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("Cancellations by Reason", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        cancellationsByReason.take(4).forEach { (reason, count) ->
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(reason, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("$count", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Customer Rating Distribution", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        val totalRev = reviewsCount.coerceAtLeast(1)
+                        (5 downTo 1).forEach { stars ->
+                            val count = starDistribution[stars] ?: 0
+                            val pct = (count.toFloat() / totalRev)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("$stars★", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+                                LinearProgressIndicator(
+                                    progress = { pct },
+                                    modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                    color = DelivioYellow,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("$count", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(24.dp))
+                            }
+                        }
+
+                        if (cancellationsByReason.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Cancellations by Reason", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            cancellationsByReason.take(4).forEach { (reason, count) ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(reason, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("$count", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // 9. Section: Vouchers Performance
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "Vouchers & Promotions",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        QualityStatBox(
-                            title = "Total Redemptions",
-                            value = "$vouchersRedeemedCount",
-                            subtitle = "$ordersWithVoucherCount orders",
-                            modifier = Modifier.weight(1f)
+                // 9. Section: Vouchers Performance
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Vouchers & Promotions",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
                         )
-                        QualityStatBox(
-                            title = "Discount Subsidized",
-                            value = "₱${FormatUtils.formatCurrency(vouchersDiscountTotal)}",
-                            subtitle = "Paid by merchant",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
 
-                    topVoucher?.let { (code, pair) ->
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = DelivioYellow.copy(alpha = 0.2f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            QualityStatBox(
+                                title = "Total Redemptions",
+                                value = "$vouchersRedeemedCount",
+                                subtitle = "$ordersWithVoucherCount orders",
+                                modifier = Modifier.weight(1f)
+                            )
+                            QualityStatBox(
+                                title = "Discount Subsidized",
+                                value = "₱${FormatUtils.formatCurrency(vouchersDiscountTotal)}",
+                                subtitle = "Paid by merchant",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        topVoucher?.let { (code, pair) ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = DelivioYellow.copy(alpha = 0.2f),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.ConfirmationNumber, contentDescription = null, tint = Color(0xFF1A1A1A), modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Top Voucher: $code", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.ConfirmationNumber, contentDescription = null, tint = Color(0xFF1A1A1A), modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Top Voucher: $code", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                    Text("${pair.first} uses • ₱${FormatUtils.formatCurrency(pair.second)}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
-                                Text("${pair.first} uses • ₱${FormatUtils.formatCurrency(pair.second)}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }
@@ -1334,12 +1424,23 @@ fun ReportsScreen(
             }
 
             // 10. Footer Disclaimer
+            val disclaimerText = when (selectedSource) {
+                SalesSourceFilter.DELIVIO_ONLINE ->
+                    "Reports show product subtotals only. Delivery fees, tips, and platform fees are excluded."
+                SalesSourceFilter.IN_STORE_POS ->
+                    "In-store sales come from Delivio POS and are not subject to Delivio fees."
+                SalesSourceFilter.ALL ->
+                    "Reports show product subtotals only (delivery fees and platform fees excluded). In-store sales come from Delivio POS and are not subject to Delivio fees."
+            }
             Text(
-                text = "Reports show product subtotals only. Delivery fees, tips, and platform fees are excluded.",
+                text = disclaimerText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .testTag("reports_footer_disclaimer")
             )
 
             Spacer(modifier = Modifier.height(32.dp))

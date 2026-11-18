@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.*
@@ -83,6 +84,8 @@ fun ProfileScreen(
         paperSize: String,
         autoPrint: Boolean
     ) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    showHowToUsePos: Boolean = false,
+    onOpenHowToUsePos: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -734,7 +737,40 @@ fun ProfileScreen(
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text("Merchant Partner Support", fontWeight = FontWeight.Bold) },
-            text = { Text("Delivio Partner 24/7 hotline: 1-800-DELIVIO\nEmail: partner-support@delivio.com\nLive kitchen chat available 8:00 AM - 11:00 PM.") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Delivio Partner 24/7 hotline: 1-800-DELIVIO\nEmail: partner-support@delivio.com\nLive kitchen chat available 8:00 AM - 11:00 PM.")
+                    if (showHowToUsePos) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    showHelpDialog = false
+                                    onOpenHowToUsePos()
+                                }
+                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                                .testTag("profile_help_how_to_use_pos_link"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "How to use Delivio POS",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            },
             confirmButton = { TextButton(onClick = { showHelpDialog = false }) { Text("OK") } }
         )
     }

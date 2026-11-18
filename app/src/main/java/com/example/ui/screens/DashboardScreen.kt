@@ -23,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,11 +31,15 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.MerchantSettings
 import com.example.data.model.Order
 import com.example.data.model.OrderStatus
+import com.example.data.model.PosOrder
+import com.example.ui.components.PosBrandBlue
+import com.example.ui.components.StackedHourlyBarChart
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
+import com.example.util.PosAnalyticsEngine
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
@@ -61,20 +66,22 @@ fun DashboardScreen(
     selectedOutletIds: Set<String> = emptySet(),
     isCombinedLoading: Boolean = false,
     onOpenOutletsFilter: () -> Unit = {},
+    posOrders: List<PosOrder> = emptyList(),
+    hasEverUsedPos: Boolean = false,
+    showTryPosLink: Boolean = false,
+    tryPosUrl: String = "",
+    platformTimezone: String = "",
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val customColors = LocalDelivioColors.current
     val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
 
-    val tz = remember(settings.timezone) {
-        TimeZone.getTimeZone(settings.timezone.ifBlank { "Asia/Manila" })
+    val tz = remember(platformTimezone, settings.timezone) {
+        PosAnalyticsEngine.resolveTimeZone(platformTimezone.ifBlank { settings.timezone })
     }
     val (todayStartMs, todayEndMs) = remember(currentTime, tz) {
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = currentTime }
-        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-        val start = cal.timeInMillis
-        cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59); cal.set(Calendar.MILLISECOND, 999)
-        start to cal.timeInMillis
+        PosAnalyticsEngine.computeTodayBounds(currentTime, tz)
     }
 
     val activeOrders = orders.filter {
@@ -139,27 +146,22 @@ fun DashboardScreen(
     }
     val (acceptRatePercent, acceptedOrdersCount, responseTotalOrders) = acceptStats
 
-    // Today's Hourly breakdown for Orders by Hour Chart
-    val todayHourlyData = remember(todayOrders, tz) {
-        val counts = IntArray(24) { 0 }
-        val cal = Calendar.getInstance(tz)
-        todayOrders.forEach { ord ->
-            cal.timeInMillis = ord.placedAtTimestamp
-            val h = cal.get(Calendar.HOUR_OF_DAY)
-            if (h in 0..23) counts[h]++
-        }
-        (0..23).map { h ->
-            val ampm = if (h >= 12) "PM" else "AM"
-            val h12 = when {
-                h == 0 -> 12
-                h > 12 -> h - 12
-                else -> h
-            }
-            Triple(h, "$h12$ampm", counts[h])
-        }
+    // Today's POS sales (only "paid" or "refunded" with paidAt; item sales = subtotal - discountTotal, minus refunds)
+    val countedTodayPosOrders = remember(posOrders, todayStartMs, todayEndMs) {
+        PosAnalyticsEngine.filterCountedPosSales(posOrders, todayStartMs, todayEndMs)
     }
-    val peakHour = remember(todayHourlyData) {
-        todayHourlyData.maxByOrNull { it.third }?.takeIf { it.third > 0 }
+    val todayPosSummary = remember(countedTodayPosOrders) {
+        PosAnalyticsEngine.computePosSummary(countedTodayPosOrders)
+    }
+    val showInStorePosCard = hasEverUsedPos || countedTodayPosOrders.isNotEmpty()
+    var showTryPosDialog by remember { mutableStateOf(false) }
+
+    // Today's Stacked Hourly breakdown (online + in-store POS)
+    val stackedHourlyData = remember(todayOrders, countedTodayPosOrders, tz) {
+        PosAnalyticsEngine.buildHourlyStackedData(todayOrders, countedTodayPosOrders, tz)
+    }
+    val peakHour = remember(stackedHourlyData) {
+        stackedHourlyData.maxByOrNull { it.totalOrders }?.takeIf { it.totalOrders > 0 }
     }
 
     // Real 7-day revenue trend
@@ -492,6 +494,68 @@ fun DashboardScreen(
                 iconVector = Icons.Default.Star,
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        if (showInStorePosCard) {
+            KpiCard(
+                title = "In-store sales today",
+                value = FormatUtils.formatCurrency(todayPosSummary.netSales),
+                subtitle = "${todayPosSummary.ordersCount} ${if (todayPosSummary.ordersCount == 1) "order" else "orders"}" +
+                    if (todayPosSummary.refunds > 0.0) " • Refunds: ${FormatUtils.formatCurrency(todayPosSummary.refunds)}" else "",
+                iconVector = Icons.Default.PointOfSale,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_instore_sales_card")
+            )
+        } else if (showTryPosLink) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable {
+                        if (tryPosUrl.startsWith("http", ignoreCase = true)) {
+                            try {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse(tryPosUrl)
+                                    )
+                                )
+                            } catch (_: Exception) {
+                                showTryPosDialog = true
+                            }
+                        } else {
+                            showTryPosDialog = true
+                        }
+                    }
+                    .padding(horizontal = 4.dp, vertical = 8.dp)
+                    .testTag("dashboard_try_pos_link"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.PointOfSale,
+                        contentDescription = null,
+                        tint = PosBrandBlue,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Try Delivio POS",
+                        color = PosBrandBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = PosBrandBlue,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
         // Store rating line
@@ -1039,7 +1103,7 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text("Orders by Hour Today", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        val peakText = if (peakHour != null) "Peak: ${peakHour.second} (${peakHour.third} orders)" else "No peak hour yet"
+                        val peakText = if (peakHour != null) "Peak: ${peakHour.label} (${peakHour.totalOrders} orders)" else "No peak hour yet"
                         Text(peakText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("Hourly", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = customColors.accent)
@@ -1047,8 +1111,13 @@ fun DashboardScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Canvas Bar Chart: Orders by hour
-                OrdersByHourChart(hours = todayHourlyData, accentColor = customColors.accent)
+                // Canvas Stacked Bar Chart: Online + In-store (POS) orders by hour
+                StackedHourlyBarChart(
+                    hours = stackedHourlyData,
+                    onlineColor = customColors.accent,
+                    posColor = PosBrandBlue,
+                    showPosLegend = showInStorePosCard
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
@@ -1180,6 +1249,23 @@ fun DashboardScreen(
                 }
             }
         }
+    }
+
+    if (showTryPosDialog) {
+        AlertDialog(
+            onDismissRequest = { showTryPosDialog = false },
+            title = { Text("Delivio POS", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Connect Delivio POS in-store to track dine-in and take-out orders, cashier shifts, voids, and combined online + in-store sales automatically inside Delivio Partner."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showTryPosDialog = false }) {
+                    Text("Got it", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 }
 

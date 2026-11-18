@@ -7,6 +7,7 @@ import com.example.data.model.*
 import com.example.util.CrashReportStore
 import com.example.util.FormatUtils
 import com.example.util.OrderDocumentParser
+import com.example.util.PosDocumentParser
 import com.example.util.MenuSyncEngine
 import com.example.util.MenuSyncResult
 import com.example.util.OutletMenuSnapshot
@@ -217,6 +218,7 @@ class MerchantRepository private constructor(context: Context) {
     private var inboxAudienceListener: ListenerRegistration? = null
     private var inboxReadsListener: ListenerRegistration? = null
     private var platformSettingsListener: ListenerRegistration? = null
+    private var appLinksListener: ListenerRegistration? = null
     private var cityListener: ListenerRegistration? = null
     private var reviewsListener: ListenerRegistration? = null
     private var riderReviewsListener: ListenerRegistration? = null
@@ -328,6 +330,12 @@ class MerchantRepository private constructor(context: Context) {
     private val alertedOrderIds = mutableSetOf<String>()
     private val _scheduledReleaseLeadMinutes = MutableStateFlow<Int>(0)
     val scheduledReleaseLeadMinutes: StateFlow<Int> = _scheduledReleaseLeadMinutes.asStateFlow()
+
+    val posRepository = PosFirestoreRepository(appContext) { firestore }
+    val platformPosSettings: StateFlow<PlatformPosSettings> = posRepository.platformPosSettings
+
+    private val _appLinksSettings = MutableStateFlow(AppLinksSettings())
+    val appLinksSettings: StateFlow<AppLinksSettings> = _appLinksSettings.asStateFlow()
 
     fun isOrderVisible(order: Order, now: Long = System.currentTimeMillis()): Boolean {
         val sched = order.scheduledFor ?: return true
@@ -1499,7 +1507,7 @@ class MerchantRepository private constructor(context: Context) {
                 }
             }
 
-        // 10. Platform Settings listener: settings/platform (for live platform service switches)
+        // 10. Platform Settings listener: settings/platform (for live platform service switches, timezone & POS link)
         platformSettingsListener = db.collection("settings").document("platform")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
@@ -1512,12 +1520,30 @@ class MerchantRepository private constructor(context: Context) {
                     }?.toMap() ?: emptyMap()
                     val leadMins = FormatUtils.parseInt(snapshot.get("scheduledReleaseLeadMinutes")) ?: 0
                     _scheduledReleaseLeadMinutes.value = leadMins
+                    posRepository.updatePlatformPosSettings(
+                        PosDocumentParser.parsePlatformPosSettings(snapshot.data)
+                    )
                 } else {
                     platformServicesMap = emptyMap()
                     _scheduledReleaseLeadMinutes.value = 0
+                    posRepository.updatePlatformPosSettings(PlatformPosSettings())
                 }
                 evaluateServiceLock()
                 evaluateAndPublishOrders(System.currentTimeMillis())
+            }
+
+        // 10b. App Links listener: settings/appLinks (live posUrl & posEnabled for drawer & Help)
+        appLinksListener = db.collection("settings").document("appLinks")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "App links listener error", error)
+                    return@addSnapshotListener
+                }
+                _appLinksSettings.value = if (snapshot != null && snapshot.exists()) {
+                    PosDocumentParser.parseAppLinksSettings(snapshot.data)
+                } else {
+                    AppLinksSettings()
+                }
             }
 
         // 11. Customer Reviews listener: reviews where merchantId == mId (latest 200, sorted in code)
@@ -1814,6 +1840,8 @@ class MerchantRepository private constructor(context: Context) {
         inboxReadsListener = null
         platformSettingsListener?.remove()
         platformSettingsListener = null
+        appLinksListener?.remove()
+        appLinksListener = null
         cityListener?.remove()
         cityListener = null
         reviewsListener?.remove()
@@ -1864,6 +1892,9 @@ class MerchantRepository private constructor(context: Context) {
         _inboxBannerMessage.value = null
         _newOrderAlert.value = null
         alertedOrderIds.clear()
+        posRepository.clearSessionCaches()
+        posRepository.updatePlatformPosSettings(PlatformPosSettings())
+        _appLinksSettings.value = AppLinksSettings()
     }
 
     private fun computeCombinedVouchers() {

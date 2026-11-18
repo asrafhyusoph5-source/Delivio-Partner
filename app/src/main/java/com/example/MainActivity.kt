@@ -9,12 +9,16 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.LayoutDirection
@@ -25,6 +29,7 @@ import com.example.data.model.OrderStatus
 import com.example.ui.components.*
 import com.example.ui.screens.*
 import com.example.ui.theme.DelivioPartnerTheme
+import com.example.util.PosBrowserLauncher
 import com.example.viewmodel.MerchantTab
 import com.example.viewmodel.MerchantViewModel
 import kotlinx.coroutines.launch
@@ -181,6 +186,17 @@ class MainActivity : ComponentActivity() {
             val crashReports by viewModel.crashReports.collectAsStateWithLifecycle()
             val manualBookingError by viewModel.manualBookingError.collectAsStateWithLifecycle()
 
+            // Delivio POS (read-only) states
+            val platformPosSettings by viewModel.platformPosSettings.collectAsStateWithLifecycle()
+            val appLinksSettings by viewModel.appLinksSettings.collectAsStateWithLifecycle()
+            val dashboardPosOrders by viewModel.dashboardPosOrders.collectAsStateWithLifecycle()
+            val dashboardHasAnyPosOrders by viewModel.dashboardHasAnyPosOrders.collectAsStateWithLifecycle()
+            val reportsPosOrders by viewModel.reportsPosOrders.collectAsStateWithLifecycle()
+            val reportsPrevPosOrders by viewModel.reportsPrevPosOrders.collectAsStateWithLifecycle()
+            val reportsPosShifts by viewModel.reportsPosShifts.collectAsStateWithLifecycle()
+            val reportsPosLogs by viewModel.reportsPosLogs.collectAsStateWithLifecycle()
+            val isReportsPosLoading by viewModel.isReportsPosLoading.collectAsStateWithLifecycle()
+
             LaunchedEffect(Unit) {
                 viewModel.newIncomingMessageEvent.collect { thread ->
                     viewModel.showSnackbar("New message on #${thread.orderNumber}")
@@ -199,10 +215,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val hostContext = LocalContext.current
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val coroutineScope = rememberCoroutineScope()
             var showHelpDialog by remember { mutableStateOf(false) }
             var showCrashReportsDialog by remember { mutableStateOf(false) }
+            var showPosLaunchSheet by remember { mutableStateOf(false) }
+
+            val launchPosInBrowser: () -> Unit = {
+                val opened = PosBrowserLauncher.openPosUrl(hostContext, appLinksSettings.posUrl)
+                if (!opened) {
+                    viewModel.showSnackbar("Unable to open Delivio POS in browser")
+                }
+            }
 
             DelivioPartnerTheme(
                 themeAccentHex = settings.themeAccentHex,
@@ -478,6 +503,10 @@ class MainActivity : ComponentActivity() {
                     // Full-screen Reports route
                     val useCombinedReports = isMultiOutlet && reportsSelectedOutletIds.size > 1
                     val effectiveReportsOrders = if (useCombinedReports) reportsCombinedOrders else orders
+                    val effectiveReportsOutletIds = remember(reportsSelectedOutletIds, activeMerchantId, settings.merchantId) {
+                        val ids = reportsSelectedOutletIds.ifEmpty { setOfNotNull(activeMerchantId ?: settings.merchantId.takeIf { it.isNotBlank() }) }
+                        ids.toList().sorted()
+                    }
                     ReportsScreen(
                         settings = settings,
                         orders = effectiveReportsOrders,
@@ -498,7 +527,23 @@ class MainActivity : ComponentActivity() {
                         outlets = outlets,
                         selectedOutletIds = if (reportsSelectedOutletIds.isNotEmpty()) reportsSelectedOutletIds else setOfNotNull(activeMerchantId),
                         isCombinedLoading = isReportsCombinedLoading,
-                        onOpenOutletsFilter = { viewModel.openReportsOutletsFilter() }
+                        onOpenOutletsFilter = { viewModel.openReportsOutletsFilter() },
+                        posOrders = reportsPosOrders,
+                        prevPosOrders = reportsPrevPosOrders,
+                        posShifts = reportsPosShifts,
+                        posLogs = reportsPosLogs,
+                        isPosLoading = isReportsPosLoading,
+                        platformTimezone = platformPosSettings.timezone,
+                        onPeriodOrRangeChanged = { sMs, eMs, psMs, peMs ->
+                            viewModel.loadReportsPosData(
+                                outletIds = effectiveReportsOutletIds,
+                                startMs = sMs,
+                                endMs = eMs,
+                                prevStartMs = psMs,
+                                prevEndMs = peMs,
+                                nowMs = currentTime
+                            )
+                        }
                     )
                 } else if (activeChatOrder != null) {
                     // Full-screen Customer Chat view
@@ -630,6 +675,15 @@ class MainActivity : ComponentActivity() {
                                         onOpenOutlets = {
                                             coroutineScope.launch { drawerState.close() }
                                             viewModel.openSettingsAndOutlets()
+                                        },
+                                        showDelivioPos = appLinksSettings.isPosAvailable,
+                                        onOpenDelivioPos = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            if (PosBrowserLauncher.shouldSkipLaunchSheet(hostContext)) {
+                                                launchPosInBrowser()
+                                            } else {
+                                                showPosLaunchSheet = true
+                                            }
                                         }
                                     )
                                 }
@@ -798,6 +852,15 @@ class MainActivity : ComponentActivity() {
                                                     else dashboardCombinedReviews.map { it.ratingMerchant }.average()
                                                 } else averageRating
 
+                                                val effectiveDashboardOutletIds = remember(dashboardSelectedOutletIds, activeMerchantId, settings.merchantId) {
+                                                    val ids = dashboardSelectedOutletIds.ifEmpty { setOfNotNull(activeMerchantId ?: settings.merchantId.takeIf { it.isNotBlank() }) }
+                                                    ids.toList().sorted()
+                                                }
+                                                val currentMinuteBucket = currentTime / 60_000L
+                                                LaunchedEffect(effectiveDashboardOutletIds, platformPosSettings.timezone, currentMinuteBucket) {
+                                                    viewModel.refreshDashboardPos(effectiveDashboardOutletIds, currentTime)
+                                                }
+
                                                 DashboardScreen(
                                                     settings = settings,
                                                     orders = effectiveDashboardOrders,
@@ -818,7 +881,12 @@ class MainActivity : ComponentActivity() {
                                                     outlets = outlets,
                                                     selectedOutletIds = if (dashboardSelectedOutletIds.isNotEmpty()) dashboardSelectedOutletIds else setOfNotNull(activeMerchantId),
                                                     isCombinedLoading = isDashboardCombinedLoading,
-                                                    onOpenOutletsFilter = { viewModel.openDashboardOutletsFilter() }
+                                                    onOpenOutletsFilter = { viewModel.openDashboardOutletsFilter() },
+                                                    posOrders = dashboardPosOrders,
+                                                    hasEverUsedPos = dashboardHasAnyPosOrders,
+                                                    showTryPosLink = platformPosSettings.showTryPosLink,
+                                                    tryPosUrl = platformPosSettings.tryPosUrl,
+                                                    platformTimezone = platformPosSettings.timezone
                                                 )
                                             }
 
@@ -879,7 +947,9 @@ class MainActivity : ComponentActivity() {
                                                             storeName, phone, minOrder, prep,
                                                             sound, vibration, paper, autoPrint
                                                         )
-                                                    }
+                                                    },
+                                                    showHowToUsePos = appLinksSettings.isPosAvailable,
+                                                    onOpenHowToUsePos = launchPosInBrowser
                                                 )
                                             }
                                         }
@@ -1329,6 +1399,35 @@ class MainActivity : ComponentActivity() {
                                 Text("• Merchant Hotline: (02) 8888-3354", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                                 Text("• Partner Support: partner-support@delivio.ph", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                                 Text("• Operating Hours: 24/7 Operations", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (appLinksSettings.isPosAvailable) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                showHelpDialog = false
+                                                launchPosInBrowser()
+                                            }
+                                            .padding(horizontal = 4.dp, vertical = 6.dp)
+                                            .testTag("help_how_to_use_pos_link"),
+                                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "How to use Delivio POS",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
                             }
                         },
                         confirmButton = {
@@ -1342,6 +1441,20 @@ class MainActivity : ComponentActivity() {
                                 Text("Close", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                             }
                         }
+                    )
+                }
+
+                // 21b. One-time Delivio POS Sign-in Notice Sheet
+                if (showPosLaunchSheet && appLinksSettings.isPosAvailable) {
+                    PosLaunchBottomSheet(
+                        onOpen = { dontShowAgain ->
+                            if (dontShowAgain) {
+                                PosBrowserLauncher.setSkipLaunchSheet(hostContext, true)
+                            }
+                            showPosLaunchSheet = false
+                            launchPosInBrowser()
+                        },
+                        onCancel = { showPosLaunchSheet = false }
                     )
                 }
 
