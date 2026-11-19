@@ -89,8 +89,12 @@ object BluetoothPrinterHelper {
 
         for (line in lines) {
             val trimmed = line.trimEnd('\r')
-            // Replace Philippine Peso sign ₱ with P or string representation for compatibility with ASCII thermal printers
-            val sanitized = trimmed.replace("₱", "P")
+            // Sanitize characters outside CP437 for thermal printer compatibility
+            val sanitized = trimmed
+                .replace("₱", "P")
+                .replace("─", "-")
+                .replace("═", "=")
+                .replace("•", "*")
             val encoded = sanitized.toByteArray(charset)
             for (b in encoded) {
                 bytes.add(b)
@@ -138,20 +142,20 @@ object BluetoothPrinterHelper {
     }
 
     /**
-     * Prints Merchant's Copy and Customer's Copy of an order to 58mm bluetooth printer
+     * Prints Merchant's Copy and Customer's Copy of an order to bluetooth printer using shared ReceiptPrinterHelper
      */
     suspend fun printOrder(
         context: Context,
         deviceAddress: String,
         order: Order,
         storeName: String,
-        design: ReceiptDesign = ReceiptDesign()
+        design: ReceiptDesign = ReceiptDesign(),
+        paperSize: String = "58mm"
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        // Generate formatted receipt using ReceiptPrinterHelper with 58mm column width
         val receiptText = ReceiptPrinterHelper.generateFormattedReceiptText(
             order = order,
             storeName = storeName,
-            paperSize = "58mm",
+            paperSize = paperSize,
             design = design
         )
         val escPosBytes = createEscPosBytesFromText(receiptText)

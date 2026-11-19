@@ -286,18 +286,25 @@ class OrderDeliveryOptionTest {
             paperSize = "80mm"
         )
 
-        // Check Order # line directly under Delivio on both copies
-        assertTrue(receiptText.contains("Delivio\nOrder #4001"))
+        // Check brand line in spaced capitals & ORDER: row on both copies
+        assertTrue(receiptText.contains("D E L I V I O"))
+        assertTrue(receiptText.contains("*** MERCHANT'S COPY ***"))
+        assertTrue(receiptText.contains("*** CUSTOMER'S COPY ***"))
+        assertTrue(receiptText.contains("ORDER:"))
+        assertTrue(receiptText.contains("#4001"))
+        assertTrue(receiptText.contains("2x Classic Burger"))
 
-        // Must show Subtotal
-        assertTrue(receiptText.contains("Subtotal"))
+        // Must show SUBTOTAL and CUT HERE
+        assertTrue(receiptText.contains("SUBTOTAL"))
+        assertTrue(receiptText.contains("CUT HERE"))
 
-        // Must NEVER show Total line or fees
+        // Must NEVER show Total line, fees, or admin-only note
         assertFalse(receiptText.contains("Total              ₱"))
         assertFalse(receiptText.contains("Delivery fee"))
         assertFalse(receiptText.contains("Service fee"))
         assertFalse(receiptText.contains("Discount"))
         assertFalse(receiptText.contains("VAT"))
+        assertFalse(receiptText.contains("Fixed POS Policy"))
 
         // Test with custom ReceiptDesign
         val customDesign = com.example.data.model.ReceiptDesign(
@@ -310,7 +317,8 @@ class OrderDeliveryOptionTest {
             paperSize = "80mm",
             design = customDesign
         )
-        assertTrue(customText.contains("Delivio Express\nOrder #4001"))
+        assertTrue(customText.contains("D E L I V I O   E X P R E S S"))
+        assertTrue(customText.contains("#4001"))
         assertTrue(customText.contains("─"))
         assertFalse(customText.contains("Total              ₱"))
     }

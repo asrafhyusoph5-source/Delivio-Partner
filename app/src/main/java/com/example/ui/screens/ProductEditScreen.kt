@@ -51,41 +51,11 @@ import java.util.UUID
 private enum class ProductEditSubRoute {
     FORM,
     ADD_VARIATION,
-    SET_STOCK_PRICE
+    SET_STOCK_PRICE,
+    SET_EDITOR
 }
 
-private class EditableChoice(
-    val id: String = UUID.randomUUID().toString(),
-    initialName: String = "",
-    initialPriceText: String = "0",
-    initialAvailable: Boolean = true,
-    initialPopular: Boolean = false
-) {
-    var name by mutableStateOf(initialName)
-    var priceText by mutableStateOf(initialPriceText)
-    var available by mutableStateOf(initialAvailable)
-    var popular by mutableStateOf(initialPopular)
-    var wasTouched by mutableStateOf(false)
-}
-
-private class EditableSet(
-    val id: String = UUID.randomUUID().toString(),
-    initialName: String = "",
-    initialRequired: Boolean = true,
-    initialMinSelect: Int = 1,
-    initialMaxSelect: Int = 1,
-    initialChoices: List<EditableChoice> = listOf(EditableChoice())
-) {
-    var name by mutableStateOf(initialName)
-    var required by mutableStateOf(initialRequired)
-    var minSelect by mutableIntStateOf(initialMinSelect)
-    var maxSelect by mutableIntStateOf(initialMaxSelect)
-    var wasTouched by mutableStateOf(false)
-    var showAdvancedMin by mutableStateOf(false)
-    val choices = mutableStateListOf<EditableChoice>().apply { addAll(initialChoices) }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProductEditScreen(
     item: MenuItem,
@@ -127,8 +97,9 @@ fun ProductEditScreen(
         )
     }
 
-    // Sub-screen navigation (Form <-> Add Variation <-> Set Stock And Price)
+    // Sub-screen navigation (Form <-> Add Variation <-> Set Stock And Price / Set Editor)
     var subRoute by remember { mutableStateOf(ProductEditSubRoute.FORM) }
+    var editingSetIndex by remember { mutableStateOf<Int?>(null) }
     var variationsEnabled by remember {
         mutableStateOf(businessType == BusinessType.CONVENIENCE && item.variationsEnabled && item.variants.isNotEmpty())
     }
@@ -347,14 +318,11 @@ fun ProductEditScreen(
                 if (set.choices.isEmpty()) {
                     errors.add("Set $sNum needs at least one choice")
                 } else {
-                    val choiceSeen = mutableSetOf<String>()
                     set.choices.forEachIndexed { cIdx, choice ->
                         val cNum = cIdx + 1
                         val trimmedChoiceName = choice.name.trim()
                         if (trimmedChoiceName.isBlank()) {
                             errors.add("Set $sNum choice $cNum needs a name")
-                        } else if (!choiceSeen.add(trimmedChoiceName.lowercase())) {
-                            errors.add("Set $sNum has duplicate choice \"${choice.name}\"")
                         }
                         val cPrice = choice.priceText.toDoubleOrNull()
                         if (cPrice == null || cPrice < 0.0) {
@@ -420,8 +388,37 @@ fun ProductEditScreen(
                 )
                 return
             }
-            ProductEditSubRoute.FORM -> Unit
+            ProductEditSubRoute.FORM, ProductEditSubRoute.SET_EDITOR -> Unit
         }
+    } else if (subRoute == ProductEditSubRoute.SET_EDITOR) {
+        val targetIdx = editingSetIndex
+        val existingSet = targetIdx?.let { setsList.getOrNull(it) }
+        val otherNames = setsList
+            .filterIndexed { idx, _ -> idx != targetIdx }
+            .map { it.name.trim() }
+            .filter { it.isNotBlank() }
+            .toSet()
+
+        OptionSetEditorScreen(
+            initialSet = existingSet,
+            isNew = existingSet == null,
+            existingSetNames = otherNames,
+            onSave = { savedSet ->
+                if (targetIdx != null && targetIdx in setsList.indices) {
+                    setsList[targetIdx] = savedSet
+                } else if (setsList.size < 12) {
+                    setsList.add(savedSet)
+                }
+                editingSetIndex = null
+                subRoute = ProductEditSubRoute.FORM
+            },
+            onBack = {
+                editingSetIndex = null
+                subRoute = ProductEditSubRoute.FORM
+            },
+            modifier = modifier
+        )
+        return
     }
 
     Scaffold(
@@ -1627,23 +1624,43 @@ fun ProductEditScreen(
                     }
                 }
             } else {
-            // SECTION 5: Options (Sets) for Food shops
+            // SECTION 5: Options (Sets) for Food shops — compact summary cards + full-screen editor
             SectionCard(
                 title = "Options (Sets)",
                 helpText = "Sets let customers choose options such as flavor, drink, or add-ons. Example: set 'Drink' with Iced Tea (Free) and Coke (+₱10).",
                 onHelpClick = { activeHelpDialogText = it }
             ) {
-                Text(
-                    text = "Sets let customers choose options such as flavor, drink, or add-ons. Example: set 'Drink' with Iced Tea (Free) and Coke (+₱10).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
                 if (setsList.isEmpty()) {
-                    OutlinedButton(
-                        onClick = { setsList.add(EditableSet(initialChoices = listOf(EditableChoice()))) },
+                    Surface(
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("add_set_initial_btn")
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth().testTag("sets_empty_state_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Let customers customize this item",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Sets let customers choose options such as flavor, drink, or add-ons. Example: set \"Drink\" with Iced Tea (Free) and Coke (+₱10).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            editingSetIndex = null
+                            subRoute = ProductEditSubRoute.SET_EDITOR
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("add_set_initial_btn")
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -1652,64 +1669,95 @@ fun ProductEditScreen(
                 } else {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         setsList.forEachIndexed { setIndex, pSet ->
-                            val setNum = setIndex + 1
-                            val isDuplicateSetName = setsList.indices.any { it != setIndex && setsList[it].name.trim().equals(pSet.name.trim(), ignoreCase = true) && pSet.name.isNotBlank() }
-                            val isSetNameBlank = pSet.name.trim().isBlank()
-                            val showSetNameError = (pSet.wasTouched || hasTappedSaveOnce) && (isSetNameBlank || isDuplicateSetName || pSet.name.length > 50)
-                            val hasSetError = hasTappedSaveOnce && (isSetNameBlank || isDuplicateSetName || pSet.choices.isEmpty() || pSet.choices.any { it.name.trim().isBlank() })
+                            val ruleSummary = buildString {
+                                append(if (pSet.required) "Required" else "Optional")
+                                append(" - ")
+                                append(
+                                    when {
+                                        pSet.maxSelect <= 1 -> "Pick 1"
+                                        !pSet.required && pSet.minSelect == 0 -> "Select up to ${pSet.maxSelect}"
+                                        pSet.required && pSet.minSelect <= 1 -> "Select up to ${pSet.maxSelect}"
+                                        pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
+                                        else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
+                                    }
+                                )
+                            }
 
                             Card(
                                 shape = RoundedCornerShape(14.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                                border = BorderStroke(1.dp, if (hasSetError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant),
-                                modifier = Modifier.fillMaxWidth().testTag("set_card_$setIndex")
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        editingSetIndex = setIndex
+                                        subRoute = ProductEditSubRoute.SET_EDITOR
+                                    }
+                                    .testTag("set_card_$setIndex")
                             ) {
-                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    // 1. Header: Set title + action icons (duplicate, move up, move down, delete)
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                        verticalAlignment = Alignment.Top
                                     ) {
-                                        Text(
-                                            text = "Set $setNum",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = customColors.accent
-                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = pSet.name.trim().ifBlank { "Set ${setIndex + 1}" },
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = ruleSummary,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = customColors.accent,
+                                                modifier = Modifier.testTag("set_summary_rule_$setIndex")
+                                            )
+                                        }
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            // Duplicate icon
                                             IconButton(
                                                 onClick = {
-                                                    val clonedChoices = pSet.choices.map { c ->
-                                                        EditableChoice(
-                                                            id = UUID.randomUUID().toString(),
-                                                            initialName = c.name,
-                                                            initialPriceText = c.priceText,
-                                                            initialAvailable = c.available,
-                                                            initialPopular = c.popular
-                                                        )
-                                                    }
-                                                    val clonedSet = EditableSet(
-                                                        id = UUID.randomUUID().toString(),
-                                                        initialName = if (pSet.name.isNotBlank()) "${pSet.name} (Copy)" else "",
-                                                        initialRequired = pSet.required,
-                                                        initialMinSelect = pSet.minSelect,
-                                                        initialMaxSelect = pSet.maxSelect,
-                                                        initialChoices = clonedChoices
-                                                    )
-                                                    setsList.add(setIndex + 1, clonedSet)
+                                                    editingSetIndex = setIndex
+                                                    subRoute = ProductEditSubRoute.SET_EDITOR
                                                 },
+                                                modifier = Modifier.size(36.dp).testTag("edit_set_btn_$setIndex")
+                                            ) {
+                                                Icon(Icons.Default.Edit, contentDescription = "Edit Set", modifier = Modifier.size(18.dp))
+                                            }
+
+                                            IconButton(
+                                                onClick = {
+                                                    if (setsList.size < 12) {
+                                                        val clonedChoices = pSet.choices.map { c ->
+                                                            c.deepCopy(newId = UUID.randomUUID().toString())
+                                                        }
+                                                        val clonedSet = EditableSet(
+                                                            id = UUID.randomUUID().toString(),
+                                                            initialName = if (pSet.name.isNotBlank()) "${pSet.name} (Copy)" else "",
+                                                            initialRequired = pSet.required,
+                                                            initialMinSelect = pSet.minSelect,
+                                                            initialMaxSelect = pSet.maxSelect,
+                                                            initialChoices = clonedChoices
+                                                        )
+                                                        setsList.add(setIndex + 1, clonedSet)
+                                                    }
+                                                },
+                                                enabled = setsList.size < 12,
                                                 modifier = Modifier.size(36.dp).testTag("duplicate_set_btn_$setIndex")
                                             ) {
                                                 Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate Set", modifier = Modifier.size(18.dp))
                                             }
 
-                                            // Move Up icon
                                             IconButton(
                                                 onClick = {
                                                     if (setIndex > 0) {
@@ -1728,7 +1776,6 @@ fun ProductEditScreen(
                                                 )
                                             }
 
-                                            // Move Down icon
                                             IconButton(
                                                 onClick = {
                                                     if (setIndex < setsList.size - 1) {
@@ -1747,7 +1794,6 @@ fun ProductEditScreen(
                                                 )
                                             }
 
-                                            // Delete icon (confirm first)
                                             IconButton(
                                                 onClick = { setIndexToDelete = setIndex },
                                                 modifier = Modifier.size(36.dp).testTag("delete_set_btn_$setIndex")
@@ -1757,650 +1803,50 @@ fun ProductEditScreen(
                                         }
                                     }
 
-                                    // 2. Set Name single-line text field
-                                    OutlinedTextField(
-                                        value = pSet.name,
-                                        onValueChange = {
-                                            if (it.length <= 50) {
-                                                pSet.name = it
-                                            }
-                                            pSet.wasTouched = true
-                                        },
-                                        label = { Text("Set name *") },
-                                        placeholder = { Text("e.g. 1 pc. Choice of Flavor") },
-                                        supportingText = {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Text(
-                                                    text = if (showSetNameError) {
-                                                        when {
-                                                            isSetNameBlank -> "Set name is required"
-                                                            isDuplicateSetName -> "Set name must be unique"
-                                                            pSet.name.length > 50 -> "Max 50 characters"
-                                                            else -> "Customers see this as the title of the options"
-                                                        }
-                                                    } else {
-                                                        "Customers see this as the title of the options"
-                                                    },
-                                                    color = if (showSetNameError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Text(
-                                                    text = "${pSet.name.length}/50",
-                                                    color = if (pSet.name.length >= 50) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        },
-                                        isError = showSetNameError,
-                                        singleLine = true,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.fillMaxWidth().testTag("set_name_input_$setIndex")
-                                    )
-
-                                    // 3. Compact Row: Required switch on left + rounded "Up to X" stepper on right
-                                    val maxChoicesCount = maxOf(1, pSet.choices.size)
-
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = MaterialTheme.colorScheme.surface,
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                    // Compact Choice Chips
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Column(
-                                            modifier = Modifier.padding(12.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                // Left: Required switch
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Switch(
-                                                        checked = pSet.required,
-                                                        onCheckedChange = { isReq ->
-                                                            pSet.required = isReq
-                                                            if (isReq) {
-                                                                pSet.minSelect = maxOf(1, pSet.minSelect)
-                                                                if (pSet.maxSelect < pSet.minSelect) pSet.maxSelect = pSet.minSelect
-                                                            } else {
-                                                                pSet.minSelect = 0
-                                                            }
-                                                            // Close advanced min if equal to default
-                                                            if (pSet.minSelect == (if (isReq) 1 else 0)) {
-                                                                pSet.showAdvancedMin = false
-                                                            }
-                                                        },
-                                                        colors = SwitchDefaults.colors(
-                                                            checkedThumbColor = Color(0xFF1A1A1A),
-                                                            checkedTrackColor = customColors.accent,
-                                                            checkedBorderColor = Color(0xFF1A1A1A),
-                                                            uncheckedThumbColor = Color(0xFF757575),
-                                                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                                                        ),
-                                                        modifier = Modifier.testTag("set_required_switch_$setIndex")
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Column {
-                                                        Text(
-                                                            text = "Required",
-                                                            fontWeight = FontWeight.Bold,
-                                                            style = MaterialTheme.typography.bodyMedium
-                                                        )
-                                                        Text(
-                                                            text = if (pSet.required) "Must pick" else "Optional",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                }
-
-                                                // Right: Rounded stepper (minus, "Up to X", plus)
-                                                Surface(
-                                                    shape = RoundedCornerShape(20.dp),
-                                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                                                ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                                    ) {
-                                                        val minAllowedMax = if (pSet.required) maxOf(1, pSet.minSelect) else 1
-                                                        IconButton(
-                                                            onClick = {
-                                                                if (pSet.maxSelect > minAllowedMax) {
-                                                                    pSet.maxSelect -= 1
-                                                                    if (pSet.minSelect > pSet.maxSelect) {
-                                                                        pSet.minSelect = pSet.maxSelect
-                                                                    }
-                                                                }
-                                                            },
-                                                            enabled = pSet.maxSelect > minAllowedMax,
-                                                            modifier = Modifier.size(28.dp).testTag("decrease_max_$setIndex")
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.Remove,
-                                                                contentDescription = "Decrease max choices",
-                                                                tint = if (pSet.maxSelect > minAllowedMax) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
-                                                                modifier = Modifier.size(14.dp)
-                                                            )
-                                                        }
-
-                                                        Text(
-                                                            text = "Up to ${pSet.maxSelect}",
-                                                            fontWeight = FontWeight.Bold,
-                                                            fontSize = 13.sp,
-                                                            modifier = Modifier.padding(horizontal = 8.dp)
-                                                        )
-
-                                                        IconButton(
-                                                            onClick = {
-                                                                if (pSet.maxSelect < maxChoicesCount) {
-                                                                    pSet.maxSelect += 1
-                                                                }
-                                                            },
-                                                            enabled = pSet.maxSelect < maxChoicesCount,
-                                                            modifier = Modifier.size(28.dp).testTag("increase_max_$setIndex")
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.Add,
-                                                                contentDescription = "Increase max choices",
-                                                                tint = if (pSet.maxSelect < maxChoicesCount) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
-                                                                modifier = Modifier.size(14.dp)
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // "Need a higher minimum?" tiny text button
-                                            val defaultMin = if (pSet.required) 1 else 0
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                TextButton(
-                                                    onClick = {
-                                                        pSet.showAdvancedMin = !pSet.showAdvancedMin
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
-                                                ) {
-                                                    Text(
-                                                        text = if (pSet.showAdvancedMin) "Hide minimum choices" else "Need a higher minimum?",
-                                                        fontSize = 11.sp,
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                        fontWeight = FontWeight.SemiBold
-                                                    )
-                                                }
-
-                                                if (pSet.minSelect > defaultMin && !pSet.showAdvancedMin) {
-                                                    Text(
-                                                        text = "Min: ${pSet.minSelect}",
-                                                        fontSize = 11.sp,
-                                                        color = customColors.accent,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                }
-                                            }
-
-                                            // Advanced minimum stepper (1 up to maximum)
-                                            if (pSet.showAdvancedMin) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
-                                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(
-                                                            text = "Minimum required",
-                                                            fontSize = 12.sp,
-                                                            fontWeight = FontWeight.SemiBold
-                                                        )
-                                                        Text(
-                                                            text = "Customers must select at least this many",
-                                                            fontSize = 10.sp,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        val minFloor = if (pSet.required) 1 else 0
-                                                        OutlinedIconButton(
-                                                            onClick = {
-                                                                if (pSet.minSelect > minFloor) {
-                                                                    pSet.minSelect -= 1
-                                                                    if (pSet.minSelect == defaultMin) {
-                                                                        pSet.showAdvancedMin = false
-                                                                    }
-                                                                }
-                                                            },
-                                                            enabled = pSet.minSelect > minFloor,
-                                                            modifier = Modifier.size(26.dp),
-                                                            shape = CircleShape
-                                                        ) {
-                                                            Icon(Icons.Default.Remove, contentDescription = "Decrease min", modifier = Modifier.size(12.dp))
-                                                        }
-
-                                                        Text(
-                                                            text = "${pSet.minSelect}",
-                                                            fontWeight = FontWeight.Bold,
-                                                            fontSize = 13.sp,
-                                                            modifier = Modifier.padding(horizontal = 8.dp)
-                                                        )
-
-                                                        OutlinedIconButton(
-                                                            onClick = {
-                                                                if (pSet.minSelect < pSet.maxSelect) {
-                                                                    pSet.minSelect += 1
-                                                                }
-                                                            },
-                                                            enabled = pSet.minSelect < pSet.maxSelect,
-                                                            modifier = Modifier.size(26.dp),
-                                                            shape = CircleShape
-                                                        ) {
-                                                            Icon(Icons.Default.Add, contentDescription = "Increase min", modifier = Modifier.size(12.dp))
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // Live customer hint in pale yellow chip
-                                            val liveHint = when {
-                                                pSet.maxSelect <= 1 -> "Select one"
-                                                !pSet.required || pSet.minSelect == 0 || pSet.minSelect == 1 -> "Select up to ${pSet.maxSelect}"
-                                                pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
-                                                else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
-                                            }
-
+                                        pSet.choices.forEach { c ->
+                                            val cPrice = c.priceText.toDoubleOrNull() ?: 0.0
+                                            val cPriceLabel = if (cPrice <= 0.0) "Free" else "+${FormatUtils.formatCurrency(cPrice)}"
                                             Surface(
-                                                color = Color(0xFFFEF9C3), // Pale yellow
                                                 shape = RoundedCornerShape(8.dp),
-                                                border = BorderStroke(1.dp, Color(0xFFFDE047).copy(alpha = 0.6f)),
-                                                modifier = Modifier.fillMaxWidth()
+                                                color = MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    if (c.available) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
+                                                )
                                             ) {
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                 ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Info,
-                                                        contentDescription = null,
-                                                        tint = Color(0xFF854D0E),
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                    Text(
-                                                        text = "Customers see: $liveHint",
-                                                        color = Color(0xFF854D0E),
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.SemiBold
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // 4. Choices list
-                                    val duplicateChoiceNames = remember(pSet.choices.map { it.name }) {
-                                        pSet.choices
-                                            .map { it.name.trim() }
-                                            .filter { it.isNotBlank() }
-                                            .groupingBy { it.lowercase() }
-                                            .eachCount()
-                                            .filter { it.value > 1 }
-                                            .keys
-                                    }
-
-                                    Text(
-                                        text = "Choices (${pSet.choices.size})",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-
-                                    pSet.choices.forEachIndexed { cIdx, choice ->
-                                        val cNum = cIdx + 1
-                                        val isChoiceNameBlank = choice.name.trim().isBlank()
-                                        val isChoiceDuplicate = duplicateChoiceNames.contains(choice.name.trim().lowercase())
-                                        val showChoiceError = (choice.wasTouched || hasTappedSaveOnce) && (isChoiceNameBlank || isChoiceDuplicate)
-
-                                        Card(
-                                            shape = RoundedCornerShape(10.dp),
-                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                            border = BorderStroke(
-                                                1.dp,
-                                                if (showChoiceError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant
-                                            ),
-                                            modifier = Modifier.fillMaxWidth().testTag("choice_card_${setIndex}_$cIdx")
-                                        ) {
-                                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                ) {
-                                                    // Drag handle icon
-                                                    Icon(
-                                                        imageVector = Icons.Default.DragHandle,
-                                                        contentDescription = "Reorder handle",
-                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-
-                                                    // Choice Name
-                                                    OutlinedTextField(
-                                                        value = choice.name,
-                                                        onValueChange = {
-                                                            choice.name = it
-                                                            choice.wasTouched = true
-                                                        },
-                                                        label = { Text("Choice name *") },
-                                                        placeholder = { Text("e.g. Regular") },
-                                                        singleLine = true,
-                                                        isError = showChoiceError,
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        modifier = Modifier.weight(1.4f).testTag("choice_name_${setIndex}_$cIdx")
-                                                    )
-
-                                                    // Price (₱, 0 shows as Free)
-                                                    OutlinedTextField(
-                                                        value = choice.priceText,
-                                                        onValueChange = {
-                                                            choice.priceText = it
-                                                            choice.wasTouched = true
-                                                        },
-                                                        label = { Text("Price (₱)") },
-                                                        placeholder = { Text("0") },
-                                                        singleLine = true,
-                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        modifier = Modifier.weight(1f).testTag("choice_price_${setIndex}_$cIdx")
-                                                    )
-
-                                                    // Delete choice
-                                                    IconButton(
-                                                        onClick = {
-                                                            if (pSet.choices.size > 1) {
-                                                                pSet.choices.removeAt(cIdx)
-                                                                if (pSet.maxSelect > pSet.choices.size) {
-                                                                    pSet.maxSelect = maxOf(1, pSet.choices.size)
-                                                                    if (pSet.required && pSet.minSelect > pSet.maxSelect) {
-                                                                        pSet.minSelect = pSet.maxSelect
-                                                                    }
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = pSet.choices.size > 1,
-                                                        modifier = Modifier.size(32.dp).testTag("delete_choice_${setIndex}_$cIdx")
-                                                    ) {
+                                                    if (c.popular) {
                                                         Icon(
-                                                            Icons.Default.Delete,
-                                                            contentDescription = "Delete Choice",
-                                                            tint = if (pSet.choices.size > 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant,
-                                                            modifier = Modifier.size(18.dp)
+                                                            imageVector = Icons.Default.Whatshot,
+                                                            contentDescription = "Popular",
+                                                            tint = Color(0xFFFF5722),
+                                                            modifier = Modifier.size(13.dp)
                                                         )
+                                                        Spacer(modifier = Modifier.width(3.dp))
                                                     }
-                                                }
-
-                                                // Bottom controls row of choice: Popular toggle & In stock switch
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    // Popular flame toggle
-                                                    Surface(
-                                                        onClick = { choice.popular = !choice.popular },
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        color = if (choice.popular) Color(0xFFFF5722).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                                        border = BorderStroke(1.dp, if (choice.popular) Color(0xFFFF5722) else Color.Transparent)
-                                                    ) {
-                                                        Row(
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                        ) {
-                                                            Icon(
-                                                                imageVector = Icons.Default.Whatshot,
-                                                                contentDescription = "Popular flame toggle",
-                                                                tint = if (choice.popular) Color(0xFFFF5722) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                                modifier = Modifier.size(16.dp)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(4.dp))
-                                                            Text(
-                                                                text = if (choice.popular) "Popular" else "Not popular",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                fontWeight = if (choice.popular) FontWeight.Bold else FontWeight.Normal,
-                                                                color = if (choice.popular) Color(0xFFFF5722) else MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                        }
-                                                    }
-
-                                                    // In stock switch
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                    ) {
+                                                    Text(
+                                                        text = "${c.name.trim().ifBlank { "Unnamed" }} ($cPriceLabel)",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = if (c.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                                    )
+                                                    if (!c.available) {
+                                                        Spacer(modifier = Modifier.width(4.dp))
                                                         Text(
-                                                            text = if (choice.available) "In stock" else "Sold out",
+                                                            text = "· Sold out",
                                                             style = MaterialTheme.typography.labelSmall,
-                                                            color = if (choice.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
-                                                        )
-                                                        Switch(
-                                                            checked = choice.available,
-                                                            onCheckedChange = { choice.available = it },
-                                                            modifier = Modifier.scale(0.8f).testTag("choice_stock_${setIndex}_$cIdx")
+                                                            color = MaterialTheme.colorScheme.error
                                                         )
                                                     }
-
-                                                    // Move up/down choice
-                                                    Row {
-                                                        IconButton(
-                                                            onClick = {
-                                                                if (cIdx > 0) {
-                                                                    val item = pSet.choices.removeAt(cIdx)
-                                                                    pSet.choices.add(cIdx - 1, item)
-                                                                }
-                                                            },
-                                                            enabled = cIdx > 0,
-                                                            modifier = Modifier.size(28.dp)
-                                                        ) {
-                                                            Icon(Icons.Default.ArrowUpward, contentDescription = "Move choice up", modifier = Modifier.size(14.dp))
-                                                        }
-                                                        IconButton(
-                                                            onClick = {
-                                                                if (cIdx < pSet.choices.size - 1) {
-                                                                    val item = pSet.choices.removeAt(cIdx)
-                                                                    pSet.choices.add(cIdx + 1, item)
-                                                                }
-                                                            },
-                                                            enabled = cIdx < pSet.choices.size - 1,
-                                                            modifier = Modifier.size(28.dp)
-                                                        ) {
-                                                            Icon(Icons.Default.ArrowDownward, contentDescription = "Move choice down", modifier = Modifier.size(14.dp))
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Warning on duplicate names in same set
-                                    if (duplicateChoiceNames.isNotEmpty()) {
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
-                                            shape = RoundedCornerShape(6.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                            ) {
-                                                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = "Warning: Duplicate choice names (${duplicateChoiceNames.joinToString(", ")}) in this set",
-                                                    color = MaterialTheme.colorScheme.error,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Medium
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    // "+ Add choice" button
-                                    OutlinedButton(
-                                        onClick = {
-                                            pSet.choices.add(EditableChoice())
-                                        },
-                                        shape = RoundedCornerShape(8.dp),
-                                        modifier = Modifier.align(Alignment.Start).testTag("add_choice_btn_$setIndex")
-                                    ) {
-                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("+ Add choice", fontWeight = FontWeight.SemiBold)
-                                    }
-
-                                    // 5. Live preview card: "How customers will see this"
-                                    Card(
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("customer_preview_$setIndex")
-                                    ) {
-                                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text(
-                                                text = "HOW CUSTOMERS WILL SEE THIS",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                letterSpacing = 0.8.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-
-                                            // Header: bold title + Required/Optional pill
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = pSet.name.trim().ifBlank { "Option Title" },
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Surface(
-                                                    color = if (pSet.required) Color(0xFF1E1E1E) else Color(0xFF757575),
-                                                    shape = RoundedCornerShape(6.dp)
-                                                ) {
-                                                    Text(
-                                                        text = if (pSet.required) "Required" else "Optional",
-                                                        color = Color.White,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                                    )
-                                                }
-                                            }
-
-                                            // Grey hint
-                                            val previewHint = when {
-                                                pSet.maxSelect <= 1 -> "Select one"
-                                                !pSet.required || pSet.minSelect == 0 -> "Select up to ${pSet.maxSelect}"
-                                                pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
-                                                else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
-                                            }
-                                            Text(
-                                                text = previewHint,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-
-                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                                            // Option rows
-                                            val isSingleChoice = pSet.maxSelect <= 1
-                                            pSet.choices.forEachIndexed { cIdx, choice ->
-                                                val choicePrice = choice.priceText.toDoubleOrNull() ?: 0.0
-                                                val priceLabel = if (choicePrice <= 0.0) "Free" else "+ ₱${FormatUtils.formatCurrency(choicePrice)}"
-
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 4.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    if (isSingleChoice) {
-                                                        RadioButton(
-                                                            selected = cIdx == 0 && choice.available,
-                                                            onClick = null,
-                                                            colors = RadioButtonDefaults.colors(selectedColor = customColors.accent),
-                                                            modifier = Modifier.size(24.dp)
-                                                        )
-                                                    } else {
-                                                        Checkbox(
-                                                            checked = cIdx == 0 && choice.available,
-                                                            onCheckedChange = null,
-                                                            colors = CheckboxDefaults.colors(checkedColor = customColors.accent),
-                                                            modifier = Modifier.size(24.dp)
-                                                        )
-                                                    }
-
-                                                    Spacer(modifier = Modifier.width(10.dp))
-
-                                                    Row(
-                                                        modifier = Modifier.weight(1f),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Text(
-                                                            text = choice.name.ifBlank { "Choice ${cIdx + 1}" },
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            color = if (choice.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                                            fontWeight = FontWeight.Medium
-                                                        )
-
-                                                        if (choice.popular) {
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Icon(
-                                                                imageVector = Icons.Default.Whatshot,
-                                                                contentDescription = "Popular",
-                                                                tint = Color(0xFFFF5722),
-                                                                modifier = Modifier.size(16.dp)
-                                                            )
-                                                        }
-
-                                                        if (!choice.available) {
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Surface(
-                                                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                                                                shape = RoundedCornerShape(4.dp)
-                                                            ) {
-                                                                Text(
-                                                                    text = "Sold out",
-                                                                    color = MaterialTheme.colorScheme.error,
-                                                                    fontSize = 10.sp,
-                                                                    fontWeight = FontWeight.SemiBold,
-                                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                )
-                                                            }
-                                                        }
-                                                    }
-
-                                                    Text(
-                                                        text = priceLabel,
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = if (choicePrice <= 0.0) Color(0xFF2E7D32) else customColors.accent
-                                                    )
                                                 }
                                             }
                                         }
@@ -2411,9 +1857,12 @@ fun ProductEditScreen(
 
                         if (setsList.size < 12) {
                             OutlinedButton(
-                                onClick = { setsList.add(EditableSet(initialChoices = listOf(EditableChoice()))) },
+                                onClick = {
+                                    editingSetIndex = null
+                                    subRoute = ProductEditSubRoute.SET_EDITOR
+                                },
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth().testTag("add_another_set_btn")
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("add_another_set_btn")
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))

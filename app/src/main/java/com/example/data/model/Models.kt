@@ -1403,9 +1403,11 @@ data class ReceiptDesign(
     val showCustomerName: Boolean = true,
     val showNote: Boolean = true,
     val showSetChoices: Boolean = true,
+    val showModifiers: Boolean = true,
     val fontSize: String = "medium", // "small" | "medium" | "large"
     val align: String = "left",      // "center" | "left"
     val separator: String = "dashes", // "dashes" | "solid" | "double"
+    val paperWidth: String = "",     // "" (use merchant setting) | "58mm" | "80mm"
     val headerLines: List<String> = emptyList(),
     val footerText: String = "",
     val merchantCopy: ReceiptCopyConfig = ReceiptCopyConfig(

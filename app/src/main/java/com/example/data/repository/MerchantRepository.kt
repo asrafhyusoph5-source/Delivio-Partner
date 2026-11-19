@@ -936,15 +936,18 @@ class MerchantRepository private constructor(context: Context) {
                 ?: rawSubcatName
                 ?: "Set ${sIdx + 1}"
 
+            val isReq = (sMap["required"] as? Boolean) ?: true
+            val minVal = FormatUtils.parseInt(sMap["minSelect"] ?: sMap["min"]) ?: if (isReq) 1 else 0
+            val maxVal = FormatUtils.parseInt(sMap["maxSelect"] ?: sMap["max"]) ?: 1
             ProductSet(
                 id = (sMap["id"] as? String) ?: UUID.randomUUID().toString(),
                 name = resolvedName,
                 subcategoryId = null,
                 subcategoryName = null,
                 customName = resolvedName,
-                required = (sMap["required"] as? Boolean) ?: true,
-                minSelect = FormatUtils.parseInt(sMap["minSelect"]) ?: if ((sMap["required"] as? Boolean) == false) 0 else 1,
-                maxSelect = FormatUtils.parseInt(sMap["maxSelect"]) ?: 1,
+                required = isReq,
+                minSelect = minVal,
+                maxSelect = maxVal,
                 sortOrder = FormatUtils.parseInt(sMap["sortOrder"]) ?: sIdx,
                 choices = choices
             )
@@ -1988,14 +1991,49 @@ class MerchantRepository private constructor(context: Context) {
     private fun parseReceiptDesign(doc: DocumentSnapshot?): ReceiptDesign {
         if (doc == null || !doc.exists()) return ReceiptDesign()
         val brandLine = doc.getString("brandLine") ?: "Delivio"
-        val showOrderId = doc.getBoolean("showOrderId") ?: true
-        val showOrderedAt = doc.getBoolean("showOrderedAt") ?: true
+        val showOrderId = doc.getBoolean("showOrderId")
+            ?: doc.getBoolean("showOrderNumber")
+            ?: true
+        val showOrderedAt = doc.getBoolean("showOrderedAt")
+            ?: doc.getBoolean("showDateTime")
+            ?: doc.getBoolean("showDate")
+            ?: true
         val showCustomerName = doc.getBoolean("showCustomerName") ?: true
-        val showNote = doc.getBoolean("showNote") ?: true
-        val showSetChoices = doc.getBoolean("showSetChoices") ?: true
-        val fontSize = doc.getString("fontSize") ?: "medium"
-        val align = doc.getString("align") ?: "left"
-        val separator = doc.getString("separator") ?: "dashes"
+        val showNote = doc.getBoolean("showNote")
+            ?: doc.getBoolean("showCustomerNote")
+            ?: true
+        val showSetChoices = doc.getBoolean("showSetChoices")
+            ?: doc.getBoolean("showSetChoicesAndModifiers")
+            ?: true
+        val showModifiers = doc.getBoolean("showModifiers") ?: showSetChoices
+        val fontSizeRaw = doc.get("fontSize")
+        val fontSize = when (fontSizeRaw) {
+            is String -> fontSizeRaw.trim().lowercase().ifBlank { "medium" }
+            is Number -> when {
+                fontSizeRaw.toDouble() <= 11.5 -> "small"
+                fontSizeRaw.toDouble() >= 15.0 -> "large"
+                else -> "medium"
+            }
+            else -> "medium"
+        }
+        val align = (doc.getString("align") ?: doc.getString("headerAlign") ?: "left")
+            .trim().lowercase().ifBlank { "left" }
+        val separator = (doc.getString("separator") ?: doc.getString("dividerStyle") ?: "dashes")
+            .trim().lowercase().ifBlank { "dashes" }
+
+        val rawPaperWidth = doc.get("paperWidth")
+            ?: doc.get("widthMm")
+            ?: doc.get("paperSize")
+            ?: doc.get("width")
+        val paperWidth = when (rawPaperWidth) {
+            is Number -> if (rawPaperWidth.toInt() <= 60) "58mm" else "80mm"
+            is String -> when {
+                rawPaperWidth.contains("58") -> "58mm"
+                rawPaperWidth.contains("80") -> "80mm"
+                else -> ""
+            }
+            else -> ""
+        }
 
         val headerLinesRaw = doc.get("headerLines")
         val headerLines: List<String> = when (headerLinesRaw) {
@@ -2035,9 +2073,11 @@ class MerchantRepository private constructor(context: Context) {
             showCustomerName = showCustomerName,
             showNote = showNote,
             showSetChoices = showSetChoices,
+            showModifiers = showModifiers,
             fontSize = fontSize,
             align = align,
             separator = separator,
+            paperWidth = paperWidth,
             headerLines = headerLines,
             footerText = footerText,
             merchantCopy = merchantCopy,
