@@ -82,9 +82,17 @@ service cloud.firestore {
     function riderDoc() {
       return get(/databases/$(db)/documents/riders/$(request.auth.uid)).data;
     }
+    function parcelVehicleOk(want, have) {
+      return want == ''
+        || (want == 'sedan' && have in ['car4', 'car8', 'sedan'])
+        || (want == 'motorcycle' && have == 'motorcycle')
+        || (want != 'sedan' && want != 'motorcycle' && want == have);
+    }
     function riderMayTake(svc, veh) {
       return riderDoc().get('allowedServices', []).hasAny([svc])
-        && (svc != 'taxi' || veh.lower() == riderDoc().get('vehicleType', '').lower());
+        && (svc != 'taxi' || veh.lower() == riderDoc().get('vehicleType', '').lower())
+        && (svc != 'parcel'
+            || parcelVehicleOk(veh.lower(), riderDoc().get('vehicleType', '').lower()));
     }
     function merchantLinkedCustomerUid() {
       return isMerchant() && exists(/databases/$(db)/documents/merchants/$(request.auth.uid))
