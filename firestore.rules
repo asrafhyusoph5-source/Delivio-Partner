@@ -849,7 +849,10 @@ service cloud.firestore {
     }
 
     match /riderReviews/{oid} {
-      allow read: if signedIn() && (isAdmin()
+      allow get: if signedIn() && (resource == null || isAdmin()
+        || resource.data.get('riderId', null) == request.auth.uid
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
+      allow list: if signedIn() && (isAdmin()
         || resource.data.get('riderId', null) == request.auth.uid
         || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
       allow create: if isActiveRider()
@@ -875,7 +878,11 @@ service cloud.firestore {
     }
 
     match /reviews/{oid} {
-      allow read: if signedIn() && (isAdmin()
+      allow get: if signedIn() && (resource == null || isAdmin()
+        || resource.data.get('customerId', null) == request.auth.uid
+        || resource.data.get('riderId', null) == request.auth.uid
+        || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
+      allow list: if signedIn() && (isAdmin()
         || resource.data.get('customerId', null) == request.auth.uid
         || resource.data.get('riderId', null) == request.auth.uid
         || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)));
