@@ -303,13 +303,20 @@ fun RequestPayoutDialog(
 ) {
     val customColors = LocalDelivioColors.current
     var amountText by remember { mutableStateOf(availableBalance.toString()) }
+    val hasDestination = bankName.isNotBlank() || accountNumber.isNotBlank()
+    val destinationLabel = when {
+        bankName.isNotBlank() && accountNumber.isNotBlank() -> "$bankName (${FormatUtils.maskAccountNumber(accountNumber)})"
+        bankName.isNotBlank() -> bankName
+        accountNumber.isNotBlank() -> FormatUtils.maskAccountNumber(accountNumber)
+        else -> "No payout account added"
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Request Merchant Payout") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Disbursement Destination: $bankName ($accountNumber)", style = MaterialTheme.typography.bodySmall)
+                Text("Disbursement Destination: $destinationLabel", style = MaterialTheme.typography.bodySmall)
                 Text("Available Balance: ${FormatUtils.formatCurrency(availableBalance)}", fontWeight = FontWeight.Bold)
                 OutlinedTextField(
                     value = amountText,
@@ -327,6 +334,7 @@ fun RequestPayoutDialog(
                     val amount = amountText.toDoubleOrNull() ?: 0.0
                     onConfirm(amount)
                 },
+                enabled = hasDestination && (amountText.toDoubleOrNull() ?: 0.0) > 0.0,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = customColors.accent,
                     contentColor = customColors.onAccent
@@ -359,14 +367,37 @@ fun BankDetailsDialog(
         title = { Text("Payout Account Details") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(value = bank, onValueChange = { bank = it }, label = { Text("Bank Name") }, singleLine = true, shape = RoundedCornerShape(10.dp))
-                OutlinedTextField(value = holder, onValueChange = { holder = it }, label = { Text("Account Holder Name") }, singleLine = true, shape = RoundedCornerShape(10.dp))
-                OutlinedTextField(value = num, onValueChange = { num = it }, label = { Text("Account Number") }, singleLine = true, shape = RoundedCornerShape(10.dp))
+                OutlinedTextField(
+                    value = bank,
+                    onValueChange = { bank = it },
+                    label = { Text("Bank or e-wallet name") },
+                    placeholder = { Text("e.g. GCash, Maya, BDO") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = holder,
+                    onValueChange = { holder = it },
+                    label = { Text("Account name") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = num,
+                    onValueChange = { num = it },
+                    label = { Text("Account / mobile number") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(bank, holder, num) },
+                onClick = { onSave(bank.trim(), holder.trim(), num.trim()) },
+                enabled = bank.isNotBlank() && num.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = customColors.accent, contentColor = customColors.onAccent)
             ) {
                 Text("Save Account")

@@ -7,6 +7,7 @@ import com.example.data.model.OrderItemSelection
 import com.example.data.model.OrderModifier
 import com.example.data.model.OrderPromo
 import com.example.data.model.OrderStatus
+import com.example.data.model.PricingSnapshot
 import com.example.data.model.Rider
 import com.example.data.model.RiderRequest
 import com.google.firebase.firestore.DocumentSnapshot
@@ -305,6 +306,7 @@ object OrderDocumentParser {
         } else null
 
         val feesMap = safeMap(data["fees"])
+        val pricingMap = safeMap(data["pricing"])
         val lineTotalsSum = items.sumOf { it.lineTotal }
 
         val rawSubtotal = safeDouble(feesMap["subtotal"])
@@ -314,15 +316,21 @@ object OrderDocumentParser {
 
         val deliveryFeeVal = safeDouble(feesMap["deliveryFee"])
             ?: safeDouble(data["deliveryFee"])
+            ?: safeDouble(pricingMap["deliveryFee"])
             ?: 0.0
         val serviceFeeVal = safeDouble(feesMap["serviceFee"])
             ?: safeDouble(data["serviceFee"])
+            ?: safeDouble(pricingMap["serviceFee"])
             ?: 0.0
         val discountVal = safeDouble(feesMap["discount"])
             ?: safeDouble(data["discount"])
             ?: 0.0
         val platformFeeVal = safeDouble(feesMap["platformFee"])
             ?: safeDouble(data["platformFee"])
+            ?: 0.0
+        val vatVal = safeDouble(feesMap["vat"])
+            ?: safeDouble(data["vat"])
+            ?: safeDouble(pricingMap["vat"])
             ?: 0.0
 
         val calculatedTotal = (finalSubtotal + deliveryFeeVal + serviceFeeVal - discountVal).coerceAtLeast(0.0)
@@ -486,6 +494,27 @@ object OrderDocumentParser {
         val testOrderFlag = safeBoolean(data["isTestOrder"], false)
         val merchantIdVal = safeString(data["merchantId"])?.takeIf { it.isNotBlank() } ?: fallbackMerchantId
 
+        val rawSnapCommRate = safeDouble(pricingMap["merchantCommissionRate"])
+        val pricingSnapshot = if (pricingMap.isNotEmpty()) {
+            PricingSnapshot(
+                schema = safeInt(pricingMap["schema"]) ?: 2,
+                ratesVersion = safeLong(pricingMap["ratesVersion"]) ?: 1L,
+                serviceKey = safeString(pricingMap["serviceKey"]) ?: (safeString(data["serviceType"]) ?: "food"),
+                vehicle = safeString(pricingMap["vehicle"]) ?: "motorcycle",
+                deliveryFee = safeDouble(pricingMap["deliveryFee"]) ?: deliveryFeeVal,
+                serviceFee = safeDouble(pricingMap["serviceFee"]) ?: serviceFeeVal,
+                tip = safeDouble(pricingMap["tip"]) ?: tipVal,
+                vat = safeDouble(pricingMap["vat"]) ?: vatVal,
+                itemsSubtotal = safeDouble(pricingMap["itemsSubtotal"]) ?: finalSubtotal,
+                total = safeDouble(pricingMap["total"]) ?: finalTotal,
+                payer = safeString(pricingMap["payer"])
+                    ?: safeString(feesMap["feePayer"])
+                    ?: safeString(data["feePayer"])
+                    ?: "customer",
+                merchantCommissionRate = rawSnapCommRate?.let { PricingEngine.normalizeCommissionRate(it) }
+            )
+        } else null
+
         return Order(
             id = docId,
             merchantId = merchantIdVal,
@@ -548,7 +577,8 @@ object OrderDocumentParser {
             merchantName = safeString(data["merchantName"]) ?: "",
             branchName = safeString(data["branchName"]) ?: "",
             branchCode = safeString(data["branchCode"]) ?: "",
-            chainId = safeString(data["chainId"]) ?: ""
+            chainId = safeString(data["chainId"]) ?: "",
+            pricing = pricingSnapshot
         )
     }
 }

@@ -27,6 +27,8 @@ import com.example.data.model.Payout
 import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusOpenGreen
 import com.example.util.FormatUtils
+import com.example.util.PricingEngine
+import androidx.compose.foundation.clickable
 
 @Composable
 fun EarningsScreen(
@@ -53,7 +55,8 @@ fun EarningsScreen(
     val oneMonthAgo = now - 30L * 24 * 60 * 60 * 1000
 
     val deliveredOrders = orders.filter {
-        (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) && !it.serviceType.equals("request_rider", ignoreCase = true)
+        (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) &&
+            !it.serviceType.equals("request_rider", ignoreCase = true)
     }
 
     val filteredDeliveredOrders = when (period) {
@@ -71,12 +74,15 @@ fun EarningsScreen(
         }
     }
 
-    // 3. EARNINGS: Count net sales (subtotal minus merchant-funded voucher discount) for each Delivered order, not the delivery fee.
-    // Commission is calculated on that net sales using merchants.commissionRate, with net earnings = netSales - commission.
-    val itemsSubtotal = filteredDeliveredOrders.sumOf { it.netSales }
-    val commissionRate = settings.commissionRate
-    val commissionFee = itemsSubtotal * commissionRate
-    val netEarnings = itemsSubtotal - commissionFee
+    // Per-order Commission Fee using each order's own pricing.merchantCommissionRate (fallback to settings.commissionRate)
+    // Net = itemsSubtotal - commissionFee - merchantFundedVouchers
+    val orderBreakdowns = filteredDeliveredOrders.map { order ->
+        order to PricingEngine.calculateOrderEarnings(order, settings.commissionRate)
+    }
+    val itemsSubtotal = PricingEngine.round2(orderBreakdowns.sumOf { it.second.itemsSubtotal })
+    val totalVouchers = PricingEngine.round2(orderBreakdowns.sumOf { it.second.vouchers })
+    val commissionFee = PricingEngine.round2(orderBreakdowns.sumOf { it.second.commissionFee })
+    val netEarnings = PricingEngine.round2((itemsSubtotal - commissionFee - totalVouchers).coerceAtLeast(0.0))
     val pendingPayoutBalance = netEarnings
 
     Column(
@@ -112,7 +118,9 @@ fun EarningsScreen(
             colors = CardDefaults.cardColors(
                 containerColor = customColors.accentTint
             ),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("earnings_hero_card")
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(
@@ -126,27 +134,58 @@ fun EarningsScreen(
                     style = MaterialTheme.typography.headlineLarge.copy(
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 32.sp
-                    )
+                    ),
+                    modifier = Modifier.testTag("earnings_net_total")
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text("Items Subtotal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(FormatUtils.formatCurrency(itemsSubtotal), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
-                    Column {
-                        val pct = (commissionRate * 100).toInt()
-                        Text("Commission ($pct%)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("- ${FormatUtils.formatCurrency(commissionFee)}", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Commission Fee", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = "- ${FormatUtils.formatCurrency(commissionFee)}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("earnings_commission_fee_total")
+                        )
                     }
-                    Column {
+                    if (totalVouchers > 0.0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Merchant Vouchers", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = "- ${FormatUtils.formatCurrency(totalVouchers)}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.testTag("earnings_vouchers_total")
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text("Pending Balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(FormatUtils.formatCurrency(pendingPayoutBalance), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = StatusOpenGreen)
                     }
@@ -154,43 +193,125 @@ fun EarningsScreen(
             }
         }
 
-        // Bank Account & Payout Action Card
+        // Payout Account & Action Card
+        val hasPayoutAccount = settings.bankName.isNotBlank() ||
+            settings.accountNumber.isNotBlank() ||
+            settings.accountHolder.isNotBlank()
+
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("payout_account_card")
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center
+                if (hasPayoutAccount) {
+                    val providerTitle = settings.bankName.ifBlank { "Payout Account" }
+                    val maskedNumber = FormatUtils.maskAccountNumber(settings.accountNumber)
+                    val holderName = settings.accountHolder.trim()
+                    val subtitleParts = listOf(maskedNumber, holderName).filter { it.isNotBlank() }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.AccountBalance,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = providerTitle,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.testTag("payout_account_provider")
+                                )
+                                if (subtitleParts.isNotEmpty()) {
+                                    Text(
+                                        text = subtitleParts.joinToString(" • "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.testTag("payout_account_subtitle")
+                                    )
+                                }
+                            }
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(settings.bankName, fontWeight = FontWeight.Bold)
-                            Text("${settings.accountHolder} • ${settings.accountNumber}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                        IconButton(
+                            onClick = onEditBankDetailsClick,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("edit_payout_account_btn")
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit Payout Account", modifier = Modifier.size(18.dp))
                         }
                     }
-
-                    IconButton(onClick = onEditBankDetailsClick) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Bank Details", modifier = Modifier.size(18.dp))
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onEditBankDetailsClick() }
+                            .padding(vertical = 6.dp, horizontal = 4.dp)
+                            .testTag("add_payout_account_row"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(customColors.accentTint),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = null,
+                                    tint = customColors.accent,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Add payout account",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Add a bank account or e-wallet for payouts",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Add payout account",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -228,7 +349,7 @@ fun EarningsScreen(
 
             OutlinedButton(
                 onClick = {
-                    shareEarningsReport(context, period, itemsSubtotal, commissionFee, netEarnings)
+                    shareEarningsReport(context, period, itemsSubtotal, commissionFee, totalVouchers, netEarnings)
                 },
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -240,17 +361,19 @@ fun EarningsScreen(
             }
         }
 
-        // Order Transactions List
-        val transactionOrders = filteredDeliveredOrders.ifEmpty { deliveredOrders }.ifEmpty { orders }
+        // Order Transactions List (regular orders only, never request_rider)
+        val regularCandidateOrders = filteredDeliveredOrders.ifEmpty { deliveredOrders }
+            .ifEmpty { orders.filter { !it.serviceType.equals("request_rider", ignoreCase = true) } }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            transactionOrders.take(10).forEach { order ->
-                val orderSubtotal = order.netSales
-                val orderCommission = orderSubtotal * commissionRate
-                val orderNet = orderSubtotal - orderCommission
+            regularCandidateOrders.take(10).forEach { order ->
+                val b = PricingEngine.calculateOrderEarnings(order, settings.commissionRate)
+                val rateLabel = PricingEngine.formatPercent(b.commissionRate)
                 Card(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("transaction_item_${order.id}")
                 ) {
                     Row(
                         modifier = Modifier
@@ -259,7 +382,7 @@ fun EarningsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "${order.formattedOrderNumber} • ${order.customerName}",
                                 fontWeight = FontWeight.SemiBold,
@@ -270,17 +393,29 @@ fun EarningsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Text(
+                                text = buildString {
+                                    append("Commission Fee ($rateLabel): -${FormatUtils.formatCurrency(b.commissionFee)}")
+                                    if (b.vouchers > 0.0) {
+                                        append(" • Vouchers: -${FormatUtils.formatCurrency(b.vouchers)}")
+                                    }
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+
+                        Spacer(modifier = Modifier.width(10.dp))
 
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "+ ${FormatUtils.formatCurrency(orderNet)}",
+                                text = "+ ${FormatUtils.formatCurrency(b.netEarnings)}",
                                 fontWeight = FontWeight.ExtraBold,
                                 color = StatusOpenGreen,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "Subtotal: ${FormatUtils.formatCurrency(orderSubtotal)}",
+                                text = "Subtotal: ${FormatUtils.formatCurrency(b.itemsSubtotal)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -290,35 +425,45 @@ fun EarningsScreen(
             }
         }
 
-        // Delivery expenses for Request a Rider dispatches
+        // Rider fees (delivery fee + service fee) for Delivio Instant requests (request_rider)
         val requestRiderOrders = orders.filter { it.serviceType.equals("request_rider", ignoreCase = true) }
-        val totalDeliveryExpenses = requestRiderOrders.sumOf { it.deliveryFee }
+        val totalRiderFees = PricingEngine.round2(requestRiderOrders.sumOf { it.effectiveInstantTotalFee })
 
         if (requestRiderOrders.isNotEmpty()) {
             Spacer(modifier = Modifier.height(4.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("instant_rider_fees_header"),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Delivery expenses",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    text = "Rider fees (delivery fee + service fee)",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.weight(1f)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "- ${FormatUtils.formatCurrency(totalDeliveryExpenses)}",
+                    text = "- ${FormatUtils.formatCurrency(totalRiderFees)}",
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.titleSmall
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.testTag("instant_rider_fees_total")
                 )
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 requestRiderOrders.forEach { rOrder ->
+                    val rDelivery = rOrder.pricing?.deliveryFee?.takeIf { it > 0.0 } ?: rOrder.deliveryFee
+                    val rService = rOrder.pricing?.serviceFee?.takeIf { it > 0.0 } ?: rOrder.serviceFee
+                    val rTotal = rOrder.effectiveInstantTotalFee
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("instant_rider_fee_item_${rOrder.id}")
                     ) {
                         Row(
                             modifier = Modifier
@@ -327,7 +472,7 @@ fun EarningsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = "${rOrder.formattedOrderNumber} • ${rOrder.customerName}",
@@ -340,7 +485,7 @@ fun EarningsScreen(
                                         color = customColors.accentTint
                                     ) {
                                         Text(
-                                            text = "Request Rider",
+                                            text = "Instant",
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = customColors.accent,
@@ -349,15 +494,17 @@ fun EarningsScreen(
                                     }
                                 }
                                 Text(
-                                    text = "${FormatUtils.formatTimeAgo(rOrder.placedAtTimestamp)} • Paid by you (merchant)",
+                                    text = "Delivery ${FormatUtils.formatCurrency(rDelivery)} + Service ${FormatUtils.formatCurrency(rService)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
 
+                            Spacer(modifier = Modifier.width(10.dp))
+
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "- ${FormatUtils.formatCurrency(rOrder.deliveryFee)}",
+                                    text = "- ${FormatUtils.formatCurrency(rTotal)}",
                                     fontWeight = FontWeight.ExtraBold,
                                     color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodyMedium
@@ -421,15 +568,19 @@ private fun shareEarningsReport(
     period: String,
     subtotal: Double,
     commission: Double,
+    vouchers: Double,
     net: Double
 ) {
+    val voucherLine = if (vouchers > 0.0) {
+        "\n        Merchant Vouchers    : -${FormatUtils.formatCurrency(vouchers)}"
+    } else ""
     val reportText = """
         DELIVIO PARTNER - EARNINGS STATEMENT
         Period: $period
         Generated: ${FormatUtils.formatDateTime(System.currentTimeMillis())}
         ========================================
         Items Subtotal       : ${FormatUtils.formatCurrency(subtotal)}
-        Platform Commission  : -${FormatUtils.formatCurrency(commission)}
+        Commission Fee       : -${FormatUtils.formatCurrency(commission)}$voucherLine
         Net Merchant Earnings: ${FormatUtils.formatCurrency(net)}
         ========================================
         * Delivery fee goes directly to the rider.

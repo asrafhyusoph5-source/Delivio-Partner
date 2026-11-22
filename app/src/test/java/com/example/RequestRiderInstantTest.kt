@@ -160,7 +160,7 @@ class RequestRiderInstantTest {
             DelivioPartnerTheme {
                 RequestRiderScreen(
                     settings = settings,
-                    onBookRider = { name, _, _, _, _, _, _, _, isCod, cod, _, _, _ ->
+                    onBookRider = { name, _, _, _, _, _, _, _, isCod, cod, _, _, _, _, _, _ ->
                         submittedName = name
                         submittedIsCod = isCod
                         submittedCash = cod
@@ -238,7 +238,7 @@ class RequestRiderInstantTest {
                     settings = settings,
                     initialDropoffPinnedForTest = true,
                     submissionError = "permission-denied: Missing or insufficient permissions.",
-                    onBookRider = { _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                    onBookRider = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
                     onOpenLocationPicker = {},
                     onDismiss = {}
                 )

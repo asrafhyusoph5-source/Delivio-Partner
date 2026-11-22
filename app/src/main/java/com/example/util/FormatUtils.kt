@@ -9,6 +9,16 @@ object FormatUtils {
         return "${CurrencyConstants.SYMBOL}%,.2f".format(Locale.US, amount)
     }
 
+    fun maskAccountNumber(raw: String): String {
+        val clean = raw.trim()
+        if (clean.isEmpty()) return ""
+        val digitsOnly = clean.replace(Regex("\\s+"), "")
+        if (digitsOnly.length <= 4) {
+            return "•••• $digitsOnly"
+        }
+        return "•••• ${digitsOnly.takeLast(4)}"
+    }
+
     fun formatTimeAgo(timestamp: Long): String {
         val diff = System.currentTimeMillis() - timestamp
         val minutes = TimeUnit.MILLISECONDS.toMinutes(diff)

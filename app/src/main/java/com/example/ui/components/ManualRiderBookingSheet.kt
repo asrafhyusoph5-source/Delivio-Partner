@@ -39,8 +39,8 @@ fun ManualRiderBookingSheet(
         settings = settings,
         isSubmitting = isSubmitting,
         submissionError = submissionError,
-        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, _, cod, note, dist, delFee ->
-            onBookRider(name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, 0.0)
+        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, _, cod, note, dist, delFee, svcFee, _, _ ->
+            onBookRider(name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, svcFee)
         },
         onOpenLocationPicker = onOpenLocationPicker,
         onDismiss = onDismiss

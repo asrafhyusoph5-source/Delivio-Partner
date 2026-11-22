@@ -478,7 +478,10 @@ fun RiderTrackingModal(
                         }
 
                         val currentRate = deliveryRate
-                        if (currentRate != null && order.deliveryFee <= 0.0) {
+                        val instantQuote = currentRate?.let {
+                            com.example.util.PricingEngine.calculateInstantQuote(it, distanceKm)
+                        }
+                        if (currentRate != null && order.deliveryFee <= 0.0 && instantQuote != null) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -501,23 +504,45 @@ fun RiderTrackingModal(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text("Service Fee:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(FormatUtils.formatCurrency(currentRate.serviceFee), style = MaterialTheme.typography.bodySmall)
+                                Text(FormatUtils.formatCurrency(instantQuote.serviceFee), style = MaterialTheme.typography.bodySmall)
+                            }
+                        } else if (isInstantRequest) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Delivery fee:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(FormatUtils.formatCurrency(order.deliveryFee), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Service fee:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(FormatUtils.formatCurrency(order.serviceFee), style = MaterialTheme.typography.bodySmall)
                             }
                         }
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
+                        val displayTotal = if (isInstantRequest && order.effectiveInstantTotalFee > 0.0) {
+                            order.effectiveInstantTotalFee
+                        } else if (order.deliveryFee <= 0.0 && instantQuote != null) {
+                            instantQuote.totalFee
+                        } else {
+                            computedFee
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text("Total Delivery Fee", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Text("Charged to customer", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(if (isInstantRequest) "Total Cost" else "Total Delivery Fee", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text(if (isInstantRequest) "Paid by merchant" else "Charged to customer", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Text(
-                                text = FormatUtils.formatCurrency(computedFee),
+                                text = FormatUtils.formatCurrency(displayTotal),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = customColors.accent

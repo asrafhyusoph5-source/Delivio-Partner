@@ -36,6 +36,7 @@ import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.util.FormatUtils
 import com.example.util.OsmRouteHelper
+import com.example.util.PricingEngine
 import com.example.util.RouteResult
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -49,6 +50,7 @@ fun RequestRiderScreen(
     isSubmitting: Boolean = false,
     submissionError: String? = null,
     initialDropoffPinnedForTest: Boolean = false,
+    initialRate: ServiceRate? = null,
     onClearError: () -> Unit = {},
     onBookRider: (
         recipientName: String,
@@ -63,7 +65,10 @@ fun RequestRiderScreen(
         codAmount: Double,
         riderNote: String,
         distanceKm: Double,
-        deliveryFee: Double
+        deliveryFee: Double,
+        serviceFee: Double,
+        ratesVersion: Long,
+        pricingSchema: Int
     ) -> Unit,
     onOpenLocationPicker: () -> Unit,
     onDismiss: () -> Unit
@@ -99,15 +104,20 @@ fun RequestRiderScreen(
     // Rate & route state
     var routeResult by remember { mutableStateOf<RouteResult?>(null) }
     var isLoadingRoute by remember { mutableStateOf(false) }
-    var deliveryRate by remember { mutableStateOf<ServiceRate?>(null) }
+    var deliveryRate by remember(initialRate) { mutableStateOf<ServiceRate?>(initialRate) }
     var rateErrorMessage by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(settings.cityId) {
-        val repo = MerchantRepository.getInstance(context)
-        val cityId = settings.cityId.ifBlank { "taguig" }
-        repo.fetchDeliveryRate(cityId, "request_rider") { rate, err ->
-            deliveryRate = rate
-            rateErrorMessage = err
+    LaunchedEffect(settings.cityId, initialRate) {
+        if (initialRate != null) {
+            deliveryRate = initialRate
+            rateErrorMessage = null
+        } else {
+            val repo = MerchantRepository.getInstance(context)
+            val cityId = settings.cityId.ifBlank { "taguig" }
+            repo.fetchDeliveryRate(cityId, "instant") { rate, err ->
+                deliveryRate = rate
+                rateErrorMessage = err
+            }
         }
     }
 
@@ -126,12 +136,14 @@ fun RequestRiderScreen(
     } else 0.0
 
     val rate = deliveryRate ?: ServiceRate()
-    val rawDeliveryFee = if (distanceKm <= rate.includedKm) {
-        rate.baseFare
-    } else {
-        rate.baseFare + (distanceKm - rate.includedKm) * rate.perKmRate
-    }
-    val deliveryFee = rawDeliveryFee.coerceIn(rate.minFee, rate.maxFee)
+    val instantQuote = PricingEngine.calculateInstantQuote(
+        rate = rate,
+        distanceKm = distanceKm,
+        timezoneId = settings.timezone.ifBlank { "Asia/Manila" }
+    )
+    val deliveryFee = instantQuote.deliveryFee
+    val serviceFee = instantQuote.serviceFee
+    val totalCost = instantQuote.totalFee
 
     val isStep1Valid = hasDropoffPin &&
         deliveryAddress.isNotBlank() &&
@@ -317,7 +329,10 @@ fun RequestRiderScreen(
                                 cashAmount,
                                 riderNote.trim(),
                                 distanceKm,
-                                deliveryFee
+                                deliveryFee,
+                                serviceFee,
+                                instantQuote.ratesVersion,
+                                instantQuote.schemaVersion
                             )
                         }
 
@@ -390,7 +405,7 @@ fun RequestRiderScreen(
                                 Icon(Icons.Default.DeliveryDining, contentDescription = null)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Book Rider - ${FormatUtils.formatCurrency(deliveryFee)}",
+                                    text = "Book Rider - ${FormatUtils.formatCurrency(totalCost)}",
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 15.sp
                                 )
@@ -719,6 +734,7 @@ fun RequestRiderScreen(
                                     rateErrorMessage != null -> "Delivery not available: $rateErrorMessage"
                                     !hasDropoffPin -> "Paid by merchant • Set pin to calculate"
                                     isLoadingRoute -> "Paid by merchant • Calculating distance..."
+                                    serviceFee > 0.0 -> "Paid by merchant • ${"%.1f".format(distanceKm)} km (+ ${FormatUtils.formatCurrency(serviceFee)} service fee)"
                                     else -> "Paid by merchant • ${"%.1f".format(distanceKm)} km"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
@@ -912,9 +928,48 @@ fun RequestRiderScreen(
                             )
                             Text(
                                 text = FormatUtils.formatCurrency(deliveryFee),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("step2_delivery_fee_value")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Service fee",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = FormatUtils.formatCurrency(serviceFee),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("step2_service_fee_value")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Total",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = FormatUtils.formatCurrency(totalCost),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = customColors.accent
+                                color = customColors.accent,
+                                modifier = Modifier.testTag("step2_total_cost_value")
                             )
                         }
 

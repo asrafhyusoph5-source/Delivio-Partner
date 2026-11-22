@@ -158,22 +158,70 @@ data class Rider(
     val avatarEmoji: String = "🛵"
 )
 
+data class ServiceFeeConfig(
+    val mode: String = "flat", // "flat" | "percent"
+    val value: Double = 0.0
+)
+
+data class PeakConfig(
+    val enabled: Boolean = false,
+    val multiplier: Double = 1.0,
+    val startHour: Int? = null,
+    val endHour: Int? = null
+)
+
+data class NightConfig(
+    val enabled: Boolean = false,
+    val surcharge: Double = 0.0,
+    val startHour: Int? = null,
+    val endHour: Int? = null
+)
+
+data class PickupRateConfig(
+    val baseFee: Double = 0.0,
+    val freeKm: Double = 0.0,
+    val perKm: Double = 0.0,
+    val maxFee: Double = 0.0
+)
+
+data class FreeDeliveryConfig(
+    val enabled: Boolean = false,
+    val minSubtotal: Double = 0.0
+)
+
+data class PricingSnapshot(
+    val schema: Int = 2,
+    val ratesVersion: Long = 1L,
+    val serviceKey: String = "",
+    val vehicle: String = "motorcycle",
+    val deliveryFee: Double = 0.0,
+    val serviceFee: Double = 0.0,
+    val tip: Double = 0.0,
+    val vat: Double = 0.0,
+    val itemsSubtotal: Double = 0.0,
+    val total: Double = 0.0,
+    val payer: String = "customer",
+    val merchantCommissionRate: Double? = null
+)
+
 data class ServiceRate(
     val baseFare: Double = 45.0,
     val includedKm: Double = 2.0,
     val perKmRate: Double = 10.0,
     val minFee: Double = 45.0,
     val maxFee: Double = 300.0,
-    val serviceFee: Double = 10.0
+    val serviceFee: Double = 10.0,
+    val schemaVersion: Int = 1,
+    val ratesVersion: Long = 1L,
+    val serviceKey: String = "instant",
+    val pickupConfig: PickupRateConfig = PickupRateConfig(),
+    val serviceFeeConfig: ServiceFeeConfig = ServiceFeeConfig(mode = "flat", value = serviceFee),
+    val peakConfig: PeakConfig = PeakConfig(),
+    val nightConfig: NightConfig = NightConfig(),
+    val freeDeliveryConfig: FreeDeliveryConfig = FreeDeliveryConfig()
 ) {
     fun calculateFee(distanceKm: Double): Double {
-        val distFee = if (distanceKm <= includedKm) {
-            baseFare
-        } else {
-            baseFare + (distanceKm - includedKm) * perKmRate
-        }
-        val total = distFee + serviceFee
-        return total.coerceIn(minFee, maxFee)
+        return com.example.util.PricingEngine.calculateInstantQuote(this, distanceKm).totalFee
     }
 }
 
@@ -267,7 +315,8 @@ data class Order(
     val merchantName: String = "",
     val branchName: String = "",
     val branchCode: String = "",
-    val chainId: String = ""
+    val chainId: String = "",
+    val pricing: PricingSnapshot? = null
 ) {
     fun isChatOpen(): Boolean {
         val s = status.name
@@ -313,8 +362,24 @@ data class Order(
     val effectiveMerchantPromoDiscount: Double
         get() = if (promo != null && promo.fundedBy.equals("merchant", ignoreCase = true)) promo.discount else 0.0
 
+    val effectiveItemsSubtotal: Double
+        get() = (pricing?.itemsSubtotal?.takeIf { it > 0.0 } ?: subtotal).coerceAtLeast(0.0)
+
+    fun effectiveCommissionRate(fallbackRate: Double): Double {
+        val snapRate = pricing?.merchantCommissionRate
+        return com.example.util.PricingEngine.normalizeCommissionRate(snapRate, fallbackRate)
+    }
+
+    val effectiveInstantTotalFee: Double
+        get() {
+            val pTotal = pricing?.total?.takeIf { it > 0.0 }
+            if (pTotal != null) return pTotal
+            val sumFees = (deliveryFee + serviceFee).coerceAtLeast(0.0)
+            return if (sumFees > 0.0) sumFees else total.coerceAtLeast(0.0)
+        }
+
     val netSales: Double
-        get() = (subtotal - effectiveMerchantPromoDiscount).coerceAtLeast(0.0)
+        get() = (effectiveItemsSubtotal - effectiveMerchantPromoDiscount).coerceAtLeast(0.0)
 
     val prepDurationMinutes: Double?
         get() = if (readyAt != null && acceptedAt != null && readyAt >= acceptedAt) {

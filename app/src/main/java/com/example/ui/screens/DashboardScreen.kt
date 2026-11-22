@@ -202,12 +202,15 @@ fun DashboardScreen(
     val deliveredOrders = orders.filter {
         (it.status == OrderStatus.DELIVERED || it.status == OrderStatus.COMPLETED) && !it.serviceType.equals("request_rider", ignoreCase = true)
     }
-    val deliveredSubtotal = deliveredOrders.sumOf { it.netSales }
-    val commissionAmount = deliveredSubtotal * settings.commissionRate
-    val netEarnings = deliveredSubtotal - commissionAmount
+    val commissionAmount = deliveredOrders.sumOf {
+        com.example.util.PricingEngine.calculateOrderEarnings(it, settings.commissionRate).commissionFee
+    }
+    val netEarnings = deliveredOrders.sumOf {
+        com.example.util.PricingEngine.calculateOrderEarnings(it, settings.commissionRate).netEarnings
+    }
 
     val requestRiderOrders = orders.filter { it.serviceType.equals("request_rider", ignoreCase = true) }
-    val deliveryExpenses = requestRiderOrders.sumOf { it.deliveryFee }
+    val deliveryExpenses = requestRiderOrders.sumOf { it.effectiveInstantTotalFee }
 
     Column(
         modifier = modifier
@@ -616,7 +619,7 @@ fun DashboardScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Delivery expenses",
+                                text = "Rider fees (delivery + service)",
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.bodyMedium
                             )

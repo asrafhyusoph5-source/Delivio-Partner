@@ -8,6 +8,7 @@ import com.example.util.CrashReportStore
 import com.example.util.FormatUtils
 import com.example.util.OrderDocumentParser
 import com.example.util.PosDocumentParser
+import com.example.util.PricingEngine
 import com.example.util.MenuSyncEngine
 import com.example.util.MenuSyncResult
 import com.example.util.OutletMenuSnapshot
@@ -224,6 +225,9 @@ class MerchantRepository private constructor(context: Context) {
     private var riderReviewsListener: ListenerRegistration? = null
     private var receiptSettingsListener: ListenerRegistration? = null
     private var mainCategoriesListener: ListenerRegistration? = null
+    private var commissionSettingsListener: ListenerRegistration? = null
+    private var defaultCommissionRate: Double = 0.15
+    private var shopHasExplicitCommissionRate: Boolean = false
     private var vouchersListener: ListenerRegistration? = null
     private var redemptionsListener: ListenerRegistration? = null
     private var orderChatsListener: ListenerRegistration? = null
@@ -786,17 +790,10 @@ class MerchantRepository private constructor(context: Context) {
             notes = (locMap?.get("notes") as? String) ?: ""
         )
 
-        val commRate = when (val cr = snapshot.get("commissionRate")) {
-            is Number -> {
-                val d = cr.toDouble()
-                if (d > 1.0) d / 100.0 else d
-            }
-            is String -> {
-                val d = cr.toDoubleOrNull() ?: 0.15
-                if (d > 1.0) d / 100.0 else d
-            }
-            else -> 0.15
-        }
+        val rawComm = snapshot.get("commissionRate")
+        val parsedCommDouble = FormatUtils.parseDouble(rawComm)
+        shopHasExplicitCommissionRate = parsedCommDouble != null
+        val commRate = PricingEngine.normalizeCommissionRate(parsedCommDouble, defaultCommissionRate)
 
         val autoSched = snapshot.getBoolean("autoSchedule") ?: snapshot.getBoolean("autoScheduleEnabled") ?: true
         val linkedCust = snapshot.getString("linkedCustomerUid") ?: snapshot.getString("linkedCustomerId")
@@ -832,6 +829,41 @@ class MerchantRepository private constructor(context: Context) {
         val branchSetupDoneVal = snapshot.getBoolean("branchSetupDone")
             ?: (chainIdVal.isBlank() || (branchNameVal.isNotBlank() && branchCodeVal.isNotBlank()))
 
+        val payoutMap = (snapshot.get("payoutAccount") as? Map<*, *>)
+            ?: (snapshot.get("bankDetails") as? Map<*, *>)
+            ?: (snapshot.get("payout") as? Map<*, *>)
+        val resolvedBankName = listOfNotNull(
+            snapshot.getString("bankName"),
+            snapshot.getString("payoutProvider"),
+            snapshot.getString("walletName"),
+            snapshot.getString("ewalletName"),
+            snapshot.getString("bank"),
+            payoutMap?.get("bankName") as? String,
+            payoutMap?.get("provider") as? String,
+            payoutMap?.get("walletName") as? String,
+            payoutMap?.get("ewalletName") as? String,
+            payoutMap?.get("bank") as? String
+        ).firstOrNull { it.isNotBlank() }?.trim() ?: ""
+
+        val resolvedAccountHolder = listOfNotNull(
+            snapshot.getString("accountHolder"),
+            snapshot.getString("accountName"),
+            snapshot.getString("holderName"),
+            payoutMap?.get("accountHolder") as? String,
+            payoutMap?.get("accountName") as? String,
+            payoutMap?.get("holderName") as? String,
+            payoutMap?.get("name") as? String
+        ).firstOrNull { it.isNotBlank() }?.trim() ?: ""
+
+        val resolvedAccountNumber = listOfNotNull(
+            snapshot.getString("accountNumber"),
+            snapshot.getString("payoutAccountNumber"),
+            snapshot.getString("mobileNumber"),
+            payoutMap?.get("accountNumber") as? String,
+            payoutMap?.get("number") as? String,
+            payoutMap?.get("mobileNumber") as? String
+        ).firstOrNull { it.isNotBlank() }?.trim() ?: ""
+
         return fallback.copy(
             merchantId = snapshot.id,
             ownerUid = snapshot.getString("ownerUid")?.trim() ?: fallback.ownerUid,
@@ -863,9 +895,9 @@ class MerchantRepository private constructor(context: Context) {
             logoUrl = snapshot.getString("logoUrl")?.trim() ?: "",
             imageUrl = snapshot.getString("imageUrl")?.trim() ?: "",
             description = snapshot.getString("description")?.trim() ?: "",
-            bankName = snapshot.getString("bankName") ?: "",
-            accountHolder = snapshot.getString("accountHolder") ?: "",
-            accountNumber = snapshot.getString("accountNumber") ?: "",
+            bankName = resolvedBankName,
+            accountHolder = resolvedAccountHolder,
+            accountNumber = resolvedAccountNumber,
             commissionRate = commRate,
             cityId = snapshot.getString("cityId") ?: snapshot.getString("city") ?: fallback.cityId.ifBlank { "taguig" },
             linkedCustomerUid = linkedCust,
@@ -1627,6 +1659,22 @@ class MerchantRepository private constructor(context: Context) {
                 syncCuisineTags(mId)
             }
 
+        // 13c. Commission Settings listener: settings/commission (merchantDefault fallback)
+        commissionSettingsListener = db.collection("settings").document("commission")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Commission settings listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val rawDefault = FormatUtils.parseDouble(snapshot.get("merchantDefault"))
+                    defaultCommissionRate = PricingEngine.normalizeCommissionRate(rawDefault, 0.15)
+                    if (!shopHasExplicitCommissionRate) {
+                        _settings.value = _settings.value.copy(commissionRate = defaultCommissionRate)
+                    }
+                }
+            }
+
         // 14. Best Sellers: on start and every 6 hours
         startBestSellersPeriodic(mId)
 
@@ -1855,6 +1903,9 @@ class MerchantRepository private constructor(context: Context) {
         receiptSettingsListener = null
         mainCategoriesListener?.remove()
         mainCategoriesListener = null
+        commissionSettingsListener?.remove()
+        commissionSettingsListener = null
+        shopHasExplicitCommissionRate = false
         vouchersListener?.remove()
         vouchersListener = null
         redemptionsListener?.remove()
@@ -3173,7 +3224,11 @@ class MerchantRepository private constructor(context: Context) {
         serviceFee: Double,
         orderNum: String,
         initialRadiusKm: Double = 3.0,
-        isCod: Boolean = cashToCollect > 0.0
+        isCod: Boolean = cashToCollect > 0.0,
+        ratesVersion: Long = 1L,
+        pricingSchema: Int = 2,
+        serviceKey: String = "instant",
+        vehicle: String = "motorcycle"
     ): HashMap<String, Any?> {
         val storeLoc = settings.storeLocation
         val cId = settings.cityId.ifBlank { "taguig" }
@@ -3186,7 +3241,11 @@ class MerchantRepository private constructor(context: Context) {
         } else {
             emptyList<Map<String, Any>>()
         }
-        val totalFee = deliveryFee + serviceFee
+        val roundedDeliveryFee = PricingEngine.round2(deliveryFee.coerceAtLeast(0.0))
+        val roundedServiceFee = PricingEngine.round2(serviceFee.coerceAtLeast(0.0))
+        val totalFee = PricingEngine.round2(roundedDeliveryFee + roundedServiceFee)
+        val normalizedRateFraction = PricingEngine.normalizeCommissionRate(settings.commissionRate, defaultCommissionRate)
+        val commissionPct = PricingEngine.round2(normalizedRateFraction * 100.0)
         val mName = settings.displayName.ifBlank { settings.storeName.ifBlank { "Merchant Store" } }
         val cleanRecipientName = recipientName.trim()
         val cleanRecipientPhone = recipientPhone.trim()
@@ -3236,11 +3295,27 @@ class MerchantRepository private constructor(context: Context) {
             "dropoffLng" to dropoffLng,
             "fees" to mapOf(
                 "subtotal" to 0.0,
-                "deliveryFee" to deliveryFee,
-                "serviceFee" to serviceFee,
+                "deliveryFee" to roundedDeliveryFee,
+                "serviceFee" to roundedServiceFee,
+                "tip" to 0.0,
+                "vat" to 0.0,
                 "discount" to 0.0,
                 "total" to totalFee,
                 "feePayer" to "merchant"
+            ),
+            "pricing" to mapOf(
+                "schema" to pricingSchema,
+                "ratesVersion" to ratesVersion,
+                "serviceKey" to serviceKey,
+                "vehicle" to vehicle,
+                "deliveryFee" to roundedDeliveryFee,
+                "serviceFee" to roundedServiceFee,
+                "tip" to 0.0,
+                "vat" to 0.0,
+                "itemsSubtotal" to 0.0,
+                "total" to totalFee,
+                "payer" to "merchant",
+                "merchantCommissionRate" to commissionPct
             ),
             "pickup" to mapOf(
                 "name" to mName,
@@ -3269,8 +3344,8 @@ class MerchantRepository private constructor(context: Context) {
                 "requestedBy" to merchantId,
                 "radiusKm" to initialRadiusKm,
                 "distanceKm" to distanceKm,
-                "deliveryFee" to deliveryFee,
-                "serviceFee" to serviceFee,
+                "deliveryFee" to roundedDeliveryFee,
+                "serviceFee" to roundedServiceFee,
                 "note" to cleanNote,
                 "feePayer" to "merchant",
                 "manual" to true
@@ -3297,6 +3372,8 @@ class MerchantRepository private constructor(context: Context) {
         deliveryFee: Double,
         serviceFee: Double,
         isCod: Boolean = codAmount > 0.0,
+        ratesVersion: Long = 1L,
+        pricingSchema: Int = 2,
         onResult: (Boolean, String?, Map<String, Any>, Order?) -> Unit
     ) {
         val mId = _merchantId.value?.takeIf { it.isNotBlank() }
@@ -3306,7 +3383,10 @@ class MerchantRepository private constructor(context: Context) {
         val orderNum = "#R" + (1000..9999).random().toString()
         val sanitizedCash = if (isCod) codAmount.coerceAtLeast(0.0) else 0.0
         val paymentMethod = if (isCod) "cod" else "paid"
-        val totalFee = deliveryFee + serviceFee
+        val roundedDeliveryFee = PricingEngine.round2(deliveryFee.coerceAtLeast(0.0))
+        val roundedServiceFee = PricingEngine.round2(serviceFee.coerceAtLeast(0.0))
+        val totalFee = PricingEngine.round2(roundedDeliveryFee + roundedServiceFee)
+        val normalizedCommRate = PricingEngine.normalizeCommissionRate(currentSettings.commissionRate, defaultCommissionRate)
         val mName = currentSettings.displayName.ifBlank { currentSettings.storeName.ifBlank { "Merchant Store" } }
 
         val orderData = buildInstantRiderOrderPayload(
@@ -3323,10 +3403,12 @@ class MerchantRepository private constructor(context: Context) {
             cashToCollect = sanitizedCash,
             riderNote = riderNote,
             distanceKm = distanceKm,
-            deliveryFee = deliveryFee,
-            serviceFee = serviceFee,
+            deliveryFee = roundedDeliveryFee,
+            serviceFee = roundedServiceFee,
             orderNum = orderNum,
-            isCod = isCod
+            isCod = isCod,
+            ratesVersion = ratesVersion,
+            pricingSchema = pricingSchema
         )
 
         val nonNullMap = orderData.filterValues { it != null }.mapValues { it.value as Any }
@@ -3356,8 +3438,8 @@ class MerchantRepository private constructor(context: Context) {
             dropoffLng = dropoffLng,
             items = if (whatToDeliver.isNotBlank()) listOf(OrderItem(id = "item_1", name = whatToDeliver.trim(), quantity = 1, price = 0.0, unitPrice = 0.0)) else emptyList(),
             subtotal = 0.0,
-            deliveryFee = deliveryFee,
-            serviceFee = serviceFee,
+            deliveryFee = roundedDeliveryFee,
+            serviceFee = roundedServiceFee,
             discount = 0.0,
             platformFee = 0.0,
             total = totalFee,
@@ -3375,14 +3457,28 @@ class MerchantRepository private constructor(context: Context) {
                 requestedBy = mId,
                 distanceKm = distanceKm,
                 radiusKm = 3.0,
-                deliveryFee = deliveryFee,
+                deliveryFee = roundedDeliveryFee,
                 note = riderNote.trim(),
                 feePayer = "merchant"
             ),
             cityId = cId,
             serviceType = "request_rider",
             fulfillment = "delivery",
-            hasPickup = true
+            hasPickup = true,
+            pricing = PricingSnapshot(
+                schema = pricingSchema,
+                ratesVersion = ratesVersion,
+                serviceKey = "instant",
+                vehicle = "motorcycle",
+                deliveryFee = roundedDeliveryFee,
+                serviceFee = roundedServiceFee,
+                tip = 0.0,
+                vat = 0.0,
+                itemsSubtotal = 0.0,
+                total = totalFee,
+                payer = "merchant",
+                merchantCommissionRate = normalizedCommRate
+            )
         )
 
         if (db == null) {
@@ -3537,21 +3633,91 @@ class MerchantRepository private constructor(context: Context) {
                     onResult(null, "Delivery not available in $cId")
                     return@addOnSuccessListener
                 }
+                val docSchema = FormatUtils.parseInt(doc.get("schema")) ?: 1
+                val docVersion = (doc.get("version") as? Number)?.toLong()
+                    ?: FormatUtils.parseInt(doc.get("version"))?.toLong()
+                    ?: 1L
                 val servicesMap = doc.get("services") as? Map<*, *>
-                val sType = if (serviceType.isBlank()) "food" else serviceType.lowercase()
-                val serviceMap = (servicesMap?.get(sType) as? Map<*, *>) ?: (servicesMap?.get("food") as? Map<*, *>)
+                val rawType = if (serviceType.isBlank()) "food" else serviceType.lowercase()
+                val preferredKey = if (rawType == "request_rider" || rawType == "instant") "instant" else rawType
+                val serviceMap = (servicesMap?.get(preferredKey) as? Map<*, *>)
+                    ?: (if (rawType == "request_rider" || rawType == "instant") servicesMap?.get("request_rider") as? Map<*, *> else null)
+                    ?: (servicesMap?.get("food") as? Map<*, *>)
+
                 if (serviceMap == null) {
-                    onResult(ServiceRate(), null)
+                    onResult(ServiceRate(schemaVersion = docSchema, ratesVersion = docVersion, serviceKey = preferredKey), null)
                 } else {
-                    val rate = ServiceRate(
-                        baseFare = (serviceMap["baseFare"] as? Number)?.toDouble() ?: 45.0,
-                        includedKm = (serviceMap["includedKm"] as? Number)?.toDouble() ?: 2.0,
-                        perKmRate = (serviceMap["perKmRate"] as? Number)?.toDouble() ?: 10.0,
-                        minFee = (serviceMap["minFee"] as? Number)?.toDouble() ?: 45.0,
-                        maxFee = (serviceMap["maxFee"] as? Number)?.toDouble() ?: 300.0,
-                        serviceFee = (serviceMap["serviceFee"] as? Number)?.toDouble() ?: 10.0
-                    )
-                    onResult(rate, null)
+                    val deliveryNested = serviceMap["delivery"] as? Map<*, *>
+                    val isSchema2 = docSchema >= 2 || deliveryNested != null
+                    if (isSchema2) {
+                        val del = deliveryNested ?: serviceMap
+                        val pickupMap = serviceMap["pickup"] as? Map<*, *>
+                        val sfAny = serviceMap["serviceFee"]
+                        val sfConfig = when (sfAny) {
+                            is Map<*, *> -> ServiceFeeConfig(
+                                mode = (sfAny["mode"] as? String)?.trim()?.ifBlank { "flat" } ?: "flat",
+                                value = FormatUtils.parseDouble(sfAny["value"]) ?: 0.0
+                            )
+                            else -> ServiceFeeConfig(
+                                mode = "flat",
+                                value = FormatUtils.parseDouble(sfAny) ?: 0.0
+                            )
+                        }
+                        val peakMap = serviceMap["peak"] as? Map<*, *>
+                        val nightMap = serviceMap["night"] as? Map<*, *>
+                        val freeDelMap = serviceMap["freeDelivery"] as? Map<*, *>
+
+                        val rate = ServiceRate(
+                            baseFare = FormatUtils.parseDouble(del["baseFare"]) ?: 45.0,
+                            includedKm = FormatUtils.parseDouble(del["includedKm"]) ?: 2.0,
+                            perKmRate = FormatUtils.parseDouble(del["perKm"] ?: del["perKmRate"]) ?: 10.0,
+                            minFee = FormatUtils.parseDouble(del["minFee"]) ?: 45.0,
+                            maxFee = FormatUtils.parseDouble(del["maxFee"]) ?: 300.0,
+                            serviceFee = if (sfConfig.mode.equals("flat", ignoreCase = true)) sfConfig.value else 0.0,
+                            schemaVersion = if (docSchema >= 2) docSchema else 2,
+                            ratesVersion = docVersion,
+                            serviceKey = preferredKey,
+                            pickupConfig = PickupRateConfig(
+                                baseFee = FormatUtils.parseDouble(pickupMap?.get("baseFee")) ?: 0.0,
+                                freeKm = FormatUtils.parseDouble(pickupMap?.get("freeKm")) ?: 0.0,
+                                perKm = FormatUtils.parseDouble(pickupMap?.get("perKm")) ?: 0.0,
+                                maxFee = FormatUtils.parseDouble(pickupMap?.get("maxFee")) ?: 0.0
+                            ),
+                            serviceFeeConfig = sfConfig,
+                            peakConfig = PeakConfig(
+                                enabled = (peakMap?.get("enabled") as? Boolean) ?: false,
+                                multiplier = FormatUtils.parseDouble(peakMap?.get("multiplier")) ?: 1.0,
+                                startHour = FormatUtils.parseInt(peakMap?.get("startHour")),
+                                endHour = FormatUtils.parseInt(peakMap?.get("endHour"))
+                            ),
+                            nightConfig = NightConfig(
+                                enabled = (nightMap?.get("enabled") as? Boolean) ?: false,
+                                surcharge = FormatUtils.parseDouble(nightMap?.get("surcharge")) ?: 0.0,
+                                startHour = FormatUtils.parseInt(nightMap?.get("startHour")),
+                                endHour = FormatUtils.parseInt(nightMap?.get("endHour"))
+                            ),
+                            freeDeliveryConfig = FreeDeliveryConfig(
+                                enabled = (freeDelMap?.get("enabled") as? Boolean) ?: false,
+                                minSubtotal = FormatUtils.parseDouble(freeDelMap?.get("minSubtotal")) ?: 0.0
+                            )
+                        )
+                        onResult(rate, null)
+                    } else {
+                        val legacySf = FormatUtils.parseDouble(serviceMap["serviceFee"]) ?: 10.0
+                        val rate = ServiceRate(
+                            baseFare = FormatUtils.parseDouble(serviceMap["baseFare"]) ?: 45.0,
+                            includedKm = FormatUtils.parseDouble(serviceMap["includedKm"]) ?: 2.0,
+                            perKmRate = FormatUtils.parseDouble(serviceMap["perKmRate"] ?: serviceMap["perKm"]) ?: 10.0,
+                            minFee = FormatUtils.parseDouble(serviceMap["minFee"]) ?: 45.0,
+                            maxFee = FormatUtils.parseDouble(serviceMap["maxFee"]) ?: 300.0,
+                            serviceFee = legacySf,
+                            schemaVersion = 1,
+                            ratesVersion = docVersion,
+                            serviceKey = preferredKey,
+                            serviceFeeConfig = ServiceFeeConfig(mode = "flat", value = legacySf)
+                        )
+                        onResult(rate, null)
+                    }
                 }
             }
             .addOnFailureListener { ex ->

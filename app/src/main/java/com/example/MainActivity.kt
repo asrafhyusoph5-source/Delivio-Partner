@@ -300,7 +300,7 @@ class MainActivity : ComponentActivity() {
                         isSubmitting = isActionLoading,
                         submissionError = manualBookingError,
                         onClearError = { viewModel.clearManualBookingError() },
-                        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, isCod, codAmount, note, dist, delFee ->
+                        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, isCod, codAmount, note, dist, delFee, svcFee, ratesVer, schemaVer ->
                             viewModel.bookRiderDirect(
                                 recipientName = name,
                                 recipientPhone = phone,
@@ -314,8 +314,10 @@ class MainActivity : ComponentActivity() {
                                 riderNote = note,
                                 distanceKm = dist,
                                 deliveryFee = delFee,
-                                serviceFee = 0.0,
-                                isCod = isCod
+                                serviceFee = svcFee,
+                                isCod = isCod,
+                                ratesVersion = ratesVer,
+                                pricingSchema = schemaVer
                             )
                         },
                         onOpenLocationPicker = {
