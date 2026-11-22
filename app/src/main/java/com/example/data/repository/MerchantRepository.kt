@@ -3172,19 +3172,22 @@ class MerchantRepository private constructor(context: Context) {
         deliveryFee: Double,
         serviceFee: Double,
         orderNum: String,
-        initialRadiusKm: Double = 3.0
+        initialRadiusKm: Double = 3.0,
+        isCod: Boolean = cashToCollect > 0.0
     ): HashMap<String, Any?> {
         val storeLoc = settings.storeLocation
         val cId = settings.cityId.ifBlank { "taguig" }
-        val sanitizedCash = cashToCollect.coerceAtLeast(0.0)
-        val paymentMethod = if (sanitizedCash > 0.0) "cash" else "paid"
-        val itemsList = if (whatToDeliver.isNotBlank()) {
-            listOf(mapOf("name" to whatToDeliver.trim(), "qty" to 1, "price" to 0.0, "unitPrice" to 0.0))
+        val sanitizedCash = if (isCod) cashToCollect.coerceAtLeast(0.0) else 0.0
+        val paymentMethod = if (isCod) "cod" else "paid"
+        val cleanWhatToDeliver = whatToDeliver.trim()
+        val cleanRelatedOrder = relatedOrderNumber.trim()
+        val itemsList = if (cleanWhatToDeliver.isNotBlank()) {
+            listOf(mapOf("name" to cleanWhatToDeliver, "qty" to 1, "price" to 0.0, "unitPrice" to 0.0))
         } else {
             emptyList<Map<String, Any>>()
         }
         val totalFee = deliveryFee + serviceFee
-        val mName = settings.storeName.ifBlank { "Merchant Store" }
+        val mName = settings.displayName.ifBlank { settings.storeName.ifBlank { "Merchant Store" } }
         val cleanRecipientName = recipientName.trim()
         val cleanRecipientPhone = recipientPhone.trim()
         val cleanAddress = deliveryAddress.trim()
@@ -3211,12 +3214,16 @@ class MerchantRepository private constructor(context: Context) {
             "riderPhone" to null,
             "cityId" to cId,
             "items" to itemsList,
-            "relatedOrderNumber" to relatedOrderNumber.trim(),
+            "orderDetails" to cleanWhatToDeliver,
+            "whatToDeliver" to cleanWhatToDeliver,
+            "relatedOrder" to cleanRelatedOrder,
+            "relatedOrderNumber" to cleanRelatedOrder,
             "note" to cleanNote,
             "riderNote" to cleanNote,
             "paymentMethod" to paymentMethod,
             "cashToCollect" to sanitizedCash,
             "codAmount" to sanitizedCash,
+            "feePayer" to "merchant",
             "fulfillment" to "delivery",
             "deliveryAddress" to mapOf(
                 "street" to cleanAddress,
@@ -3236,6 +3243,7 @@ class MerchantRepository private constructor(context: Context) {
                 "feePayer" to "merchant"
             ),
             "pickup" to mapOf(
+                "name" to mName,
                 "label" to mName,
                 "address" to storeLoc.formatted,
                 "lat" to storeLoc.latitude,
@@ -3244,10 +3252,13 @@ class MerchantRepository private constructor(context: Context) {
                 "contactPhone" to settings.phone
             ),
             "dropoff" to mapOf(
+                "name" to cleanRecipientName,
+                "phone" to cleanRecipientPhone,
                 "address" to cleanAddress,
                 "area" to dropoffArea.trim(),
                 "lat" to dropoffLat,
                 "lng" to dropoffLng,
+                "note" to cleanNote,
                 "contactName" to cleanRecipientName,
                 "contactPhone" to cleanRecipientPhone
             ),
@@ -3285,6 +3296,7 @@ class MerchantRepository private constructor(context: Context) {
         distanceKm: Double,
         deliveryFee: Double,
         serviceFee: Double,
+        isCod: Boolean = codAmount > 0.0,
         onResult: (Boolean, String?, Map<String, Any>, Order?) -> Unit
     ) {
         val mId = _merchantId.value?.takeIf { it.isNotBlank() }
@@ -3292,9 +3304,10 @@ class MerchantRepository private constructor(context: Context) {
         val currentSettings = _settings.value
         val cId = currentSettings.cityId.ifBlank { "taguig" }
         val orderNum = "#R" + (1000..9999).random().toString()
-        val sanitizedCash = codAmount.coerceAtLeast(0.0)
-        val paymentMethod = if (sanitizedCash > 0.0) "cash" else "paid"
+        val sanitizedCash = if (isCod) codAmount.coerceAtLeast(0.0) else 0.0
+        val paymentMethod = if (isCod) "cod" else "paid"
         val totalFee = deliveryFee + serviceFee
+        val mName = currentSettings.displayName.ifBlank { currentSettings.storeName.ifBlank { "Merchant Store" } }
 
         val orderData = buildInstantRiderOrderPayload(
             merchantId = mId,
@@ -3312,7 +3325,8 @@ class MerchantRepository private constructor(context: Context) {
             distanceKm = distanceKm,
             deliveryFee = deliveryFee,
             serviceFee = serviceFee,
-            orderNum = orderNum
+            orderNum = orderNum,
+            isCod = isCod
         )
 
         val nonNullMap = orderData.filterValues { it != null }.mapValues { it.value as Any }
@@ -3324,7 +3338,7 @@ class MerchantRepository private constructor(context: Context) {
         val localOrder = Order(
             id = tempId,
             merchantId = mId,
-            merchantName = currentSettings.storeName.ifBlank { "Merchant Store" },
+            merchantName = mName,
             branchName = currentSettings.branchName,
             branchCode = currentSettings.branchCode,
             chainId = currentSettings.chainId,

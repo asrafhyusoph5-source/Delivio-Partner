@@ -293,6 +293,38 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { viewModel.closeMapLocation() }
                     )
+                } else if (showManualBookingForm) {
+                    // Two-step Full-Screen Request a Rider (Delivio Instant)
+                    RequestRiderScreen(
+                        settings = settings,
+                        isSubmitting = isActionLoading,
+                        submissionError = manualBookingError,
+                        onClearError = { viewModel.clearManualBookingError() },
+                        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, isCod, codAmount, note, dist, delFee ->
+                            viewModel.bookRiderDirect(
+                                recipientName = name,
+                                recipientPhone = phone,
+                                deliveryAddress = addr,
+                                dropoffArea = area,
+                                dropoffLat = lat,
+                                dropoffLng = lng,
+                                whatToDeliver = what,
+                                relatedOrderNumber = relOrder,
+                                codAmount = codAmount,
+                                riderNote = note,
+                                distanceKm = dist,
+                                deliveryFee = delFee,
+                                serviceFee = 0.0,
+                                isCod = isCod
+                            )
+                        },
+                        onOpenLocationPicker = {
+                            viewModel.openMapLocation()
+                        },
+                        onDismiss = {
+                            viewModel.closeManualBookingForm()
+                        }
+                    )
                 } else if (showWalletScreen) {
                     // Full-screen Delivio Wallet view (Owner only)
                     WalletScreen(
@@ -1165,39 +1197,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                // 15. Manual Rider Booking Sheet (Pop-up booking form that needs no existing order)
-                if (showManualBookingForm) {
-                    ManualRiderBookingSheet(
-                        settings = settings,
-                        isSubmitting = isActionLoading,
-                        submissionError = manualBookingError,
-                        onBookRider = { name, phone, addr, area, lat, lng, what, relOrder, cod, note, dist, delFee, sFee ->
-                            viewModel.bookRiderDirect(
-                                recipientName = name,
-                                recipientPhone = phone,
-                                deliveryAddress = addr,
-                                dropoffArea = area,
-                                dropoffLat = lat,
-                                dropoffLng = lng,
-                                whatToDeliver = what,
-                                relatedOrderNumber = relOrder,
-                                codAmount = cod,
-                                riderNote = note,
-                                distanceKm = dist,
-                                deliveryFee = delFee,
-                                serviceFee = sFee
-                            )
-                        },
-                        onOpenLocationPicker = {
-                            viewModel.openMapLocation()
-                        },
-                        onDismiss = {
-                            viewModel.closeManualBookingForm()
-                        }
-                    )
-                }
-
-                // 16. Rider Request Error Dialog (Never silent on failure)
+                // 15. Rider Request Error Dialog (Never silent on failure)
                 riderRequestError?.let { errInfo ->
                     RiderRequestErrorDialog(
                         errorInfo = errInfo,

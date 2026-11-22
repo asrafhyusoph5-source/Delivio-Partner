@@ -34,6 +34,7 @@ import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
 import com.example.util.NominatimResult
 import com.example.util.OsmRouteHelper
+import com.example.util.PhoneDialer
 import com.example.util.RouteResult
 import kotlinx.coroutines.launch
 import org.osmdroid.util.GeoPoint
@@ -442,19 +443,17 @@ fun RiderTrackingModal(
                             }
 
                             if (order.customerPhone.isNotBlank()) {
-                                IconButton(
-                                    onClick = {
-                                        val intent = Intent(Intent.ACTION_DIAL).apply {
-                                            data = Uri.parse("tel:${order.customerPhone}")
-                                        }
-                                        context.startActivity(intent)
-                                    },
+                                FilledIconButton(
+                                    onClick = { PhoneDialer.dial(context, order.customerPhone) },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = StatusOpenGreen,
+                                        contentColor = Color.White
+                                    ),
                                     modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(CircleShape)
-                                        .background(StatusOpenGreen)
+                                        .size(48.dp)
+                                        .testTag("modal_call_customer_btn")
                                 ) {
-                                    Icon(Icons.Default.Phone, contentDescription = "Call Customer", tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Phone, contentDescription = "Call Customer", modifier = Modifier.size(20.dp))
                                 }
                             }
                         }
@@ -874,17 +873,14 @@ fun RiderTrackingModal(
 
                                 if (rPhone.isNotBlank()) {
                                     FilledIconButton(
-                                        onClick = {
-                                            val intent = Intent(Intent.ACTION_DIAL).apply {
-                                                data = Uri.parse("tel:$rPhone")
-                                            }
-                                            context.startActivity(intent)
-                                        },
+                                        onClick = { PhoneDialer.dial(context, rPhone) },
                                         colors = IconButtonDefaults.filledIconButtonColors(
                                             containerColor = StatusOpenGreen,
                                             contentColor = Color.White
                                         ),
-                                        modifier = Modifier.testTag("call_rider_btn")
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("call_rider_btn")
                                     ) {
                                         Icon(Icons.Default.Phone, contentDescription = "Call Rider")
                                     }

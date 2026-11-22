@@ -225,7 +225,7 @@ object OrderDocumentParser {
             city = cityStr,
             latitude = dropLat ?: 14.5492,
             longitude = dropLng ?: 121.0503,
-            notes = safeString(addrMap["notes"]) ?: safeString(addrMap["note"]) ?: ""
+            notes = safeString(addrMap["notes"]) ?: safeString(addrMap["note"]) ?: safeString(dropoffMap["note"]) ?: ""
         )
 
         val riderMap = safeMap(data["rider"])
@@ -429,11 +429,13 @@ object OrderDocumentParser {
         val customerNameVal = (safeString(data["customerName"])
             ?: safeString(data["recipientName"])
             ?: safeString(customerMap["name"])
+            ?: safeString(dropoffMap["name"])
             ?: safeString(dropoffMap["contactName"])
             ?: "Customer").ifBlank { "Customer" }
         val customerPhoneVal = safeString(data["customerPhone"])
             ?: safeString(data["recipientPhone"])
             ?: safeString(customerMap["phone"])
+            ?: safeString(dropoffMap["phone"])
             ?: safeString(dropoffMap["contactPhone"])
             ?: ""
 
@@ -529,7 +531,7 @@ object OrderDocumentParser {
             cashToCollect = cashCollectVal,
             walletAdjustDue = walletAdjustVal,
             riderVehicle = riderVehDisplay,
-            note = (safeString(data["note"]) ?: safeString(data["riderNote"]) ?: safeString(data["notes"]) ?: "").trim(),
+            note = (safeString(data["note"]) ?: safeString(data["riderNote"]) ?: safeString(dropoffMap["note"]) ?: safeString(data["notes"]) ?: "").trim(),
             feesRaw = feesMap,
             rawJson = rawJsonStr,
             acceptedAt = acceptedAtVal,

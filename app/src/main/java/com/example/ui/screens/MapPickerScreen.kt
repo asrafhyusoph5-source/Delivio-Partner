@@ -175,11 +175,6 @@ fun MapPickerScreen(
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val isKeyboardOpen = imeBottomPx > 0
 
-    // Navigation bar bottom inset calculation
-    val navBarBottomPx = WindowInsets.navigationBars.getBottom(density)
-    val navigationBarsBottomInset = with(density) { navBarBottomPx.toDp() }
-    val bottomInsetPadding = maxOf(navigationBarsBottomInset, 24.dp) + 16.dp
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -508,12 +503,7 @@ fun MapPickerScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp)
-                        .padding(
-                            top = 12.dp,
-                            bottom = bottomInsetPadding
-                        )
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
                 ) {
                     // Address Line (one line, ellipsized)
                     Row(verticalAlignment = Alignment.CenterVertically) {

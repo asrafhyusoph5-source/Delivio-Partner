@@ -36,6 +36,7 @@ import com.example.ui.theme.LocalDelivioColors
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
+import com.example.util.PhoneDialer
 
 @Composable
 fun OrderDetailScreen(
@@ -568,21 +569,20 @@ fun OrderDetailScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                             }
 
-                            // Call Customer Button (enabled once order placed)
-                            FilledIconButton(
-                                onClick = {
-                                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                                        data = Uri.parse("tel:${order.customerPhone}")
-                                    }
-                                    context.startActivity(intent)
-                                },
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = StatusOpenGreen,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.testTag("call_customer_btn")
-                            ) {
-                                Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                            // Call Customer Button
+                            if (order.customerPhone.isNotBlank()) {
+                                FilledIconButton(
+                                    onClick = { PhoneDialer.dial(context, order.customerPhone) },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = StatusOpenGreen,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("call_customer_btn")
+                                ) {
+                                    Icon(Icons.Default.Phone, contentDescription = "Call Customer")
+                                }
                             }
                         }
                     }
@@ -828,17 +828,14 @@ fun OrderDetailScreen(
                             // Rider Call Button
                             if (rPhone.isNotBlank()) {
                                 FilledIconButton(
-                                    onClick = {
-                                        val intent = Intent(Intent.ACTION_DIAL).apply {
-                                            data = Uri.parse("tel:$rPhone")
-                                        }
-                                        context.startActivity(intent)
-                                    },
+                                    onClick = { PhoneDialer.dial(context, rPhone) },
                                     colors = IconButtonDefaults.filledIconButtonColors(
                                         containerColor = StatusOpenGreen,
                                         contentColor = Color.White
                                     ),
-                                    modifier = Modifier.testTag("call_rider_btn")
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("call_rider_btn")
                                 ) {
                                     Icon(Icons.Default.Phone, contentDescription = "Call Rider")
                                 }

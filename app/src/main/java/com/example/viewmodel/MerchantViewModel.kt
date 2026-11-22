@@ -1033,7 +1033,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
         riderNote: String,
         distanceKm: Double,
         deliveryFee: Double,
-        serviceFee: Double
+        serviceFee: Double,
+        isCod: Boolean = codAmount > 0.0
     ) {
         _manualBookingError.value = null
         _isActionLoading.value = true
@@ -1050,7 +1051,8 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
             riderNote = riderNote,
             distanceKm = distanceKm,
             deliveryFee = deliveryFee,
-            serviceFee = serviceFee
+            serviceFee = serviceFee,
+            isCod = isCod
         ) { success, error, _, createdOrder ->
             _isActionLoading.value = false
             if (success && createdOrder != null) {

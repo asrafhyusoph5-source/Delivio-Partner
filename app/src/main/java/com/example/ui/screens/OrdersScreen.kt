@@ -43,6 +43,7 @@ import com.example.ui.theme.StatusClosedRed
 import com.example.ui.theme.StatusOpenGreen
 import com.example.ui.theme.StatusWarningAmber
 import com.example.util.FormatUtils
+import com.example.util.PhoneDialer
 
 @Composable
 fun FulfillmentChip(
@@ -1122,12 +1123,11 @@ fun OrderCard(
                         if (order.customerPhone.isNotBlank()) {
                             IconButton(
                                 onClick = {
-                                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                                        data = Uri.parse("tel:${order.customerPhone}")
-                                    }
-                                    context.startActivity(intent)
+                                    PhoneDialer.dial(context, order.customerPhone)
                                 },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("orders_call_customer_btn_${order.id}")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Phone,
@@ -1195,19 +1195,19 @@ fun OrderCard(
 
                             val rPhone = order.riderPhone.ifBlank { rider?.phone ?: "" }
                             if (hasRider && rPhone.isNotBlank()) {
-                                Icon(
-                                    imageVector = Icons.Default.Phone,
-                                    contentDescription = "Call Rider",
-                                    tint = StatusOpenGreen,
+                                IconButton(
+                                    onClick = { PhoneDialer.dial(context, rPhone) },
                                     modifier = Modifier
-                                        .size(16.dp)
-                                        .clickable {
-                                            val intent = Intent(Intent.ACTION_DIAL).apply {
-                                                data = Uri.parse("tel:$rPhone")
-                                            }
-                                            context.startActivity(intent)
-                                        }
-                                )
+                                        .size(48.dp)
+                                        .testTag("orders_call_rider_btn_${order.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Phone,
+                                        contentDescription = "Call Rider",
+                                        tint = StatusOpenGreen,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
