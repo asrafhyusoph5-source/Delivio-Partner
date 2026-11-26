@@ -74,6 +74,8 @@ fun MerchantRightDrawer(
     onOpenOutlets: () -> Unit = {},
     showDelivioPos: Boolean = false,
     onOpenDelivioPos: () -> Unit = {},
+    showJobFair: Boolean = false,
+    onOpenJobFair: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
@@ -406,6 +408,17 @@ fun MerchantRightDrawer(
                     onClick = onOpenVouchers,
                     modifier = Modifier.testTag("drawer_item_vouchers")
                 )
+
+                // Job Fair (hidden when settings/platform.services.jobfair is off)
+                if (showJobFair) {
+                    DrawerListItem(
+                        icon = Icons.Default.WorkOutline,
+                        title = "Job Fair",
+                        subtitle = "Post jobs and see applicants",
+                        onClick = onOpenJobFair,
+                        modifier = Modifier.testTag("drawer_item_job_fair")
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 

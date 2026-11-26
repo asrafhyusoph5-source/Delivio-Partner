@@ -197,6 +197,12 @@ class MainActivity : ComponentActivity() {
             val reportsPosLogs by viewModel.reportsPosLogs.collectAsStateWithLifecycle()
             val isReportsPosLoading by viewModel.isReportsPosLoading.collectAsStateWithLifecycle()
 
+            // Job Fair states
+            val jobFairConfig by viewModel.jobFairConfig.collectAsStateWithLifecycle()
+            val jobs by viewModel.jobs.collectAsStateWithLifecycle()
+            val jobApplications by viewModel.jobApplications.collectAsStateWithLifecycle()
+            val showJobFairScreen by viewModel.showJobFairScreen.collectAsStateWithLifecycle()
+
             LaunchedEffect(Unit) {
                 viewModel.newIncomingMessageEvent.collect { thread ->
                     viewModel.showSnackbar("New message on #${thread.orderNumber}")
@@ -533,6 +539,24 @@ class MainActivity : ComponentActivity() {
                         onToggleActive = { code, active -> viewModel.toggleVoucherActive(code, active) },
                         onBack = { viewModel.closeVouchers() }
                     )
+                } else if (showJobFairScreen) {
+                    // Full-screen Job Fair route (staff sees read-only)
+                    JobFairScreen(
+                        settings = settings,
+                        jobFairConfig = jobFairConfig,
+                        jobs = jobs,
+                        applications = jobApplications,
+                        isReadOnly = !isOwner,
+                        onCreateJob = { draft, cb -> viewModel.createJobPosting(draft, cb) },
+                        onUpdateJob = { id, draft, existingStatus, cb -> viewModel.updateJobPosting(id, draft, existingStatus, cb) },
+                        onCloseJob = { id -> viewModel.closeJobPosting(id) },
+                        onReopenJob = { id -> viewModel.reopenJobPosting(id) },
+                        onMarkApplicationViewed = { app -> viewModel.markJobApplicationViewed(app) },
+                        onUpdateApplicationStatusAndNote = { id, st, note, cb ->
+                            viewModel.updateJobApplicationStatusAndNote(id, st, note, cb)
+                        },
+                        onBack = { viewModel.closeJobFair() }
+                    )
                 } else if (showReportsScreen) {
                     // Full-screen Reports route
                     val useCombinedReports = isMultiOutlet && reportsSelectedOutletIds.size > 1
@@ -718,6 +742,11 @@ class MainActivity : ComponentActivity() {
                                             } else {
                                                 showPosLaunchSheet = true
                                             }
+                                        },
+                                        showJobFair = jobFairConfig.enabled,
+                                        onOpenJobFair = {
+                                            coroutineScope.launch { drawerState.close() }
+                                            viewModel.openJobFair()
                                         }
                                     )
                                 }

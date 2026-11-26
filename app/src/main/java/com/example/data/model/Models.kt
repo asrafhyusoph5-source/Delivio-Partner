@@ -1383,7 +1383,10 @@ data class MerchantSettings(
     val isBranch: Boolean = false,
     val branchName: String = "",
     val branchCode: String = "",
-    val branchSetupDone: Boolean = true
+    val branchSetupDone: Boolean = true,
+    // Job Fair merchant trust/moderation flags (managed by admin)
+    val jobsTrusted: Boolean = false,
+    val jobsBlocked: Boolean = false
 ) {
     val displayName: String
         get() {

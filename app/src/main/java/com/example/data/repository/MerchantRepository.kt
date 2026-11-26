@@ -6,6 +6,8 @@ import android.util.Log
 import com.example.data.model.*
 import com.example.util.CrashReportStore
 import com.example.util.FormatUtils
+import com.example.util.JobFairHelper
+import com.example.util.JobPostEligibility
 import com.example.util.OrderDocumentParser
 import com.example.util.PosDocumentParser
 import com.example.util.PricingEngine
@@ -231,6 +233,8 @@ class MerchantRepository private constructor(context: Context) {
     private var vouchersListener: ListenerRegistration? = null
     private var redemptionsListener: ListenerRegistration? = null
     private var orderChatsListener: ListenerRegistration? = null
+    private var jobsListener: ListenerRegistration? = null
+    private var jobApplicationsListener: ListenerRegistration? = null
     private var bestSellersJob: Job? = null
 
     // Multi-outlet state & listeners
@@ -340,6 +344,16 @@ class MerchantRepository private constructor(context: Context) {
 
     private val _appLinksSettings = MutableStateFlow(AppLinksSettings())
     val appLinksSettings: StateFlow<AppLinksSettings> = _appLinksSettings.asStateFlow()
+
+    // Job Fair State
+    private val _jobFairConfig = MutableStateFlow(JobFairPlatformConfig())
+    val jobFairConfig: StateFlow<JobFairPlatformConfig> = _jobFairConfig.asStateFlow()
+
+    private val _jobs = MutableStateFlow<List<JobPosting>>(emptyList())
+    val jobs: StateFlow<List<JobPosting>> = _jobs.asStateFlow()
+
+    private val _jobApplications = MutableStateFlow<List<JobApplication>>(emptyList())
+    val jobApplications: StateFlow<List<JobApplication>> = _jobApplications.asStateFlow()
 
     fun isOrderVisible(order: Order, now: Long = System.currentTimeMillis()): Boolean {
         val sched = order.scheduledFor ?: return true
@@ -923,7 +937,9 @@ class MerchantRepository private constructor(context: Context) {
                 }
             },
             bluetoothPrinterName = snapshot.getString("bluetoothPrinterName") ?: fallback.bluetoothPrinterName,
-            bluetoothPrinterAddress = snapshot.getString("bluetoothPrinterAddress") ?: fallback.bluetoothPrinterAddress
+            bluetoothPrinterAddress = snapshot.getString("bluetoothPrinterAddress") ?: fallback.bluetoothPrinterAddress,
+            jobsTrusted = OrderDocumentParser.safeBoolean(snapshot.get("jobsTrusted"), default = false),
+            jobsBlocked = OrderDocumentParser.safeBoolean(snapshot.get("jobsBlocked"), default = false)
         )
     }
 
@@ -1558,10 +1574,12 @@ class MerchantRepository private constructor(context: Context) {
                     posRepository.updatePlatformPosSettings(
                         PosDocumentParser.parsePlatformPosSettings(snapshot.data)
                     )
+                    _jobFairConfig.value = JobFairHelper.parsePlatformConfig(snapshot.data)
                 } else {
                     platformServicesMap = emptyMap()
                     _scheduledReleaseLeadMinutes.value = 0
                     posRepository.updatePlatformPosSettings(PlatformPosSettings())
+                    _jobFairConfig.value = JobFairPlatformConfig()
                 }
                 evaluateServiceLock()
                 evaluateAndPublishOrders(System.currentTimeMillis())
@@ -1760,6 +1778,46 @@ class MerchantRepository private constructor(context: Context) {
                     triggerExpiredChatCleanup(force = false)
                 }
             }
+
+        // 18. Job Fair: jobs where merchantId == mId
+        jobsListener?.remove()
+        jobsListener = db.collection("jobs")
+            .whereEqualTo("merchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Jobs query error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        JobFairHelper.parseJobSnapshotSafe(doc, fallbackMerchantId = mId) { _, path, err ->
+                            Log.e("MerchantRepo", "Failed to parse $path", err)
+                            CrashReportStore.logNonFatal(appContext, path, err)
+                        }
+                    }.sortedByDescending { it.createdAt }
+                    _jobs.value = list
+                }
+            }
+
+        // 19. Job Fair: jobApplications where jobMerchantId == mId
+        jobApplicationsListener?.remove()
+        jobApplicationsListener = db.collection("jobApplications")
+            .whereEqualTo("jobMerchantId", mId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("MerchantRepo", "Job applications query error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        JobFairHelper.parseApplicationSnapshotSafe(doc, fallbackMerchantId = mId) { _, path, err ->
+                            Log.e("MerchantRepo", "Failed to parse $path", err)
+                            CrashReportStore.logNonFatal(appContext, path, err)
+                        }
+                    }.sortedByDescending { it.createdAt }
+                    _jobApplications.value = list
+                }
+            }
     }
 
     fun ensureCategoriesConfigured(customMid: String? = null) {
@@ -1913,6 +1971,12 @@ class MerchantRepository private constructor(context: Context) {
         orderChatsListener?.remove()
         orderChatsListener = null
         _orderChats.value = emptyMap()
+        jobsListener?.remove()
+        jobsListener = null
+        _jobs.value = emptyList()
+        jobApplicationsListener?.remove()
+        jobApplicationsListener = null
+        _jobApplications.value = emptyList()
         bestSellersJob?.cancel()
         bestSellersJob = null
         rawOrders = emptyList()
@@ -6539,6 +6603,166 @@ class MerchantRepository private constructor(context: Context) {
                 )
             }
         }
+    }
+
+    // ==================== JOB FAIR OPERATIONS ====================
+
+    fun createJobPosting(draft: JobPosting, onResult: (Boolean, String?) -> Unit) {
+        val mId = _merchantId.value?.takeIf { it.isNotBlank() }
+        val db = firestore
+        if (mId == null || db == null) {
+            onResult(false, "Shop not connected")
+            return
+        }
+        val currentSettings = _settings.value
+        val eligibility = JobFairHelper.checkPostEligibility(
+            settings = currentSettings,
+            jobs = _jobs.value,
+            config = _jobFairConfig.value
+        )
+        when (eligibility) {
+            is JobPostEligibility.Blocked -> {
+                onResult(false, eligibility.message)
+                return
+            }
+            is JobPostEligibility.LimitReached -> {
+                onResult(false, eligibility.message)
+                return
+            }
+            JobPostEligibility.Allowed -> Unit
+        }
+
+        val validationError = JobFairHelper.validateJobDraft(draft)
+        if (validationError != null) {
+            onResult(false, validationError)
+            return
+        }
+
+        val payload = JobFairHelper.buildCreateJobPayload(
+            draft = draft,
+            settings = currentSettings,
+            merchantId = mId,
+            cityName = currentCityName
+        )
+
+        db.collection("jobs").add(payload)
+            .addOnSuccessListener {
+                onResult(true, null)
+            }
+            .addOnFailureListener { ex ->
+                Log.e("MerchantRepo", "Failed to create job posting", ex)
+                onResult(false, OrderDocumentParser.formatFirestoreError(ex))
+            }
+    }
+
+    fun updateJobPosting(
+        jobId: String,
+        draft: JobPosting,
+        existingStatus: JobStatus,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore
+        if (db == null || jobId.isBlank()) {
+            onResult(false, "Job not found")
+            return
+        }
+        val validationError = JobFairHelper.validateJobDraft(draft)
+        if (validationError != null) {
+            onResult(false, validationError)
+            return
+        }
+        val payload = JobFairHelper.buildUpdateJobPayload(
+            draft = draft,
+            existingStatus = existingStatus,
+            settings = _settings.value
+        )
+        db.collection("jobs").document(jobId)
+            .update(payload)
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex ->
+                Log.e("MerchantRepo", "Failed to update job posting $jobId", ex)
+                onResult(false, OrderDocumentParser.formatFirestoreError(ex))
+            }
+    }
+
+    fun closeJobPosting(jobId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore
+        if (db == null || jobId.isBlank()) {
+            onResult(false, "Job not found")
+            return
+        }
+        val payload = mapOf(
+            "status" to JobStatus.CLOSED.firestoreValue,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("jobs").document(jobId)
+            .update(payload)
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex ->
+                Log.e("MerchantRepo", "Failed to close job $jobId", ex)
+                onResult(false, OrderDocumentParser.formatFirestoreError(ex))
+            }
+    }
+
+    fun reopenJobPosting(jobId: String, onResult: (Boolean, String?) -> Unit) {
+        val db = firestore
+        if (db == null || jobId.isBlank()) {
+            onResult(false, "Job not found")
+            return
+        }
+        val currentSettings = _settings.value
+        val eligibility = JobFairHelper.checkPostEligibility(
+            settings = currentSettings,
+            jobs = _jobs.value.filter { it.id != jobId },
+            config = _jobFairConfig.value
+        )
+        when (eligibility) {
+            is JobPostEligibility.Blocked -> {
+                onResult(false, eligibility.message)
+                return
+            }
+            is JobPostEligibility.LimitReached -> {
+                onResult(false, eligibility.message)
+                return
+            }
+            JobPostEligibility.Allowed -> Unit
+        }
+        val nextStatus = JobFairHelper.reopenJobStatus(currentSettings)
+        val payload = mapOf(
+            "status" to nextStatus.firestoreValue,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("jobs").document(jobId)
+            .update(payload)
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex ->
+                Log.e("MerchantRepo", "Failed to reopen job $jobId", ex)
+                onResult(false, OrderDocumentParser.formatFirestoreError(ex))
+            }
+    }
+
+    fun updateJobApplication(
+        applicationId: String,
+        targetStatus: JobApplicationStatus,
+        employerNote: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val db = firestore
+        if (db == null || applicationId.isBlank()) {
+            onResult(false, "Application not found")
+            return
+        }
+        val payload = JobFairHelper.buildApplicationUpdatePayload(
+            targetStatus = targetStatus,
+            employerNote = employerNote
+        )
+        db.collection("jobApplications").document(applicationId)
+            .update(payload)
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { ex ->
+                Log.e("MerchantRepo", "Failed to update application $applicationId", ex)
+                onResult(false, OrderDocumentParser.formatFirestoreError(ex))
+            }
     }
 
     companion object {

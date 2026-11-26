@@ -81,6 +81,9 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     val riderReviewsCount = repository.riderReviewsCount
     val platformPosSettings = repository.platformPosSettings
     val appLinksSettings = repository.appLinksSettings
+    val jobFairConfig = repository.jobFairConfig
+    val jobs = repository.jobs
+    val jobApplications = repository.jobApplications
 
     // POS Analytics State (Dashboard + Reports)
     private val _dashboardPosOrders = MutableStateFlow<List<PosOrder>>(emptyList())
@@ -448,6 +451,119 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
 
     fun closeReports() {
         _showReportsScreen.value = false
+    }
+
+    // --- Job Fair Navigation & Actions ---
+    private val _showJobFairScreen = MutableStateFlow(false)
+    val showJobFairScreen: StateFlow<Boolean> = _showJobFairScreen.asStateFlow()
+
+    fun openJobFair() {
+        _showJobFairScreen.value = true
+    }
+
+    fun closeJobFair() {
+        _showJobFairScreen.value = false
+    }
+
+    private fun isOwnerOrManager(): Boolean =
+        currentUser.value?.role?.lowercase() != "staff"
+
+    fun createJobPosting(draft: JobPosting, onResult: (Boolean, String?) -> Unit) {
+        if (!isOwnerOrManager()) {
+            val msg = "Staff accounts have read-only access to Job Fair."
+            showSnackbar(msg)
+            onResult(false, msg)
+            return
+        }
+        repository.createJobPosting(draft) { success, err ->
+            if (success) {
+                val label = if (settings.value.jobsTrusted) "Job posted and live!" else "Job submitted for approval"
+                showSnackbar(label)
+            } else if (!err.isNullOrBlank()) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun updateJobPosting(
+        jobId: String,
+        draft: JobPosting,
+        existingStatus: JobStatus,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        if (!isOwnerOrManager()) {
+            val msg = "Staff accounts have read-only access to Job Fair."
+            showSnackbar(msg)
+            onResult(false, msg)
+            return
+        }
+        repository.updateJobPosting(jobId, draft, existingStatus) { success, err ->
+            if (success) {
+                showSnackbar("Job updated")
+            } else if (!err.isNullOrBlank()) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
+    }
+
+    fun closeJobPosting(jobId: String) {
+        if (!isOwnerOrManager()) {
+            showSnackbar("Staff accounts have read-only access to Job Fair.")
+            return
+        }
+        repository.closeJobPosting(jobId) { success, err ->
+            if (success) showSnackbar("Job closed")
+            else showSnackbar(err ?: "Failed to close job")
+        }
+    }
+
+    fun reopenJobPosting(jobId: String) {
+        if (!isOwnerOrManager()) {
+            showSnackbar("Staff accounts have read-only access to Job Fair.")
+            return
+        }
+        repository.reopenJobPosting(jobId) { success, err ->
+            if (success) {
+                val label = if (settings.value.jobsTrusted) "Job reopened" else "Job reopened for approval"
+                showSnackbar(label)
+            } else {
+                showSnackbar(err ?: "Failed to reopen job")
+            }
+        }
+    }
+
+    fun markJobApplicationViewed(application: JobApplication) {
+        if (!isOwnerOrManager()) return
+        if (application.status != JobApplicationStatus.NEW) return
+        repository.updateJobApplication(
+            applicationId = application.id,
+            targetStatus = JobApplicationStatus.VIEWED,
+            employerNote = application.employerNote
+        ) { _, _ -> }
+    }
+
+    fun updateJobApplicationStatusAndNote(
+        applicationId: String,
+        targetStatus: JobApplicationStatus,
+        employerNote: String,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        if (!isOwnerOrManager()) {
+            val msg = "Staff accounts have read-only access to Job Fair."
+            showSnackbar(msg)
+            onResult(false, msg)
+            return
+        }
+        repository.updateJobApplication(applicationId, targetStatus, employerNote) { success, err ->
+            if (success) {
+                showSnackbar("Application updated")
+            } else if (!err.isNullOrBlank()) {
+                showSnackbar(err)
+            }
+            onResult(success, err)
+        }
     }
 
     fun refreshDashboardPos(outletIds: List<String>, nowMs: Long = _currentTime.value) {
