@@ -80,7 +80,11 @@ fun MerchantRightDrawer(
 ) {
     val customColors = LocalDelivioColors.current
     val density = LocalDensity.current
-    val effectiveOpen = BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
+    val storeStatus = BusinessHoursHelper.storeStatus(settings, currentTime)
+    val effectiveOpen = !isServiceLocked && storeStatus.open
+    val isAdminLocked = settings.adminLock
+    val isSuspended = !settings.status.equals("active", ignoreCase = true)
+    val canToggle = !isServiceLocked && !isAdminLocked && !isSuspended
 
     Surface(
         modifier = modifier
@@ -229,61 +233,130 @@ fun MerchantRightDrawer(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Open / Closed Switch with pill status
+                    // Open / Closed Switch with pill status (live storeStatus)
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF1A1A1A).copy(alpha = 0.08f),
+                        color = if (isAdminLocked) StatusClosedRed.copy(alpha = 0.14f) else Color(0xFF1A1A1A).copy(alpha = 0.08f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (effectiveOpen) "Store: Open" else "Store: Closed",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF1A1A1A)
-                                )
-                                if (settings.autoSchedule) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (isAdminLocked) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = "Closed by Delivio",
+                                            tint = StatusClosedRed,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Auto",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = Color(0xFF1A1A1A),
+                                        text = when {
+                                            isAdminLocked -> "Closed by Delivio"
+                                            isSuspended -> "Store: Closed"
+                                            effectiveOpen -> "Store: Open"
+                                            else -> "Store: Closed"
+                                        },
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = if (isAdminLocked) StatusClosedRed else Color(0xFF1A1A1A),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(Color.White.copy(alpha = 0.7f))
-                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                            .weight(1f, fill = false)
+                                            .testTag("drawer_store_status_label")
                                     )
+                                    if (settings.autoSchedule) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Auto",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFF1A1A1A),
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color.White.copy(alpha = 0.7f))
+                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                                .testTag("drawer_auto_chip")
+                                        )
+                                    }
                                 }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                Switch(
+                                    checked = effectiveOpen,
+                                    onCheckedChange = { if (canToggle) onToggleOpen() },
+                                    enabled = canToggle,
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFF1A1A1A),
+                                        checkedTrackColor = Color(0xFFFFF176),
+                                        checkedBorderColor = Color(0xFF1A1A1A),
+                                        uncheckedThumbColor = Color(0xFF757575),
+                                        uncheckedTrackColor = Color(0xFFE0E0E0),
+                                        uncheckedBorderColor = Color.Transparent,
+                                        disabledUncheckedThumbColor = Color(0xFF9E9E9E),
+                                        disabledUncheckedTrackColor = Color(0xFFE0E0E0).copy(alpha = 0.6f),
+                                        disabledUncheckedBorderColor = Color.Transparent
+                                    ),
+                                    modifier = Modifier.testTag("drawer_open_switch")
+                                )
                             }
 
-                            Switch(
-                                checked = effectiveOpen,
-                                onCheckedChange = { onToggleOpen() },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color(0xFF1A1A1A),
-                                    checkedTrackColor = Color(0xFFFFF176),
-                                    checkedBorderColor = Color(0xFF1A1A1A),
-                                    uncheckedThumbColor = Color(0xFF757575),
-                                    uncheckedTrackColor = Color(0xFFE0E0E0),
-                                    uncheckedBorderColor = Color.Transparent
-                                ),
-                                modifier = Modifier.testTag("drawer_open_switch")
-                            )
+                            if (isAdminLocked) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF1A1A1A),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(onClick = onOpenHelp)
+                                        .testTag("drawer_contact_support_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.HeadsetMic,
+                                            contentDescription = null,
+                                            tint = DelivioYellow,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Contact support",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

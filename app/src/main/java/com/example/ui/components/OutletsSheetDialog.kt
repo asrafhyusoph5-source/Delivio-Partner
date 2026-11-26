@@ -183,7 +183,8 @@ fun OutletsSelectorSheet(
                             outlet.merchantId in draftMultiIds
                         }
                         val isSuspended = !outlet.status.equals("active", ignoreCase = true)
-                        val effectiveOpen = if (isSuspended) false else BusinessHoursHelper.isEffectiveOpen(outlet, currentTime)
+                        val storeStatus = BusinessHoursHelper.storeStatus(outlet, currentTime)
+                        val effectiveOpen = storeStatus.open
                         val newCount = newOrderCountByOutlet[outlet.merchantId] ?: 0
 
                         Card(
@@ -272,6 +273,7 @@ fun OutletsSelectorSheet(
                                     ) {
                                         val statusLabel = when {
                                             isSuspended -> "Suspended"
+                                            outlet.adminLock -> "Closed by Delivio"
                                             effectiveOpen -> "Open"
                                             else -> "Closed"
                                         }

@@ -99,11 +99,15 @@ fun formatChoicePriceBadge(priceText: String): String {
 }
 
 fun buildSetLiveHint(required: Boolean, minSelect: Int, maxSelect: Int): String {
-    return when {
-        maxSelect <= 1 -> "Select one"
-        !required || minSelect == 0 || minSelect == 1 -> "Select up to $maxSelect"
-        minSelect == maxSelect -> "Select $minSelect"
-        else -> "Select $minSelect to $maxSelect"
+    val safeMax = maxSelect.coerceAtLeast(1)
+    if (!required) {
+        return "Optional, up to $safeMax"
+    }
+    val safeMin = minSelect.coerceIn(1, safeMax)
+    return if (safeMin == safeMax) {
+        "Select $safeMin"
+    } else {
+        "Select $safeMin to $safeMax"
     }
 }
 
@@ -130,25 +134,12 @@ fun OptionSetEditorScreen(
     var minSelect by remember(initialSet) {
         mutableIntStateOf(
             if (initialSet != null) {
-                if (initialSet.required) initialSet.minSelect.coerceAtLeast(1) else initialSet.minSelect.coerceAtLeast(0)
+                if (initialSet.required) initialSet.minSelect.coerceAtLeast(1) else 0
             } else 1
         )
     }
     var maxSelect by remember(initialSet) {
         mutableIntStateOf(initialSet?.maxSelect?.coerceAtLeast(1) ?: 1)
-    }
-    var isAnyMode by remember(initialSet) {
-        mutableStateOf(
-            initialSet != null &&
-                initialSet.choices.size > 3 &&
-                initialSet.maxSelect >= initialSet.choices.size
-        )
-    }
-    var showHigherMin by remember(initialSet) {
-        mutableStateOf(
-            initialSet != null &&
-                initialSet.minSelect > (if (initialSet.required) 1 else 0)
-        )
     }
     val choices = remember(initialSet) {
         mutableStateListOf<EditableChoice>().apply {
@@ -162,8 +153,9 @@ fun OptionSetEditorScreen(
     var hasAttemptedSave by remember(initialSet) { mutableStateOf(false) }
     var showBulkPasteDialog by remember { mutableStateOf(false) }
 
-    val effectiveMax = if (isAnyMode) maxOf(1, choices.size) else maxOf(1, maxSelect)
-    val effectiveMin = if (required) minSelect.coerceIn(1, effectiveMax) else minSelect.coerceIn(0, effectiveMax)
+    val choiceLimit = maxOf(1, choices.size)
+    val effectiveMin = if (required) minSelect.coerceAtLeast(1) else 0
+    val effectiveMax = maxOf(maxOf(1, effectiveMin), maxSelect)
 
     val trimmedName = setName.trim()
     val isNameBlank = trimmedName.isBlank()
@@ -182,7 +174,7 @@ fun OptionSetEditorScreen(
         .filter { it.value > 1 }
         .keys
 
-    val isMinExceedsMax = required && minSelect > effectiveMax
+    val isMinExceedsMax = required && effectiveMin > effectiveMax
     val invalidReason: String? = when {
         isNameBlank -> "Enter a set name"
         isNameTooLong -> "Set name cannot exceed 50 characters"
@@ -212,8 +204,9 @@ fun OptionSetEditorScreen(
                 initialPopular = c.popular
             )
         }
-        val savedMax = if (isAnyMode) maxOf(1, finalChoices.size) else maxOf(1, maxSelect)
-        val savedMin = if (required) minSelect.coerceIn(1, savedMax) else 0
+        val savedLimit = maxOf(1, finalChoices.size)
+        val savedMin = if (required) minSelect.coerceIn(1, savedLimit) else 0
+        val savedMax = maxSelect.coerceIn(maxOf(1, savedMin), savedLimit)
         val savedSet = EditableSet(
             id = initialSet?.id ?: UUID.randomUUID().toString(),
             initialName = trimmedName,
@@ -222,7 +215,6 @@ fun OptionSetEditorScreen(
             initialMaxSelect = savedMax,
             initialChoices = finalChoices
         )
-        savedSet.showAdvancedMin = showHigherMin
         onSave(savedSet)
     }
 
@@ -415,8 +407,11 @@ fun OptionSetEditorScreen(
                         selected = required,
                         onClick = {
                             required = true
-                            minSelect = maxOf(1, minSelect)
-                            if (maxSelect < minSelect) maxSelect = minSelect
+                            if (minSelect < 1) minSelect = 1
+                            if (maxSelect < minSelect) {
+                                maxSelect = minOf(minSelect, choiceLimit)
+                                if (minSelect > maxSelect) minSelect = maxSelect
+                            }
                         },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                         modifier = Modifier.heightIn(min = 48.dp).testTag("rules_required_btn")
@@ -428,7 +423,7 @@ fun OptionSetEditorScreen(
                         onClick = {
                             required = false
                             minSelect = 0
-                            showHigherMin = false
+                            if (maxSelect < 1) maxSelect = 1
                         },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                         modifier = Modifier.heightIn(min = 48.dp).testTag("rules_optional_btn")
@@ -437,88 +432,98 @@ fun OptionSetEditorScreen(
                     }
                 }
 
-                Text(
-                    text = "How many can customers choose?",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Quick chips: Pick 1, Up to 2, Up to 3, Any
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    FilterChip(
-                        selected = !isAnyMode && maxSelect == 1,
-                        onClick = {
-                            isAnyMode = false
-                            maxSelect = 1
-                            if (minSelect > 1) minSelect = 1
-                            if (required && minSelect < 1) minSelect = 1
-                        },
-                        label = { Text("Pick 1") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = customColors.accent
-                        ),
-                        modifier = Modifier.testTag("rule_chip_pick_1")
-                    )
-                    FilterChip(
-                        selected = !isAnyMode && maxSelect == 2,
-                        onClick = {
-                            isAnyMode = false
-                            maxSelect = 2
-                            minSelect = if (required) minSelect.coerceIn(1, 2) else 0
-                        },
-                        label = { Text("Up to 2") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = customColors.accent
-                        ),
-                        modifier = Modifier.testTag("rule_chip_up_to_2")
-                    )
-                    FilterChip(
-                        selected = !isAnyMode && maxSelect == 3,
-                        onClick = {
-                            isAnyMode = false
-                            maxSelect = 3
-                            minSelect = if (required) minSelect.coerceIn(1, 3) else 0
-                        },
-                        label = { Text("Up to 3") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = customColors.accent
-                        ),
-                        modifier = Modifier.testTag("rule_chip_up_to_3")
-                    )
-                    FilterChip(
-                        selected = isAnyMode,
-                        onClick = {
-                            isAnyMode = true
-                            maxSelect = maxOf(1, choices.size)
-                            if (minSelect > maxSelect) minSelect = if (required) 1 else 0
-                        },
-                        label = { Text("Any") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = customColors.accentTint,
-                            selectedLabelColor = customColors.accent
-                        ),
-                        modifier = Modifier.testTag("rule_chip_any")
-                    )
-                }
-
-                // Custom maximum stepper row
+                // Stepper 1: Minimum choices (starts at 1 for Required, locked at 0 for Optional)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rules_min_row"),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Maximum choices",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Minimum choices",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = if (!required) "Locked at 0 (Optional)" else "At least 1 required",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (required) 0.5f else 0.25f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    if (required && minSelect > 1) {
+                                        minSelect -= 1
+                                    }
+                                },
+                                enabled = required && effectiveMin > 1,
+                                modifier = Modifier.size(44.dp).testTag("rules_min_decrease")
+                            ) {
+                                Icon(Icons.Default.Remove, contentDescription = "Decrease minimum choices")
+                            }
+
+                            Text(
+                                text = "$effectiveMin",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = if (required) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 10.dp).testTag("rules_min_value")
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    if (required && minSelect < choiceLimit) {
+                                        minSelect += 1
+                                        if (maxSelect < minSelect) {
+                                            maxSelect = minSelect
+                                        }
+                                    }
+                                },
+                                enabled = required && effectiveMin < choiceLimit,
+                                modifier = Modifier.size(44.dp).testTag("rules_min_increase")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Increase minimum choices")
+                            }
+                        }
+                    }
+                }
+
+                // Stepper 2: Maximum choices (starts at 1, >= min, >= 1, <= number of choices in set)
+                val minAllowedMax = if (required) maxOf(1, effectiveMin) else 1
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rules_max_row"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Maximum choices",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Limit: $choiceLimit (${if (choiceLimit == 1) "1 choice" else "$choiceLimit choices"} in set)",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("rules_max_limit_label")
+                        )
+                    }
 
                     Surface(
                         shape = RoundedCornerShape(24.dp),
@@ -529,23 +534,20 @@ fun OptionSetEditorScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
-                            val minAllowedMax = if (required) maxOf(1, minSelect) else 1
                             IconButton(
                                 onClick = {
-                                    isAnyMode = false
                                     if (effectiveMax > minAllowedMax) {
-                                        maxSelect = effectiveMax - 1
-                                        if (minSelect > maxSelect) minSelect = maxSelect
+                                        maxSelect = (effectiveMax - 1).coerceAtLeast(minAllowedMax)
                                     }
                                 },
                                 enabled = effectiveMax > minAllowedMax,
-                                modifier = Modifier.size(40.dp).testTag("rules_max_decrease")
+                                modifier = Modifier.size(44.dp).testTag("rules_max_decrease")
                             ) {
                                 Icon(Icons.Default.Remove, contentDescription = "Decrease maximum choices")
                             }
 
                             Text(
-                                text = if (isAnyMode) "Any ($effectiveMax)" else "$effectiveMax",
+                                text = "$effectiveMax",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp,
                                 modifier = Modifier.padding(horizontal = 10.dp).testTag("rules_max_value")
@@ -553,88 +555,14 @@ fun OptionSetEditorScreen(
 
                             IconButton(
                                 onClick = {
-                                    isAnyMode = false
-                                    val upperCap = maxOf(choices.size, 20)
-                                    if (effectiveMax < upperCap) {
+                                    if (effectiveMax < choiceLimit) {
                                         maxSelect = effectiveMax + 1
                                     }
                                 },
-                                enabled = effectiveMax < maxOf(choices.size, 20),
-                                modifier = Modifier.size(40.dp).testTag("rules_max_increase")
+                                enabled = effectiveMax < choiceLimit,
+                                modifier = Modifier.size(44.dp).testTag("rules_max_increase")
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = "Increase maximum choices")
-                            }
-                        }
-                    }
-                }
-
-                // "Need a higher minimum?" text button + stepper
-                TextButton(
-                    onClick = { showHigherMin = !showHigherMin },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    modifier = Modifier.heightIn(min = 44.dp).testTag("toggle_higher_min_btn")
-                ) {
-                    Text(
-                        text = if (showHigherMin) "Hide minimum choices" else "Need a higher minimum?",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
-                    )
-                }
-
-                if (showHigherMin) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Minimum required", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text(
-                                text = "Customers must choose at least this many",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val minFloor = if (required) 1 else 0
-                            OutlinedIconButton(
-                                onClick = {
-                                    if (minSelect > minFloor) {
-                                        minSelect -= 1
-                                    }
-                                },
-                                enabled = minSelect > minFloor,
-                                shape = CircleShape,
-                                modifier = Modifier.size(40.dp).testTag("rules_min_decrease")
-                            ) {
-                                Icon(Icons.Default.Remove, contentDescription = "Decrease minimum choices", modifier = Modifier.size(16.dp))
-                            }
-
-                            Text(
-                                text = "$minSelect",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                modifier = Modifier.padding(horizontal = 10.dp).testTag("rules_min_value")
-                            )
-
-                            OutlinedIconButton(
-                                onClick = {
-                                    if (minSelect < effectiveMax) {
-                                        minSelect += 1
-                                        if (minSelect >= 1 && !required) {
-                                            required = true
-                                        }
-                                    }
-                                },
-                                enabled = minSelect < effectiveMax,
-                                shape = CircleShape,
-                                modifier = Modifier.size(40.dp).testTag("rules_min_increase")
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = "Increase minimum choices", modifier = Modifier.size(16.dp))
                             }
                         }
                     }
@@ -784,6 +712,13 @@ fun OptionSetEditorScreen(
                                             onClick = {
                                                 if (choices.size > 1) {
                                                     choices.removeAt(cIdx)
+                                                    val newLimit = maxOf(1, choices.size)
+                                                    if (maxSelect > newLimit) {
+                                                        maxSelect = newLimit
+                                                    }
+                                                    if (required && minSelect > maxSelect) {
+                                                        minSelect = maxSelect
+                                                    }
                                                 }
                                             },
                                             enabled = choices.size > 1,

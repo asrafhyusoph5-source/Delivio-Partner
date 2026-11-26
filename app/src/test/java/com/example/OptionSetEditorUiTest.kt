@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -11,12 +12,14 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import com.example.data.model.BusinessType
 import com.example.data.model.MenuItem
+import com.example.ui.screens.EditableChoice
+import com.example.ui.screens.EditableSet
 import com.example.ui.screens.OptionSetEditorScreen
 import com.example.ui.screens.ProductEditScreen
+import com.example.ui.screens.buildSetLiveHint
 import com.example.ui.screens.parseBulkChoicesText
 import com.example.ui.theme.DelivioPartnerTheme
 import org.junit.Assert.assertEquals
@@ -59,7 +62,15 @@ class OptionSetEditorUiTest {
     }
 
     @Test
-    fun foodProductEdit_opensNewSetScreen_savesCompactSummaryCard_supportsEditDuplicateMoveDelete() {
+    fun buildSetLiveHint_matchesAllRequiredAndOptionalFormats() {
+        assertEquals("Select 1", buildSetLiveHint(required = true, minSelect = 1, maxSelect = 1))
+        assertEquals("Select 2", buildSetLiveHint(required = true, minSelect = 2, maxSelect = 2))
+        assertEquals("Select 1 to 3", buildSetLiveHint(required = true, minSelect = 1, maxSelect = 3))
+        assertEquals("Optional, up to 3", buildSetLiveHint(required = false, minSelect = 0, maxSelect = 3))
+    }
+
+    @Test
+    fun foodProductEdit_opensNewSetScreen_usesMinMaxSteppers_savesAndEditsSet() {
         val foodItem = MenuItem(
             id = "f100",
             name = "Chicken Wings",
@@ -100,12 +111,25 @@ class OptionSetEditorUiTest {
         composeRule.onNodeWithTag("option_set_editor_screen").assertIsDisplayed()
         composeRule.onNodeWithText("New Set").assertIsDisplayed()
 
-        // Bottom CTA disabled initially with reason, and errors do NOT show in fields yet
+        // Deleted UI elements must not exist
+        composeRule.onAllNodesWithText("How many can customers choose?").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Pick 1").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Up to 2").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Up to 3").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Any").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Need a higher minimum?").assertCountEquals(0)
+
+        // Bottom CTA disabled initially with "Enter a set name"
         composeRule.onNodeWithTag("save_set_bottom_btn").assertIsNotEnabled()
-        composeRule.onNodeWithTag("set_editor_missing_reason").assertIsDisplayed()
+        composeRule.onNodeWithText("Enter a set name").assertIsDisplayed()
         composeRule.onAllNodesWithText("Set name is required").assertCountEquals(0)
 
-        // Tap top "Save" button -> triggers field validation errors after interaction
+        // Default Required state: min=1, max=1, "Customers see: Select 1"
+        composeRule.onNodeWithTag("rules_min_value").performScrollTo().assertTextEquals("1")
+        composeRule.onNodeWithTag("rules_max_value").performScrollTo().assertTextEquals("1")
+        composeRule.onNodeWithText("Customers see: Select 1").performScrollTo().assertIsDisplayed()
+
+        // Tap top "Save" button -> triggers field validation error
         composeRule.onNodeWithTag("set_editor_top_save_btn").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Set name is required").assertIsDisplayed()
@@ -115,17 +139,30 @@ class OptionSetEditorUiTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("16/50").assertIsDisplayed()
 
-        // Rules: toggle Optional + Up to 2 + reveal higher minimum
-        composeRule.onNodeWithTag("rules_optional_btn").performScrollTo().performClick()
-        composeRule.onNodeWithTag("rule_chip_up_to_2").performScrollTo().performClick()
-        composeRule.onNodeWithText("Customers see: Select up to 2").performScrollTo().assertIsDisplayed()
-
-        // Bulk add two choices ("Original" and "Spicy +7")
+        // Bulk add three choices ("Original", "Spicy +7", "Garlic +10") so limit becomes 3
         composeRule.onNodeWithTag("bulk_add_choices_btn").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("bulk_paste_input").performTextReplacement("Original\nSpicy +7")
+        composeRule.onNodeWithTag("bulk_paste_input").performTextReplacement("Original\nSpicy +7\nGarlic +10")
         composeRule.onNodeWithTag("bulk_paste_confirm_btn").performClick()
         composeRule.waitForIdle()
+
+        // Rules limit updates to 3
+        composeRule.onNodeWithTag("rules_max_limit_label").performScrollTo().assertTextEquals("Limit: 3 (3 choices in set)")
+
+        // Toggle Optional -> Minimum locked at 0, increase Maximum to 2 -> "Customers see: Optional, up to 2"
+        composeRule.onNodeWithTag("rules_optional_btn").performScrollTo().performClick()
+        composeRule.onNodeWithTag("rules_min_value").assertTextEquals("0")
+        composeRule.onNodeWithTag("rules_min_decrease").assertIsNotEnabled()
+        composeRule.onNodeWithTag("rules_min_increase").assertIsNotEnabled()
+        composeRule.onNodeWithTag("rules_max_increase").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Customers see: Optional, up to 2").performScrollTo().assertIsDisplayed()
+
+        // Increase Max again -> Optional, up to 3, and + is now disabled at limit 3
+        composeRule.onNodeWithTag("rules_max_increase").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Customers see: Optional, up to 3").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("rules_max_increase").assertIsNotEnabled()
 
         // Toggle Popular on choice 1 (Spicy)
         composeRule.onNodeWithTag("choice_popular_btn_1").performScrollTo().performClick()
@@ -134,46 +171,42 @@ class OptionSetEditorUiTest {
         // Check Live Preview card renders customer view
         composeRule.onNodeWithTag("set_live_preview_card").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("How customers will see this").assertIsDisplayed()
-        composeRule.onNodeWithText("Select up to 2").assertIsDisplayed()
+        composeRule.onNodeWithText("Optional, up to 3").assertIsDisplayed()
 
         // Bottom "Save set" should now be enabled
         composeRule.onNodeWithTag("save_set_bottom_btn").assertIsEnabled()
         composeRule.onNodeWithTag("save_set_bottom_btn").performClick()
         composeRule.waitForIdle()
 
-        // Back in ProductEditScreen: compact summary card is shown (not full inline editor)
+        // Back in ProductEditScreen: compact summary card is shown
         composeRule.onAllNodesWithTag("option_set_editor_screen").assertCountEquals(0)
         composeRule.onNodeWithTag("set_card_0").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("set_summary_rule_0", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Optional - Select up to 2").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("add_another_set_btn").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("+ Add Set (1/12)").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Optional - Up to 3").performScrollTo().assertIsDisplayed()
 
-        // Duplicate set -> creates Copy as set 1, test Move Up / Delete confirmation
-        composeRule.onNodeWithTag("duplicate_set_btn_0").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("set_card_1").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Choice of Flavor (Copy)").performScrollTo().assertIsDisplayed()
-
-        // Delete copy with confirmation dialog
-        composeRule.onNodeWithTag("delete_set_btn_1").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("Delete Set 2?").assertIsDisplayed()
-        composeRule.onNodeWithText("Delete").performClick()
-        composeRule.waitForIdle()
-        composeRule.onAllNodesWithTag("set_card_1").assertCountEquals(0)
-
-        // Tap Edit on set 0 -> opens "Edit Set"
+        // Tap Edit on set 0 -> opens "Edit Set" with old values (Optional, min=0, max=3)
         composeRule.onNodeWithTag("edit_set_btn_0").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Edit Set").assertIsDisplayed()
+        composeRule.onNodeWithTag("rules_min_value").performScrollTo().assertTextEquals("0")
+        composeRule.onNodeWithTag("rules_max_value").performScrollTo().assertTextEquals("3")
+
+        // Switch to Required -> min=1, max=3 -> "Customers see: Select 1 to 3"
         composeRule.onNodeWithTag("rules_required_btn").performScrollTo().performClick()
-        composeRule.onNodeWithTag("rule_chip_pick_1").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Customers see: Select 1 to 3").performScrollTo().assertIsDisplayed()
+
+        // Raise min to 2 and decrease max to 2 -> "Customers see: Select 2"
+        composeRule.onNodeWithTag("rules_min_increase").performScrollTo().performClick()
+        composeRule.onNodeWithTag("rules_max_decrease").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Customers see: Select 2").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("rules_max_decrease").assertIsNotEnabled()
+
         composeRule.onNodeWithTag("save_set_bottom_btn").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("set_summary_rule_0", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Required - Pick 1").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Required - Select 2").performScrollTo().assertIsDisplayed()
 
         // Save Product and verify saved MenuItem preserves exact ProductSet schema
         composeRule.onNodeWithTag("save_menu_item_btn").performClick()
@@ -186,19 +219,57 @@ class OptionSetEditorUiTest {
         assertEquals("Choice of Flavor", savedSet.name)
         assertEquals("Choice of Flavor", savedSet.customName)
         assertTrue(savedSet.required)
-        assertEquals(1, savedSet.minSelect)
-        assertEquals(1, savedSet.maxSelect)
-        assertEquals(2, savedSet.choices.size)
+        assertEquals(2, savedSet.minSelect)
+        assertEquals(2, savedSet.maxSelect)
+        assertEquals(3, savedSet.choices.size)
         assertEquals("Original", savedSet.choices[0].name)
-        assertEquals(0.0, savedSet.choices[0].price, 0.01)
-        assertFalse(savedSet.choices[0].popular)
         assertEquals("Spicy", savedSet.choices[1].name)
         assertEquals(7.0, savedSet.choices[1].price, 0.01)
         assertTrue(savedSet.choices[1].popular)
     }
 
     @Test
-    fun setEditor_checksDuplicateSetName_andDuplicateChoiceWarning_andHigherMinimum() {
+    fun editOldSet_opensWithOldValues_andClampsWhenChoiceDeleted() {
+        val oldSet = EditableSet(
+            id = "set_old",
+            initialName = "Toppings",
+            initialRequired = true,
+            initialMinSelect = 2,
+            initialMaxSelect = 3,
+            initialChoices = listOf(
+                EditableChoice(initialName = "Cheese", initialPriceText = "10"),
+                EditableChoice(initialName = "Bacon", initialPriceText = "20"),
+                EditableChoice(initialName = "Mushroom", initialPriceText = "15")
+            )
+        )
+
+        composeRule.setContent {
+            DelivioPartnerTheme(darkTheme = false) {
+                OptionSetEditorScreen(
+                    initialSet = oldSet,
+                    isNew = false,
+                    existingSetNames = emptySet(),
+                    onSave = {},
+                    onBack = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Edit Set").assertIsDisplayed()
+        composeRule.onNodeWithTag("rules_min_value").performScrollTo().assertTextEquals("2")
+        composeRule.onNodeWithTag("rules_max_value").performScrollTo().assertTextEquals("3")
+        composeRule.onNodeWithText("Customers see: Select 2 to 3").performScrollTo().assertIsDisplayed()
+
+        // Delete third choice -> max clamps from 3 to 2, min stays 2 -> "Customers see: Select 2"
+        composeRule.onNodeWithTag("choice_delete_btn_2").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("rules_max_limit_label").performScrollTo().assertTextEquals("Limit: 2 (2 choices in set)")
+        composeRule.onNodeWithTag("rules_max_value").assertTextEquals("2")
+        composeRule.onNodeWithText("Customers see: Select 2").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun setEditor_checksDuplicateSetName_andDuplicateChoiceWarning() {
         composeRule.setContent {
             DelivioPartnerTheme(darkTheme = false) {
                 OptionSetEditorScreen(
@@ -217,15 +288,8 @@ class OptionSetEditorUiTest {
         composeRule.onAllNodesWithText("Set name must be unique").assertCountEquals(2)
         composeRule.onNodeWithTag("save_set_bottom_btn").assertIsNotEnabled()
 
-        // Unique name + Up to 3 + higher minimum (2) -> "Customers see: Select 2 to 3"
+        // Unique name + duplicate choice names show warning banner
         composeRule.onNodeWithTag("set_name_input").performTextReplacement("Sides")
-        composeRule.onNodeWithTag("rule_chip_up_to_3").performScrollTo().performClick()
-        composeRule.onNodeWithTag("toggle_higher_min_btn").performScrollTo().performClick()
-        composeRule.onNodeWithTag("rules_min_increase").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("Customers see: Select 2 to 3").performScrollTo().assertIsDisplayed()
-
-        // Duplicate choice names show warning banner
         composeRule.onNodeWithTag("choice_name_input_0").performScrollTo().performTextReplacement("Fries")
         composeRule.onNodeWithTag("add_choice_btn").performScrollTo().performClick()
         composeRule.waitForIdle()

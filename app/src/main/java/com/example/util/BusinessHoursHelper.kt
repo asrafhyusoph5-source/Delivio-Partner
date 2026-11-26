@@ -66,33 +66,101 @@ object BusinessHoursHelper {
         return 0
     }
 
+    const val MANILA_TIMEZONE_ID: String = "Asia/Manila"
+
     /**
-     * effectiveOpen(shop):
-     * - false when status != "active"
-     * - false when closedUntil is set and now < closedUntil
-     * - false when isPaused and now < pauseUntilTime
-     * - true when openUntil is set and now < openUntil
-     * - else when autoSchedule is true and hours exist:
-     *     true only inside today's window (settings/platform.timezone, default "Asia/Manila"; overnight windows check yesterday)
-     * - else isOpen
+     * Canonical single source of truth for store open/closed status.
+     * Priority order:
+     * 1. Merchant suspended (status != "active"): closed.
+     * 2. adminLock true: closed until admin removes it ("Closed by Delivio").
+     * 3. manualOverride {state: "open" | "closed", until: Timestamp} while now < until: use its state.
+     * 4. Auto-schedule on: open only inside today's hours in Asia/Manila (overnight windows supported),
+     *    otherwise closed with the next opening time.
+     * 5. Auto-schedule off: the manual switch (isOpen) decides.
      */
+    fun storeStatus(
+        merchant: MerchantSettings,
+        now: Long = System.currentTimeMillis()
+    ): com.example.data.model.StoreStatusResult {
+        // 1. Merchant suspended
+        if (!merchant.status.equals("active", ignoreCase = true)) {
+            return com.example.data.model.StoreStatusResult(
+                open = false,
+                reason = "Suspended",
+                nextChange = null
+            )
+        }
+
+        // 2. Admin lock
+        if (merchant.adminLock) {
+            return com.example.data.model.StoreStatusResult(
+                open = false,
+                reason = "Closed by Delivio",
+                nextChange = null
+            )
+        }
+
+        // 3. Manual override (while now is before until)
+        val mo = merchant.manualOverride
+        if (mo != null && mo.until != null && now < mo.until) {
+            when (mo.state.trim().lowercase()) {
+                "open" -> return com.example.data.model.StoreStatusResult(
+                    open = true,
+                    reason = "Manual override",
+                    nextChange = mo.until
+                )
+                "closed" -> return com.example.data.model.StoreStatusResult(
+                    open = false,
+                    reason = "Manual override",
+                    nextChange = mo.until
+                )
+            }
+        }
+
+        // 4. Auto-schedule on (evaluated in Asia/Manila with overnight support)
+        if (merchant.autoSchedule) {
+            val holiday = getActiveHoliday(merchant, now)
+            if (holiday != null) {
+                return com.example.data.model.StoreStatusResult(
+                    open = false,
+                    reason = if (holiday.note.isNotBlank()) "Closed for ${holiday.note}" else "Closed for holiday",
+                    nextChange = holiday.to
+                )
+            }
+            val inside = if (merchant.hours.isNotEmpty()) {
+                isInsideScheduleWindow(merchant.hours, MANILA_TIMEZONE_ID, now)
+            } else {
+                false
+            }
+            return if (inside) {
+                com.example.data.model.StoreStatusResult(
+                    open = true,
+                    reason = "Open (Auto)",
+                    nextChange = getNextClosingTimestamp(merchant, now, MANILA_TIMEZONE_ID)
+                )
+            } else {
+                com.example.data.model.StoreStatusResult(
+                    open = false,
+                    reason = "Outside operating hours",
+                    nextChange = getNextScheduledOpenTimestampOrNull(merchant, now, MANILA_TIMEZONE_ID)
+                )
+            }
+        }
+
+        // 5. Auto-schedule off: manual switch decides
+        return com.example.data.model.StoreStatusResult(
+            open = merchant.isOpen,
+            reason = if (merchant.isOpen) "Open" else "Closed",
+            nextChange = null
+        )
+    }
+
     fun getActiveHoliday(settings: MerchantSettings, nowMs: Long = System.currentTimeMillis()): com.example.data.model.HolidaySchedule? {
         return settings.holidays.firstOrNull { h ->
             h.from > 0L && h.to > 0L && nowMs in h.from..h.to
         }
     }
 
-    /**
-     * effectiveOpen(shop):
-     * - false when status != "active"
-     * - false when within any holiday date range (settings.holidays)
-     * - false when closedUntil is set and now < closedUntil
-     * - false when isPaused and now < pauseUntilTime
-     * - true when openUntil is set and now < openUntil
-     * - else when autoSchedule is true and hours exist:
-     *     true only inside today's window (settings/platform.timezone, default "Asia/Manila"; overnight windows check yesterday)
-     * - else isOpen
-     */
     fun isEffectiveOpen(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis(),
@@ -101,49 +169,13 @@ object BusinessHoursHelper {
         if (isServiceLocked) {
             return false
         }
-        if (!settings.status.equals("active", ignoreCase = true)) {
-            return false
-        }
-
-        // Check if currently closed for a holiday
-        val holiday = getActiveHoliday(settings, nowMs)
-        if (holiday != null) {
-            return false
-        }
-
-        // false when closedUntil is set and now < closedUntil
-        val closedUntil = settings.closedUntil
-        if (closedUntil != null && nowMs < closedUntil) {
-            return false
-        }
-
-        // false when isPaused and now < pauseUntilTime
-        if (settings.isPaused) {
-            val pauseUntil = settings.pauseUntilTimestamp
-            if (pauseUntil != null && nowMs < pauseUntil) {
-                return false
-            }
-        }
-
-        // true when openUntil is set and now < openUntil
-        val openUntil = settings.openUntil
-        if (openUntil != null && nowMs < openUntil) {
-            return true
-        }
-
-        // else when autoSchedule is true and hours exist, true only inside today's window
-        if (settings.autoSchedule && settings.hours.isNotEmpty()) {
-            return isInsideScheduleWindow(settings.hours, settings.timezone, nowMs)
-        }
-
-        // else isOpen
-        return settings.isOpen
+        return storeStatus(settings, nowMs).open
     }
 
     @SuppressLint("NewApi")
     fun isInsideScheduleWindow(
         hours: Map<String, DayHours>,
-        timezoneId: String = "Asia/Manila",
+        timezoneId: String = MANILA_TIMEZONE_ID,
         nowMs: Long = System.currentTimeMillis()
     ): Boolean {
         val zone = resolveZoneId(timezoneId)
@@ -179,18 +211,19 @@ object BusinessHoursHelper {
     }
 
     /**
-     * Calculates the timestamp of the next scheduled opening time (in shop timezone)
-     * when autoSchedule is on. If none found or hours empty, returns TIMESTAMP_2100_01_01_MS.
+     * Calculates the timestamp of the next scheduled opening time (in Manila or specified timezone),
+     * or null if hours are empty / all days are closed.
      */
     @SuppressLint("NewApi")
-    fun getNextScheduledOpenTimestamp(
+    fun getNextScheduledOpenTimestampOrNull(
         settings: MerchantSettings,
-        nowMs: Long = System.currentTimeMillis()
-    ): Long {
+        nowMs: Long = System.currentTimeMillis(),
+        timezoneId: String = MANILA_TIMEZONE_ID
+    ): Long? {
         val hours = settings.hours
-        if (hours.isEmpty()) return TIMESTAMP_2100_01_01_MS
+        if (hours.isEmpty()) return null
 
-        val zone = resolveZoneId(settings.timezone)
+        val zone = resolveZoneId(timezoneId)
         val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
         val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
         val currentMinutes = zdt.hour * 60 + zdt.minute
@@ -223,35 +256,80 @@ object BusinessHoursHelper {
             }
         }
 
-        return TIMESTAMP_2100_01_01_MS
+        return null
     }
 
     /**
-     * Calculates the timestamp of the next scheduled closing time when opening store
-     * while currently outside schedule hours.
+     * Calculates the timestamp of the next scheduled opening time (in shop timezone).
+     * If none found or hours empty, returns TIMESTAMP_2100_01_01_MS.
+     */
+    fun getNextScheduledOpenTimestamp(
+        settings: MerchantSettings,
+        nowMs: Long = System.currentTimeMillis(),
+        timezoneId: String = MANILA_TIMEZONE_ID
+    ): Long {
+        return getNextScheduledOpenTimestampOrNull(settings, nowMs, timezoneId) ?: TIMESTAMP_2100_01_01_MS
+    }
+
+    /**
+     * Calculates the timestamp of the next scheduled closing time (handling yesterday's overnight shift,
+     * today's normal/overnight shift, and upcoming days).
      */
     @SuppressLint("NewApi")
     fun getNextClosingTimestamp(
         settings: MerchantSettings,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        timezoneId: String = MANILA_TIMEZONE_ID
     ): Long? {
         val hours = settings.hours
         if (hours.isEmpty()) return null
 
-        val zone = resolveZoneId(settings.timezone)
+        val zone = resolveZoneId(timezoneId)
         val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
         val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
-        val todayHours = hours[currentDayKey]
+        val currentMinutes = zdt.hour * 60 + zdt.minute
 
-        if (todayHours != null && !todayHours.closed) {
-            val closeMinutes = parseTimeToMinutes(todayHours.close)
-            if (todayHours.isOvernight) {
-                // Closes tomorrow early morning
-                return zdt.toLocalDate().plusDays(1)
+        // 1. Inside yesterday's overnight closing window -> closes today at yesterdayHours.close
+        val yesterdayKey = dayOfWeekToKey(zdt.minusDays(1).dayOfWeek)
+        val yesterdayHours = hours[yesterdayKey]
+        if (yesterdayHours != null && !yesterdayHours.closed && yesterdayHours.isOvernight) {
+            val closeMinutes = parseTimeToMinutes(yesterdayHours.close)
+            if (currentMinutes < closeMinutes) {
+                val targetMs = zdt.toLocalDate()
                     .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
                     .atZone(zone)
                     .toInstant()
                     .toEpochMilli()
+                if (targetMs > nowMs) return targetMs
+            }
+        }
+
+        // 2. Check today's hours
+        val todayHours = hours[currentDayKey]
+        if (todayHours != null && !todayHours.closed) {
+            if (todayHours.isOpen24Hours) {
+                val endTodayMs = zdt.toLocalDate()
+                    .atTime(23, 59, 59, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                return if (endTodayMs > nowMs) endTodayMs else {
+                    zdt.toLocalDate().plusDays(1)
+                        .atTime(23, 59, 59, 0)
+                        .atZone(zone)
+                        .toInstant()
+                        .toEpochMilli()
+                }
+            }
+            val closeMinutes = parseTimeToMinutes(todayHours.close)
+            if (todayHours.isOvernight) {
+                // Closes tomorrow early morning
+                val targetMs = zdt.toLocalDate().plusDays(1)
+                    .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                if (targetMs > nowMs) return targetMs
             } else {
                 val targetMs = zdt.toLocalDate()
                     .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
@@ -263,34 +341,99 @@ object BusinessHoursHelper {
                 }
             }
         }
+
+        // 3. Look ahead 1..7 days for the next open day's closing time
+        val currentIdx = DAY_KEYS.indexOf(currentDayKey)
+        for (i in 1..7) {
+            val nextDayKey = DAY_KEYS[(currentIdx + i) % DAY_KEYS.size]
+            val nextHours = hours[nextDayKey]
+            if (nextHours != null && !nextHours.closed) {
+                if (nextHours.isOpen24Hours) {
+                    return zdt.toLocalDate().plusDays(i.toLong())
+                        .atTime(23, 59, 59, 0)
+                        .atZone(zone)
+                        .toInstant()
+                        .toEpochMilli()
+                }
+                val closeMinutes = parseTimeToMinutes(nextHours.close)
+                val closeDateOffset = if (nextHours.isOvernight) i.toLong() + 1L else i.toLong()
+                return zdt.toLocalDate().plusDays(closeDateOffset)
+                    .atTime(closeMinutes / 60, closeMinutes % 60, 0, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+            }
+        }
         return null
     }
 
     /**
-     * Formats closedUntil time for display in the red banner.
-     * Returns null if closedUntil is 2100-01-01 or not set.
+     * Always returns a concrete future timestamp for Switch ON manualOverride.until
+     * (falls back to end of current Manila day if no hours are configured).
      */
     @SuppressLint("NewApi")
+    fun getNextClosingTimestampForOverride(
+        settings: MerchantSettings,
+        nowMs: Long = System.currentTimeMillis(),
+        timezoneId: String = MANILA_TIMEZONE_ID
+    ): Long {
+        getNextClosingTimestamp(settings, nowMs, timezoneId)?.let { return it }
+        val zone = resolveZoneId(timezoneId)
+        val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
+        val endTodayMs = zdt.toLocalDate()
+            .atTime(23, 59, 59, 0)
+            .atZone(zone)
+            .toInstant()
+            .toEpochMilli()
+        return if (endTodayMs > nowMs) {
+            endTodayMs
+        } else {
+            zdt.toLocalDate().plusDays(1)
+                .atTime(23, 59, 59, 0)
+                .atZone(zone)
+                .toInstant()
+                .toEpochMilli()
+        }
+    }
+
+    /**
+     * Formats closedUntil / nextChange time for display in banners.
+     * Returns null if timestamp is 2100-01-01 or not set.
+     */
+    @SuppressLint("NewApi")
+    fun formatTimestampShort(
+        timestampMs: Long?,
+        timezoneId: String = MANILA_TIMEZONE_ID,
+        nowMs: Long = System.currentTimeMillis()
+    ): String? {
+        if (timestampMs == null || timestampMs >= TIMESTAMP_2100_01_01_MS - 86400000L) {
+            return null
+        }
+        val zone = resolveZoneId(timezoneId)
+        val targetZdt = Instant.ofEpochMilli(timestampMs).atZone(zone)
+        val nowZdt = Instant.ofEpochMilli(nowMs).atZone(zone)
+
+        val timeStr = "%02d:%02d".format(targetZdt.hour, targetZdt.minute)
+        return if (targetZdt.toLocalDate() == nowZdt.toLocalDate()) {
+            timeStr
+        } else {
+            val dayKey = dayOfWeekToKey(targetZdt.dayOfWeek)
+            val dayShort = DAY_SHORT_NAMES[dayKey] ?: ""
+            "$dayShort $timeStr"
+        }
+    }
+
     fun formatClosedUntilTime(
         settings: MerchantSettings,
         nowMs: Long = System.currentTimeMillis()
     ): String? {
-        val closedUntil = settings.closedUntil ?: return null
-        if (closedUntil >= TIMESTAMP_2100_01_01_MS - 86400000L) {
-            return null
-        }
-        val zone = resolveZoneId(settings.timezone)
-        val closedZdt = Instant.ofEpochMilli(closedUntil).atZone(zone)
-        val nowZdt = Instant.ofEpochMilli(nowMs).atZone(zone)
-
-        val timeStr = "%02d:%02d".format(closedZdt.hour, closedZdt.minute)
-        return if (closedZdt.toLocalDate() == nowZdt.toLocalDate()) {
-            timeStr
+        val status = storeStatus(settings, nowMs)
+        val untilMs = if (!status.open) {
+            status.nextChange ?: settings.closedUntil
         } else {
-            val dayKey = dayOfWeekToKey(closedZdt.dayOfWeek)
-            val dayShort = DAY_SHORT_NAMES[dayKey] ?: ""
-            "$dayShort $timeStr"
+            settings.closedUntil
         }
+        return formatTimestampShort(untilMs, MANILA_TIMEZONE_ID, nowMs)
     }
 
     /**
@@ -304,9 +447,9 @@ object BusinessHoursHelper {
     ): String {
         val hours = settings.hours
         if (hours.isEmpty()) return ""
-        val zone = resolveZoneId(settings.timezone)
+        val zone = resolveZoneId(MANILA_TIMEZONE_ID)
         val zdt = Instant.ofEpochMilli(nowMs).atZone(zone)
-        val isOpenNow = isInsideScheduleWindow(hours, settings.timezone, nowMs)
+        val isOpenNow = isInsideScheduleWindow(hours, MANILA_TIMEZONE_ID, nowMs)
         val currentDayKey = dayOfWeekToKey(zdt.dayOfWeek)
         val currentMinutes = zdt.hour * 60 + zdt.minute
 

@@ -834,6 +834,19 @@ class MerchantRepository private constructor(context: Context) {
         val closedAtVal = FormatUtils.parseTimestamp(snapshot.get("closedAt"))
         val pauseUntilVal = FormatUtils.parseTimestamp(snapshot.get("pauseUntilTime") ?: snapshot.get("pauseUntilTimestamp"))
         val locationChangedAtVal = FormatUtils.parseTimestamp(snapshot.get("locationChangedAt"))
+        val adminLockVal = OrderDocumentParser.safeBoolean(snapshot.get("adminLock"), default = false)
+        val rawMo = snapshot.get("manualOverride") as? Map<*, *>
+        val manualOverrideVal = if (rawMo != null) {
+            val moState = (rawMo["state"] as? String)?.trim()?.lowercase() ?: ""
+            val moUntil = FormatUtils.parseTimestamp(rawMo["until"])
+            if ((moState == "open" || moState == "closed") && moUntil != null) {
+                ManualOverride(state = moState, until = moUntil)
+            } else {
+                null
+            }
+        } else {
+            null
+        }
 
         val chainIdVal = snapshot.getString("chainId")?.trim() ?: ""
         val chainNameVal = snapshot.getString("chainName")?.trim() ?: ""
@@ -917,6 +930,8 @@ class MerchantRepository private constructor(context: Context) {
             linkedCustomerUid = linkedCust,
             walletBalance = wBalance,
             status = shopStatus,
+            adminLock = adminLockVal,
+            manualOverride = manualOverrideVal,
             timezone = shopTz,
             closedUntil = closedUntilVal,
             openUntil = openUntilVal,
@@ -3816,8 +3831,15 @@ class MerchantRepository private constructor(context: Context) {
 
     // --- Store Settings Updates ---
 
+    private fun updateOutletListEntry(mId: String, updated: MerchantSettings) {
+        val list = _outlets.value
+        if (list.any { it.merchantId == mId }) {
+            _outlets.value = list.map { if (it.merchantId == mId) updated else it }
+        }
+    }
+
     fun toggleStoreOpen(isOpen: Boolean) {
-        if (_isServiceLocked.value) return
+        if (_isServiceLocked.value || _settings.value.adminLock || !_settings.value.status.equals("active", ignoreCase = true)) return
         if (isOpen) {
             openStore()
         } else {
@@ -3830,34 +3852,49 @@ class MerchantRepository private constructor(context: Context) {
             onResult(false, _serviceLockMessage.value ?: "Service is disabled by admin")
             return
         }
+        val current = _settings.value
+        if (!current.status.equals("active", ignoreCase = true)) {
+            onResult(false, "Account is suspended")
+            return
+        }
+        if (current.adminLock) {
+            onResult(false, "Closed by Delivio. Contact support.")
+            return
+        }
         val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
         val db = firestore
         val now = System.currentTimeMillis()
-        val nextOpen = if (_settings.value.autoSchedule) {
-            com.example.util.BusinessHoursHelper.getNextScheduledOpenTimestamp(_settings.value, now)
-        } else {
-            com.example.util.BusinessHoursHelper.TIMESTAMP_2100_01_01_MS
-        }
+        val nextOpen = com.example.util.BusinessHoursHelper.getNextScheduledOpenTimestamp(current, now)
+        val nextOpenTs = Timestamp(java.util.Date(nextOpen))
+        val overrideObj = ManualOverride(state = "closed", until = nextOpen)
+        val overrideMap = mapOf<String, Any>(
+            "state" to "closed",
+            "until" to nextOpenTs
+        )
         val updateData = mutableMapOf<String, Any?>(
             "isOpen" to false,
-            "closedUntil" to nextOpen,
+            "manualOverride" to overrideMap,
+            "closedUntil" to nextOpenTs,
             "openUntil" to null,
             "isPaused" to false,
             "pauseUntilTimestamp" to null,
             "closedAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        val updatedSettings = current.copy(
+            isOpen = false,
+            manualOverride = overrideObj,
+            closedUntil = nextOpen,
+            openUntil = null,
+            isPaused = false,
+            pauseUntilTimestamp = null,
+            closedAt = now
+        )
         if (db != null) {
             db.collection("merchants").document(mId).update(updateData)
                 .addOnSuccessListener {
-                    _settings.value = _settings.value.copy(
-                        isOpen = false,
-                        closedUntil = nextOpen,
-                        openUntil = null,
-                        isPaused = false,
-                        pauseUntilTimestamp = null,
-                        closedAt = now
-                    )
+                    _settings.value = updatedSettings
+                    updateOutletListEntry(mId, updatedSettings)
                     prefs.edit().putBoolean("is_open", false).apply()
                     onResult(true, null)
                 }
@@ -3867,14 +3904,8 @@ class MerchantRepository private constructor(context: Context) {
                     onResult(false, err)
                 }
         } else {
-            _settings.value = _settings.value.copy(
-                isOpen = false,
-                closedUntil = nextOpen,
-                openUntil = null,
-                isPaused = false,
-                pauseUntilTimestamp = null,
-                closedAt = now
-            )
+            _settings.value = updatedSettings
+            updateOutletListEntry(mId, updatedSettings)
             prefs.edit().putBoolean("is_open", false).apply()
             onResult(true, null)
         }
@@ -3885,33 +3916,47 @@ class MerchantRepository private constructor(context: Context) {
             onResult(false, _serviceLockMessage.value ?: "Service is disabled by admin")
             return
         }
+        val current = _settings.value
+        if (!current.status.equals("active", ignoreCase = true)) {
+            onResult(false, "Account is suspended")
+            return
+        }
+        if (current.adminLock) {
+            onResult(false, "Closed by Delivio. Contact support.")
+            return
+        }
         val mId = _merchantId.value ?: return onResult(false, "No active merchant session")
         val db = firestore
         val now = System.currentTimeMillis()
-        val isInside = com.example.util.BusinessHoursHelper.isInsideScheduleWindow(_settings.value.hours, _settings.value.timezone, now)
-        val nextClose = if (_settings.value.autoSchedule && !isInside) {
-            com.example.util.BusinessHoursHelper.getNextClosingTimestamp(_settings.value, now)
-        } else {
-            null
-        }
+        val nextClose = com.example.util.BusinessHoursHelper.getNextClosingTimestampForOverride(current, now)
+        val nextCloseTs = Timestamp(java.util.Date(nextClose))
+        val overrideObj = ManualOverride(state = "open", until = nextClose)
+        val overrideMap = mapOf<String, Any>(
+            "state" to "open",
+            "until" to nextCloseTs
+        )
         val updateData = mutableMapOf<String, Any?>(
             "isOpen" to true,
+            "manualOverride" to overrideMap,
             "closedUntil" to null,
-            "openUntil" to nextClose,
+            "openUntil" to nextCloseTs,
             "isPaused" to false,
             "pauseUntilTimestamp" to null,
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        val updatedSettings = current.copy(
+            isOpen = true,
+            manualOverride = overrideObj,
+            closedUntil = null,
+            openUntil = nextClose,
+            isPaused = false,
+            pauseUntilTimestamp = null
+        )
         if (db != null) {
             db.collection("merchants").document(mId).update(updateData)
                 .addOnSuccessListener {
-                    _settings.value = _settings.value.copy(
-                        isOpen = true,
-                        closedUntil = null,
-                        openUntil = nextClose,
-                        isPaused = false,
-                        pauseUntilTimestamp = null
-                    )
+                    _settings.value = updatedSettings
+                    updateOutletListEntry(mId, updatedSettings)
                     prefs.edit().putBoolean("is_open", true).apply()
                     onResult(true, null)
                 }
@@ -3921,32 +3966,46 @@ class MerchantRepository private constructor(context: Context) {
                     onResult(false, err)
                 }
         } else {
-            _settings.value = _settings.value.copy(
-                isOpen = true,
-                closedUntil = null,
-                openUntil = nextClose,
-                isPaused = false,
-                pauseUntilTimestamp = null
-            )
+            _settings.value = updatedSettings
+            updateOutletListEntry(mId, updatedSettings)
             prefs.edit().putBoolean("is_open", true).apply()
             onResult(true, null)
         }
     }
 
     fun pauseOrders(minutes: Int) {
+        val current = _settings.value
+        if (_isServiceLocked.value || current.adminLock || !current.status.equals("active", ignoreCase = true)) return
         val pauseUntil = System.currentTimeMillis() + (minutes * 60 * 1000L)
+        val pauseUntilTs = Timestamp(java.util.Date(pauseUntil))
+        val overrideObj = ManualOverride(state = "closed", until = pauseUntil)
+        val overrideMap = mapOf<String, Any>(
+            "state" to "closed",
+            "until" to pauseUntilTs
+        )
         val mId = _merchantId.value
         val db = firestore
         if (mId != null && db != null) {
             db.collection("merchants").document(mId).update(
                 mapOf(
                     "isOpen" to false,
+                    "manualOverride" to overrideMap,
+                    "closedUntil" to pauseUntilTs,
                     "isPaused" to true,
-                    "pauseUntilTimestamp" to pauseUntil
+                    "pauseUntilTimestamp" to pauseUntilTs,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
         }
-        _settings.value = _settings.value.copy(isOpen = false, isPaused = true, pauseUntilTimestamp = pauseUntil)
+        val updated = current.copy(
+            isOpen = false,
+            manualOverride = overrideObj,
+            closedUntil = pauseUntil,
+            isPaused = true,
+            pauseUntilTimestamp = pauseUntil
+        )
+        _settings.value = updated
+        if (mId != null) updateOutletListEntry(mId, updated)
     }
 
     fun resumeOrders() {
@@ -4050,47 +4109,91 @@ class MerchantRepository private constructor(context: Context) {
         if (_isServiceLocked.value) return
         val mId = _merchantId.value ?: return
         val currentSettings = _settings.value
+        if (!currentSettings.status.equals("active", ignoreCase = true) || currentSettings.adminLock) {
+            return
+        }
         val db = firestore
 
         val updates = mutableMapOf<String, Any?>()
+        var updatedOverride = currentSettings.manualOverride
         var updatedClosedUntil = currentSettings.closedUntil
         var updatedOpenUntil = currentSettings.openUntil
+        var updatedIsPaused = currentSettings.isPaused
+        var updatedPauseUntil = currentSettings.pauseUntilTimestamp
+
+        // Clear expired manualOverride
+        val mo = currentSettings.manualOverride
+        if (mo != null && mo.until != null && nowMs >= mo.until) {
+            updates["manualOverride"] = null
+            updatedOverride = null
+            if (currentSettings.closedUntil != null) {
+                updates["closedUntil"] = null
+                updatedClosedUntil = null
+            }
+            if (currentSettings.openUntil != null) {
+                updates["openUntil"] = null
+                updatedOpenUntil = null
+            }
+            if (currentSettings.isPaused) {
+                updates["isPaused"] = false
+                updates["pauseUntilTimestamp"] = null
+                updatedIsPaused = false
+                updatedPauseUntil = null
+            }
+        }
 
         // Clear expired closedUntil
-        if (currentSettings.closedUntil != null && nowMs >= currentSettings.closedUntil) {
+        if (updatedClosedUntil != null && nowMs >= updatedClosedUntil) {
             updates["closedUntil"] = null
             updatedClosedUntil = null
         }
 
         // Clear expired openUntil
-        if (currentSettings.openUntil != null && nowMs >= currentSettings.openUntil) {
+        if (updatedOpenUntil != null && nowMs >= updatedOpenUntil) {
             updates["openUntil"] = null
             updatedOpenUntil = null
         }
 
+        // Clear expired pauseUntil
+        if (updatedIsPaused && updatedPauseUntil != null && nowMs >= updatedPauseUntil) {
+            updates["isPaused"] = false
+            updates["pauseUntilTimestamp"] = null
+            updatedIsPaused = false
+            updatedPauseUntil = null
+        }
+
         val settingsWithCleared = currentSettings.copy(
+            manualOverride = updatedOverride,
             closedUntil = updatedClosedUntil,
-            openUntil = updatedOpenUntil
+            openUntil = updatedOpenUntil,
+            isPaused = updatedIsPaused,
+            pauseUntilTimestamp = updatedPauseUntil
         )
 
-        val effective = com.example.util.BusinessHoursHelper.isEffectiveOpen(settingsWithCleared, nowMs)
-        if (effective != currentSettings.isOpen) {
+        val effective = com.example.util.BusinessHoursHelper.storeStatus(settingsWithCleared, nowMs).open
+        val newIsOpen = if (currentSettings.autoSchedule && effective != currentSettings.isOpen) {
             updates["isOpen"] = effective
+            effective
+        } else {
+            currentSettings.isOpen
         }
 
         if (updates.isNotEmpty()) {
             updates["updatedAt"] = FieldValue.serverTimestamp()
+            val finalSettings = settingsWithCleared.copy(isOpen = newIsOpen)
             if (db != null) {
                 db.collection("merchants").document(mId).update(updates)
                     .addOnSuccessListener {
-                        _settings.value = settingsWithCleared.copy(isOpen = effective)
+                        _settings.value = finalSettings
+                        updateOutletListEntry(mId, finalSettings)
                         prefs.edit().putBoolean("is_open", effective).apply()
                     }
                     .addOnFailureListener { ex ->
                         Log.w("MerchantRepo", "Failed to auto-sync effectiveOpen", ex)
                     }
             } else {
-                _settings.value = settingsWithCleared.copy(isOpen = effective)
+                _settings.value = finalSettings
+                updateOutletListEntry(mId, finalSettings)
                 prefs.edit().putBoolean("is_open", effective).apply()
             }
         }

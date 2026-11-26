@@ -836,28 +836,45 @@ class MerchantViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleStoreOpen() {
+        val now = System.currentTimeMillis()
+        _currentTime.value = now
         if (isServiceLocked.value) {
             val msg = serviceLockMessage.value ?: "Service is disabled by admin in this city. Your store is closed automatically."
             showSnackbar(msg)
             return
         }
-        val currentEffectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings.value, isServiceLocked = false)
-        if (currentEffectiveOpen) {
+        val current = settings.value
+        if (!current.status.equals("active", ignoreCase = true)) {
+            showSnackbar("Account is suspended. Contact support.")
+            return
+        }
+        if (current.adminLock) {
+            showSnackbar("Closed by Delivio. Contact support.")
+            return
+        }
+        val currentStatus = com.example.util.BusinessHoursHelper.storeStatus(current, now)
+        if (currentStatus.open) {
             val activeOrders = orders.value.filter {
                 it.status == OrderStatus.PREPARING || it.status == OrderStatus.READY || it.status == OrderStatus.PLACED_ORDER
             }
             if (activeOrders.isNotEmpty()) {
                 _showCloseConfirmation.value = true
             } else {
-                repository.closeStore()
+                repository.closeStore { ok, err ->
+                    if (!ok && !err.isNullOrBlank()) showSnackbar(err)
+                }
             }
         } else {
-            repository.openStore()
+            repository.openStore { ok, err ->
+                if (!ok && !err.isNullOrBlank()) showSnackbar(err)
+            }
         }
     }
 
     fun confirmStoreClose() {
-        repository.closeStore()
+        repository.closeStore { ok, err ->
+            if (!ok && !err.isNullOrBlank()) showSnackbar(err)
+        }
         _showCloseConfirmation.value = false
     }
 

@@ -771,7 +771,8 @@ class MainActivity : ComponentActivity() {
                                                 serviceLockMessage = serviceLockMessage,
                                                 isMultiOutlet = isMultiOutlet,
                                                 otherOutletsNewOrdersCount = otherOutletsNewOrdersCount,
-                                                onOutletClick = { viewModel.openOutletsFromTopBar() }
+                                                onOutletClick = { viewModel.openOutletsFromTopBar() },
+                                                onContactSupport = { showHelpDialog = true }
                                             )
                                             OfflineBanner(isOnline = isOnline)
                                             otherOutletOrderBanner?.let { bannerEvent ->
@@ -949,7 +950,8 @@ class MainActivity : ComponentActivity() {
                                                     hasEverUsedPos = dashboardHasAnyPosOrders,
                                                     showTryPosLink = platformPosSettings.showTryPosLink,
                                                     tryPosUrl = platformPosSettings.tryPosUrl,
-                                                    platformTimezone = platformPosSettings.timezone
+                                                    platformTimezone = platformPosSettings.timezone,
+                                                    onContactSupport = { showHelpDialog = true }
                                                 )
                                             }
 

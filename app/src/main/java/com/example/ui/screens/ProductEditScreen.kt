@@ -1677,11 +1677,9 @@ fun ProductEditScreen(
                                 append(" - ")
                                 append(
                                     when {
-                                        pSet.maxSelect <= 1 -> "Pick 1"
-                                        !pSet.required && pSet.minSelect == 0 -> "Select up to ${pSet.maxSelect}"
-                                        pSet.required && pSet.minSelect <= 1 -> "Select up to ${pSet.maxSelect}"
-                                        pSet.minSelect == pSet.maxSelect -> "Select ${pSet.minSelect}"
-                                        else -> "Select ${pSet.minSelect} to ${pSet.maxSelect}"
+                                        !pSet.required -> "Up to ${pSet.maxSelect.coerceAtLeast(1)}"
+                                        pSet.minSelect.coerceAtLeast(1) == pSet.maxSelect.coerceAtLeast(1) -> "Select ${pSet.minSelect.coerceAtLeast(1)}"
+                                        else -> "Select ${pSet.minSelect.coerceAtLeast(1)} to ${pSet.maxSelect.coerceAtLeast(1)}"
                                     }
                                 )
                             }

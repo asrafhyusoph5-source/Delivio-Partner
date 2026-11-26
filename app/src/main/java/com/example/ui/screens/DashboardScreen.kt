@@ -71,11 +71,16 @@ fun DashboardScreen(
     showTryPosLink: Boolean = false,
     tryPosUrl: String = "",
     platformTimezone: String = "",
+    onContactSupport: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val customColors = LocalDelivioColors.current
-    val effectiveOpen = com.example.util.BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
+    val storeStatus = com.example.util.BusinessHoursHelper.storeStatus(settings, currentTime)
+    val effectiveOpen = !isServiceLocked && storeStatus.open
+    val isAdminLocked = settings.adminLock
+    val isSuspended = !settings.status.equals("active", ignoreCase = true)
+    val canToggle = !isServiceLocked && !isAdminLocked && !isSuspended
 
     val tz = remember(platformTimezone, settings.timezone) {
         PosAnalyticsEngine.resolveTimeZone(platformTimezone.ifBlank { settings.timezone })
@@ -250,12 +255,12 @@ fun DashboardScreen(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = if (isServiceLocked) {
-                                        "Closed"
-                                    } else if (settings.autoSchedule) {
-                                        if (effectiveOpen) "Open" else "Closed"
-                                    } else {
-                                        if (effectiveOpen) "Open - Accepting Orders" else "Closed - Not Accepting Orders"
+                                    text = when {
+                                        isServiceLocked -> "Closed"
+                                        isSuspended -> "Closed"
+                                        isAdminLocked -> "Closed by Delivio"
+                                        settings.autoSchedule -> if (effectiveOpen) "Open" else "Closed"
+                                        else -> if (effectiveOpen) "Open - Accepting Orders" else "Closed - Not Accepting Orders"
                                     },
                                     fontWeight = FontWeight.ExtraBold,
                                     style = MaterialTheme.typography.titleMedium,
@@ -268,7 +273,7 @@ fun DashboardScreen(
                                         color = Color(0xFF8B5CF6).copy(alpha = 0.15f)
                                     ) {
                                         Text(
-                                            text = "Automatic",
+                                            text = "Auto",
                                             color = Color(0xFF8B5CF6),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
@@ -277,29 +282,28 @@ fun DashboardScreen(
                                     }
                                 }
                             }
-                            val nextDesc = if (!isServiceLocked && settings.autoSchedule) {
+                            val nextDesc = if (!isServiceLocked && !isAdminLocked && !isSuspended && settings.autoSchedule) {
                                 com.example.util.BusinessHoursHelper.getNextScheduleChangeDescription(settings, currentTime)
                             } else ""
                             Text(
-                                text = if (isServiceLocked) {
-                                    serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
-                                } else if (nextDesc.isNotBlank()) {
-                                    nextDesc
-                                } else if (effectiveOpen) {
-                                    "Store is currently visible to customers"
-                                } else {
-                                    "Store is hidden from customer marketplace"
+                                text = when {
+                                    isServiceLocked -> serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
+                                    isSuspended -> "Your merchant account is currently suspended"
+                                    isAdminLocked -> "Closed by admin until lock is removed"
+                                    nextDesc.isNotBlank() -> nextDesc
+                                    effectiveOpen -> "Store is currently visible to customers"
+                                    else -> "Store is hidden from customer marketplace"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isServiceLocked) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isServiceLocked || isAdminLocked) StatusClosedRed else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
                     Switch(
                         checked = effectiveOpen,
-                        onCheckedChange = { if (!isServiceLocked) onToggleOpen() },
-                        enabled = !isServiceLocked,
+                        onCheckedChange = { if (canToggle) onToggleOpen() },
+                        enabled = canToggle,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = StatusOpenGreen,
                             checkedTrackColor = StatusOpenGreen.copy(alpha = 0.3f),
@@ -315,14 +319,17 @@ fun DashboardScreen(
                 // After closing or when locked, show red banner
                 if (!effectiveOpen) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    val bannerText = if (isServiceLocked) {
-                        serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
-                    } else {
-                        val closedUntilTimeStr = com.example.util.BusinessHoursHelper.formatClosedUntilTime(settings, currentTime)
-                        if (closedUntilTimeStr != null) {
-                            "Closed - not receiving new orders until $closedUntilTimeStr or until you reopen"
-                        } else {
-                            "Closed - not receiving new orders until you reopen"
+                    val bannerText = when {
+                        isServiceLocked -> serviceLockMessage ?: "Service is disabled by admin in this city. Your store is closed automatically."
+                        isAdminLocked -> "Closed by Delivio — orders are paused until support removes the lock."
+                        isSuspended -> "Account suspended — not receiving new orders."
+                        else -> {
+                            val closedUntilTimeStr = com.example.util.BusinessHoursHelper.formatClosedUntilTime(settings, currentTime)
+                            if (closedUntilTimeStr != null) {
+                                "Closed - not receiving new orders until $closedUntilTimeStr or until you reopen"
+                            } else {
+                                "Closed - not receiving new orders until you reopen"
+                            }
                         }
                     }
                     Surface(
@@ -331,23 +338,49 @@ fun DashboardScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, StatusClosedRed.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth().testTag("dashboard_closed_banner")
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isServiceLocked) Icons.Default.Lock else Icons.Default.Block,
-                                contentDescription = null,
-                                tint = StatusClosedRed,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = bannerText,
-                                fontSize = 12.sp,
-                                color = StatusClosedRed,
-                                fontWeight = FontWeight.Bold
-                            )
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (isServiceLocked || isAdminLocked) Icons.Default.Lock else Icons.Default.Block,
+                                    contentDescription = null,
+                                    tint = StatusClosedRed,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = bannerText,
+                                    fontSize = 12.sp,
+                                    color = StatusClosedRed,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (isAdminLocked) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = onContactSupport,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, StatusClosedRed),
+                                    modifier = Modifier
+                                        .defaultMinSize(minHeight = 40.dp)
+                                        .testTag("dashboard_contact_support_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.HeadsetMic,
+                                        contentDescription = null,
+                                        tint = StatusClosedRed,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Contact support",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StatusClosedRed
+                                    )
+                                }
+                            }
                         }
                     }
                 }

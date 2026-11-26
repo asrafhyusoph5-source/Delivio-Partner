@@ -1310,6 +1310,17 @@ data class MerchantApplication(
     val adminNotes: String? = null
 )
 
+data class ManualOverride(
+    val state: String = "", // "open" | "closed"
+    val until: Long? = null
+)
+
+data class StoreStatusResult(
+    val open: Boolean,
+    val reason: String,
+    val nextChange: Long? = null
+)
+
 data class MerchantSettings(
     val storeName: String = "",
     val ownerName: String = "",
@@ -1367,6 +1378,8 @@ data class MerchantSettings(
     val linkedCustomerUid: String? = null,
     val walletBalance: Double = 0.0,
     val status: String = "active",
+    val adminLock: Boolean = false,
+    val manualOverride: ManualOverride? = null,
     val timezone: String = "Asia/Manila",
     val closedUntil: Long? = null,
     val openUntil: Long? = null,

@@ -7,6 +7,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HeadsetMic
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -29,9 +31,10 @@ import com.example.util.FormatUtils
 
 /**
  * Main Top Bar:
- * - Shop logo, shop name, Open/Auto status chip on the left
+ * - Shop logo, shop name, Open/Closed/Auto status chip on the left
  * - Three-lines menu icon on the RIGHT with a red badge when there are new orders or unread inbox items
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DelivioTopBar(
     settings: MerchantSettings,
@@ -45,10 +48,15 @@ fun DelivioTopBar(
     isMultiOutlet: Boolean = false,
     otherOutletsNewOrdersCount: Int = 0,
     onOutletClick: () -> Unit = {},
+    onContactSupport: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val customColors = LocalDelivioColors.current
-    val effectiveOpen = BusinessHoursHelper.isEffectiveOpen(settings, currentTime, isServiceLocked)
+    val storeStatus = BusinessHoursHelper.storeStatus(settings, currentTime)
+    val effectiveOpen = !isServiceLocked && storeStatus.open
+    val isAdminLocked = settings.adminLock
+    val isSuspended = !settings.status.equals("active", ignoreCase = true)
+    val canToggle = !isServiceLocked && !isAdminLocked && !isSuspended
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -139,42 +147,55 @@ fun DelivioTopBar(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Global Open/Close Status Chip (showing effectiveOpen)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val chipColor = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
+                        val statusLabel = when {
+                            isSuspended -> "Closed"
+                            isAdminLocked -> "Closed by Delivio"
+                            effectiveOpen -> "Open"
+                            else -> "Closed"
+                        }
+
+                        // Global Open/Close Status Chip (reading live storeStatus)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (effectiveOpen) StatusOpenGreen.copy(alpha = 0.15f)
-                                    else StatusClosedRed.copy(alpha = 0.15f)
-                                )
-                                .then(
-                                    if (!isServiceLocked) Modifier.clickable { onToggleOpen() }
-                                    else Modifier
-                                )
+                                .background(chipColor.copy(alpha = 0.15f))
+                                .clickable(enabled = canToggle, onClick = onToggleOpen)
                                 .padding(horizontal = 7.dp, vertical = 2.dp)
                                 .testTag("topbar_status_chip")
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(if (effectiveOpen) StatusOpenGreen else StatusClosedRed)
-                            )
+                            if (isAdminLocked) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Closed by Delivio",
+                                    tint = StatusClosedRed,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(chipColor)
+                                )
+                            }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (effectiveOpen) "Open" else "Closed",
+                                text = statusLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (effectiveOpen) StatusOpenGreen else StatusClosedRed
+                                color = chipColor
                             )
                         }
 
                         if (settings.autoSchedule) {
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "Auto",
                                 fontSize = 10.sp,
@@ -183,12 +204,38 @@ fun DelivioTopBar(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(customColors.accentTint)
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                    .testTag("topbar_auto_chip")
                             )
                         }
 
-                        if (settings.isPaused && settings.pauseUntilTimestamp != null) {
-                            Spacer(modifier = Modifier.width(5.dp))
+                        if (isAdminLocked) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.errorContainer)
+                                    .clickable(onClick = onContactSupport)
+                                    .padding(horizontal = 7.dp, vertical = 2.dp)
+                                    .testTag("topbar_contact_support_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.HeadsetMic,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Contact support",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+
+                        if (settings.isPaused && settings.pauseUntilTimestamp != null && !isAdminLocked) {
                             Text(
                                 text = "Paused (${FormatUtils.formatRemainingTime(settings.pauseUntilTimestamp)})",
                                 fontSize = 10.sp,
@@ -197,7 +244,7 @@ fun DelivioTopBar(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(StatusWarningAmber.copy(alpha = 0.15f))
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
                             )
                         }
                     }
