@@ -108,7 +108,10 @@ service cloud.firestore {
         || (want != 'sedan' && want != 'motorcycle' && want == have);
     }
     function riderMayTake(svc, veh) {
-      return riderDoc().get('allowedServices', []).hasAny([svc])
+      return (riderDoc().get('allowedServices', []).size() == 0
+              || riderDoc().get('allowedServices', []).hasAny([svc])
+              || (svc == 'request_rider' && riderDoc().get('allowedServices', []).hasAny(['instant']))
+              || (svc == 'instant' && riderDoc().get('allowedServices', []).hasAny(['request_rider'])))
         && (svc != 'taxi' || veh.lower() == riderDoc().get('vehicleType', '').lower())
         && (svc != 'parcel'
             || parcelVehicleOk(veh.lower(), riderDoc().get('vehicleType', '').lower()));
@@ -1002,6 +1005,43 @@ service cloud.firestore {
         && get(/databases/$(db)/documents/orders/$(oid)).data.status in ['Delivered', 'Completed']
         && get(/databases/$(db)/documents/orders/$(oid)).data.customerId == request.auth.uid;
       allow update, delete: if isAdmin();
+    }
+
+    // ---- Delivio Loans (v39): offers are admin-only; applications are forms only ----
+    match /loanOffers/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isBackoffice());
+      allow create, update, delete: if isFinance();
+    }
+    match /loanApplications/{aid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isBackoffice());
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && aid.matches(request.auth.uid + '_.*')
+        && exists(/databases/$(db)/documents/loanOffers/$(request.auth.uid))
+        && get(/databases/$(db)/documents/loanOffers/$(request.auth.uid)).data.get('enabled', false) == true
+        && (get(/databases/$(db)/documents/loanOffers/$(request.auth.uid)).data.get('reapplyAfter', null) == null
+            || get(/databases/$(db)/documents/loanOffers/$(request.auth.uid)).data.reapplyAfter <= request.time)
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.createdAt is timestamp;
+      allow update: if signedIn() && (isFinance()
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.status == 'submitted'
+            && request.resource.data.status == 'withdrawn'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']))
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.status == 'approved'
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.chosenTermMonths in resource.data.get('termsOffered', [])
+            && request.resource.data.chosenAmount is number
+            && request.resource.data.chosenAmount > 0
+            && request.resource.data.chosenAmount <= resource.data.get('approvedAmount', 0)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','chosenTermMonths','chosenAmount','acceptedAt','updatedAt'])));
+      allow delete: if isAdmin();
+    }
+    match /loans/{lid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isBackoffice());
+      allow create, update: if isFinance();
+      allow delete: if isAdmin();
     }
   }
 }
